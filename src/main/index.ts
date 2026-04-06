@@ -25,6 +25,8 @@ import {
 } from './vibeConfig'
 
 function createWindow(): BrowserWindow {
+  const iconPath = join(__dirname, '../renderer/icon.png')
+
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -35,7 +37,7 @@ function createWindow(): BrowserWindow {
     backgroundColor: '#111115',
     show: false,
     autoHideMenuBar: true,
-    icon: join(__dirname, '../../resources/icon.png'),
+    icon: iconPath,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
