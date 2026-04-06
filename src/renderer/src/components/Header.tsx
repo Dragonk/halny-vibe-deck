@@ -36,7 +36,7 @@ export default function Header(): React.JSX.Element {
     <header className="header" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <div className="header-left">
         <div className="header-brand">
-          <img src="/icon.png" alt="" className="header-brand-img" />
+          <img src="./icon.png" alt="" className="header-brand-img" />
           <span className="header-brand-name">{tr.appName}</span>
         </div>
         <div
