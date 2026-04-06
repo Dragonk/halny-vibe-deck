@@ -25,6 +25,7 @@ function augmentedEnv(): NodeJS.ProcessEnv {
     )
   } else {
     extra.push(
+      path.join(os.homedir(), '.local', 'share', 'uv', 'tools', 'mistral-vibe', 'bin'),
       path.join(os.homedir(), '.local', 'bin'),
       '/usr/local/bin'
     )
@@ -61,6 +62,7 @@ function candidatePaths(name: string): string[] {
     ]
   } else {
     return [
+      path.join(os.homedir(), '.local', 'share', 'uv', 'tools', 'mistral-vibe', 'bin', name),
       path.join(os.homedir(), '.local', 'bin', name),
       `/usr/local/bin/${name}`
     ]

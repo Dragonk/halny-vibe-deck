@@ -67,6 +67,14 @@ npm run typecheck
 
 Application configuration is stored in Electron's `userData` path as `config.json`.
 
+## Acknowledgments
+
+Thanks to [@ahh1539 (Alex H)](https://github.com/ahh1539) for creating [Vibe Helper](https://github.com/ahh1539/vibe-helper) for macOS. The Statistics tab in Mistral Vibe Nexus was inspired by his application.
+
+## Testing
+
+Code is tested on Windows only. Builds for Linux and macOS are provided but not actively tested. If you encounter any issues on other platforms, please report them.
+
 ## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
