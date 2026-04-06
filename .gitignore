@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+dist/
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+tmp/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Claude
+.claude/
