@@ -227,4 +227,11 @@ export const pl = {
   toolApplied: 'Zastosowano {{count}} blok',
   toolAppliedOk: 'Zastosowano',
   subagentLoading: 'Ładowanie sesji subagenta…',
+  subagentPrompt: 'Zapytanie',
+  subagentResponse: 'Odpowiedź',
+  turnsUsed: 'Użyte kroki',
+  linesRead: 'Wiersze',
+  truncated: 'Obcięto',
+  yes: 'Tak',
+  no: 'Nie',
 }

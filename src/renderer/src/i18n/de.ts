@@ -227,4 +227,11 @@ export const de = {
   toolApplied: '{{count}} Block angewendet',
   toolAppliedOk: 'Angewendet',
   subagentLoading: 'Unteragenten-Sitzung wird geladen…',
+  subagentPrompt: 'Anfrage',
+  subagentResponse: 'Antwort',
+  turnsUsed: 'Verwendete Schritte',
+  linesRead: 'Zeilen gelesen',
+  truncated: 'Abgeschnitten',
+  yes: 'Ja',
+  no: 'Nein',
 }

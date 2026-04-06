@@ -227,4 +227,11 @@ export const fr = {
   toolApplied: 'Appliqué {{count}} bloc',
   toolAppliedOk: 'Appliqué',
   subagentLoading: 'Chargement de la session sous-agent…',
+  subagentPrompt: 'Requête',
+  subagentResponse: 'Réponse',
+  turnsUsed: 'Tours utilisés',
+  linesRead: 'Lignes lues',
+  truncated: 'Tronqué',
+  yes: 'Oui',
+  no: 'Non',
 }

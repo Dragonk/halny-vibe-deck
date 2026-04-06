@@ -229,4 +229,11 @@ export const it = {
   toolApplied: 'Applicato {{count}} blocco',
   toolAppliedOk: 'Applicato',
   subagentLoading: 'Caricamento sessione sottoagente…',
+  subagentPrompt: 'Richiesta',
+  subagentResponse: 'Risposta',
+  turnsUsed: 'Turni utilizzati',
+  linesRead: 'Righe lette',
+  truncated: 'Troncato',
+  yes: 'Sì',
+  no: 'No',
 }
