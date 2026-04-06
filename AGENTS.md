@@ -1,83 +1,80 @@
-# Mistral Vibe Nexus
+# AGENTS.md
 
-Electron desktop app wrapping the `vibe-acp` CLI (Mistral Vibe AI coding agent).
-
-## Architecture
-
-Three-process Electron app:
-- `src/main/` - Main process: window creation, IPC handlers, ACP manager, config/vibe-stats loading
-- `src/preload/` - Preload script: typed IPC bridge exposed via `window.api`
-- `src/renderer/` - React UI (Vite, Vite root is `src/renderer`, source in `src/renderer/src/`)
-
-Output dirs: `out/main`, `out/preload`, `out/renderer`
+This file provides guidance to AI Agents when working with code in this repository.
 
 ## Commands
 
 ```bash
-npm run dev          # dev:main (watch) + dev:renderer (vite) + dev:electron (nodemon)
-npm run build        # build:main + build:preload + build:renderer
-npm run build:main   # tsc -p tsconfig.main.json
-npm run build:preload
-npm run build:renderer
-npm run typecheck    # tsc on all 3 tsconfig files (noEmit)
-npm run dist         # build + electron-builder
-npm run start        # electron . (requires built out/)
+# Development (hot reload)
+npm run dev
+
+# Build all processes
+npm run build
+
+# Type checking (no emit)
+npm run typecheck
+
+# Build installers
+npm run dist:win      # Windows NSIS installer + portable
+npm run dist          # Default cross-platform build
 ```
 
-## External Dependencies
+There are no automated tests in this project.
 
-The app requires these on the host (auto-detected at startup):
-- `vibe-acp` - Mistral Vibe agent binary (installed via `uv tool install mistral-vibe`)
-- `uv` - Python package manager
+## Architecture
 
-The setup flow (`src/main/setup.ts`) augments PATH with Windows-specific locations:
-- `%APPDATA%\uv\bin`
-- `%APPDATA%\uv\tools\mistral-vibe\Scripts`
-- `%USERPROFILE%\.local\bin`
+Electron app with three separate processes:
 
-Vibe session stats are read from `~/.vibe/logs/session/*/meta.json`.
+**Main Process** (`src/main/`)
+- `index.ts` — app entrypoint, all IPC handlers, window setup
+- `acp.ts` — spawns and manages the `vibe-acp` subprocess via JSON-RPC 2.0 over stdio
+- `config.ts` — persists app settings to Electron userData (`config.json`)
+- `vibeConfig.ts` — reads/writes `~/.vibe/config.toml`
+- `vibeStats.ts` — parses session metadata from `~/.vibe/logs/session/*/meta.json`
+- `setup.ts` — first-run dependency detection/installation (`uv`, `mistral-vibe`)
 
-## Config
+**Preload** (`src/preload/index.ts`) — typed IPC bridge exposing `window.api` to the renderer via contextBridge. Groups: `window`, `config`, `dialog`, `acp`, `stats`, `setup`, `fs`, `shell`, `vibe`.
 
-App config stored in Electron's `userData` path as `config.json` (loaded by `src/main/config.ts`).
+**Renderer** (`src/renderer/src/`) — React 18 + Vite, state via Zustand (`store.ts`).
+- Three views: Chat, Settings, Stats
+- `MessageBubble.tsx` handles markdown, code blocks, thinking blocks, and tool call rendering
+- `InputBar.tsx` includes @ file picker for file attachment
 
-## Key IPC Channels
+## Key Patterns
 
-| Channel | Direction | Purpose |
-|---------|-----------|---------|
-| `window:{minimize,maximize,close}` | renderer→main | Window controls |
-| `acp:start`, `acp:send-prompt`, `acp:stop` | renderer→main | ACP session control |
-| `acp:event` | main→renderer | ACP events (MessageChunk, ToolCall, etc.) |
-| `setup:check`, `setup:install` | renderer→main | First-run dependency setup |
+**Message flow:** User input → `store.addUserMessage` + `window.api.acp.sendPrompt` → ACP emits `acp:event` on main → renderer store updates (streaming via `appendChunk`, finalized via `finalizeAiMessage`).
 
-## Dev Notes
+**IPC:** All renderer↔main communication goes through `window.api` (preload bridge). Main→renderer events use `webContents.send('acp:event', ...)`.
 
-- Frameless window (`frame: false`), custom title bar in Header component
-- ACP manager (`src/main/acp.ts`) auto-approves all agent requests (no permission prompts)
-- Development: main process watches `out/main`, electron restarts on changes
-- The renderer Vite dev server runs on port 5173
+**Session model:** Local sessions in Zustand store, optionally linked to a vibe backend session via `acpSessionId`. Sessions can be imported from existing vibe sessions.
 
-## Internationalization (i18n)
+**State:** All app state in `src/renderer/src/store.ts` (Zustand). Config is loaded from main via IPC on startup and kept in sync.
 
-Translations are located in `src/renderer/src/i18n/`:
-- `en.ts`, `pl.ts`, `fr.ts`, `es.ts`, `de.ts`, `it.ts` - language files
-- `index.ts` - exports `useTranslation` hook and `t()` function
+## Internationalization
 
-**How to use translations:**
-```tsx
-import { useTranslation, t } from '../i18n'
+All UI strings must use the translation system — no hardcoded strings in components.
 
-// In component:
-const { config } = useStore()
-const tr = useTranslation(config.language)
-
-// Static text:
-<span>{tr.someKey}</span>
-
-// With interpolation:
-<span>{t(tr, 'sessionsCount', { count: 5 })}</span>
-// Output: "5 sessions" (or translated equivalent)
+```ts
+const { t, tr } = useTranslation(config.language);
+// Usage:
+t(tr, 'key')
+t(tr, 'key', { count: 5 })  // with interpolation
 ```
+
+Translation files: `src/renderer/src/i18n/{en,pl,fr,es,de,it}.ts`. Add new keys to all locale files.
+
+## TypeScript Setup
+
+Three separate tsconfig files (not inheriting from each other):
+- `tsconfig.main.json` — CommonJS, targets `out/main`
+- `tsconfig.preload.json` — CommonJS, targets `out/preload`
+- `tsconfig.renderer.json` — ESNext, Vite, targets `out/renderer`
+
+Path alias: `@renderer` → `src/renderer/src`
+
+## Runtime Dependencies
+
+Requires `vibe-acp` binary (installed via `uv tool install mistral-vibe`). On Windows, PATH is augmented at runtime to include `%APPDATA%\uv\bin`, `%APPDATA%\uv\tools\mistral-vibe\Scripts`, and `%USERPROFILE%\.local\bin`.
 
 **Supported languages:** `auto` (system), `en`, `pl`, `fr`, `es`, `de`, `it`
 
