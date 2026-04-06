@@ -227,4 +227,11 @@ export const en = {
   toolApplied: 'Applied {{count}} block',
   toolAppliedOk: 'Applied',
   subagentLoading: 'Loading subagent session…',
+  subagentPrompt: 'Prompt',
+  subagentResponse: 'Response',
+  turnsUsed: 'Turns used',
+  linesRead: 'Lines read',
+  truncated: 'Truncated',
+  yes: 'Yes',
+  no: 'No',
 }

@@ -227,4 +227,11 @@ export const es = {
   toolApplied: 'Aplicado {{count}} bloque',
   toolAppliedOk: 'Aplicado',
   subagentLoading: 'Cargando sesión de subagente…',
+  subagentPrompt: 'Consulta',
+  subagentResponse: 'Respuesta',
+  turnsUsed: 'Turnos usados',
+  linesRead: 'Líneas leídas',
+  truncated: 'Truncado',
+  yes: 'Sí',
+  no: 'No',
 }
