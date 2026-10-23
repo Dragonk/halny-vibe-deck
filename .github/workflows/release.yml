@@ -36,10 +36,7 @@ jobs:
 
       - name: Package (linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: |
-          cd target/release
-          tar -czf ../../../vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz vibedeck
-          cd ../../..
+        run: tar -czf vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz -C target/release vibedeck
 
       - name: Package (windows)
         if: matrix.os == 'windows-latest'
