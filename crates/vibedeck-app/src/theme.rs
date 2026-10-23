@@ -28,6 +28,7 @@ pub struct Palette {
     pub user_msg: Color32,
     #[allow(dead_code)]
     pub ai_msg: Color32,
+    #[allow(dead_code)]
     pub input_bg: Color32,
     pub session_active_bg: Color32,
     pub session_active_text: Color32,

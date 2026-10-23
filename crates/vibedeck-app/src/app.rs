@@ -30,6 +30,21 @@ use crate::state::{AcpStatus, AppSettings, FolderPicker, PendingApproval, Pendin
 use crate::stats::StatsPane;
 use crate::theme;
 
+/// Register the bundled Noto Sans Symbols 2 as a fallback font so the
+/// interface glyphs (✕ □ ▣ ➤ ⏹ ✔ ☀ ◧ ▤ ▾ …) render on Windows instead of
+/// tofu squares — egui's Ubuntu font has no coverage for them.
+fn install_symbols_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "noto-symbols".into(),
+        egui::FontData::from_static(include_bytes!("../assets/NotoSansSymbols2-Regular.ttf")),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("noto-symbols".into());
+    }
+    ctx.set_fonts(fonts);
+}
+
 pub struct VibedeckApp {
     pub settings: AppSettings,
     pub lang: Lang,
@@ -79,6 +94,10 @@ impl VibedeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = AppSettings::load();
         let lang = Lang::from_code(&settings.language);
+        // Symbols font (─ □ ✕ ➤ ⏹ ✔ …) — egui's Ubuntu font lacks them and
+        // Windows shows tofu squares. Registered as a fallback so text keeps
+        // using the Nexus-style Ubuntu everywhere else.
+        install_symbols_font(&cc.egui_ctx);
         // Apply the saved theme (Nexus dark by default).
         theme::apply(&cc.egui_ctx, &settings.theme);
 
@@ -499,8 +518,8 @@ impl VibedeckApp {
         let p = self.palette();
         let t = self.tr();
 
-        // -- frameless window: edge resize -------------------------------
-        crate::frameless::window_edges(ctx);
+        // -- frameless window: edge resize (PhotoCraft-style zones) ------
+        crate::frameless::resize_zones(ctx);
 
         // -- header (titlebar: brand + status + window buttons) ---------
         TopBottomPanel::top("header")
@@ -551,7 +570,7 @@ impl VibedeckApp {
                         ui.separator();
                         if ui
                             .add(
-                                egui::Button::new(egui::RichText::new("ℹ").small())
+                                egui::Button::new(egui::RichText::new("i").small())
                                     .fill(egui::Color32::TRANSPARENT),
                             )
                             .on_hover_text(t.about)
@@ -613,7 +632,10 @@ impl VibedeckApp {
                 drag.max.x -= 210.0; // window buttons + toggles
                 let resp = ui.interact(drag, Id::new("titlebar-drag"), Sense::drag());
                 if resp.dragged() {
-                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                    // OS move with the press hand-off (see frameless.rs) —
+                    // a plain StartDrag leaves egui thinking the button is
+                    // still down and the next move/resize dies.
+                    crate::frameless::start_os_move(ctx);
                 } else if resp.double_clicked() {
                     let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                     ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
@@ -652,9 +674,8 @@ impl VibedeckApp {
                 TopBottomPanel::bottom("input")
                     .frame(
                         egui::Frame::default()
-                            .fill(p.surface)
-                            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+                            .fill(p.bg)
+                            .inner_margin(egui::Margin::symmetric(12.0, 8.0)),
                     )
                     .show(ctx, |ui| crate::input::show(self, ui));
                 CentralPanel::default()
@@ -845,5 +866,11 @@ pub fn ensure_ai_message(session: &mut ChatSession) -> &mut Message {
 impl eframe::App for VibedeckApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.ui(ctx);
+    }
+
+    /// Ends the press the OS kept during a window move/resize
+    /// (see `frameless::release_after_os_resize`).
+    fn raw_input_hook(&mut self, ctx: &Context, raw: &mut egui::RawInput) {
+        crate::frameless::release_after_os_resize(ctx, raw);
     }
 }

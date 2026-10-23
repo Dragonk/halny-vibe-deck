@@ -1,113 +1,158 @@
 //! Frameless window chrome: the native titlebar is disabled in `main.rs`
-//! (`.with_decorations(false)`, like Photocraft / the Electron original),
-//! so this module reimplements the missing OS behaviour on top of egui:
+//! (`.with_decorations(false)`), so this module reimplements the missing
+//! OS behaviour on top of egui — the way PhotoCraft does it
+//! (storytold/photocraft, crates/ui-egui/src/titlebar.rs):
 //!
 //! - **dragging** the header moves the window (`ViewportCommand::StartDrag`),
 //! - **double-clicking** the header toggles maximize,
-//! - **edge resize**: the pointer near a window edge switches the cursor and
-//!   dragging starts a native OS resize via `ViewportCommand::BeginResize`
-//!   (sides 6px, corners 14px).
+//! - **edge resize**: invisible zones along the window edges (sides 8pt,
+//!   corners 12pt) live on a foreground layer, so they win every hit. A drag
+//!   that starts in one hands the resize to the OS
+//!   (`ViewportCommand::BeginResize`) — the compositor then tracks the
+//!   pointer itself, like a native window.
+//! - **hand-off**: the OS keeps the button release of a move/resize it owns,
+//!   so egui would think the button is still down (moves/resizes would stop
+//!   working until the next click). `release_after_os_resize` ends the press
+//!   synthetically on the next input — call it from `raw_input_hook`.
 
-use eframe::egui::{self, Context, CursorIcon, ResizeDirection, ViewportCommand};
+use eframe::egui::{
+    self, Context, CursorIcon, Id, LayerId, Order, PointerButton, RawInput, Rect, ResizeDirection,
+    Sense, Ui, UiBuilder, ViewportCommand, pos2, vec2,
+};
 
-const EDGE: f32 = 6.0;
-const CORNER: f32 = 14.0;
+use crate::theme::Palette;
 
-/// Which window edge(s) a drag is resizing from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResizeEdge {
-    N,
-    S,
-    W,
-    E,
-    Nw,
-    Ne,
-    Sw,
-    Se,
+const EDGE: f32 = 8.0;
+const CORNER: f32 = 12.0;
+
+/// The eight edge/corner zones of the window.
+fn zones(w: Rect) -> [(Rect, ResizeDirection, CursorIcon); 8] {
+    use ResizeDirection::*;
+    let (e, c) = (EDGE, CORNER);
+    [
+        (Rect::from_min_max(w.left_top(), pos2(w.right(), w.top() + e)), North, CursorIcon::ResizeVertical),
+        (Rect::from_min_max(pos2(w.left(), w.bottom() - e), w.right_bottom()), South, CursorIcon::ResizeVertical),
+        (Rect::from_min_max(w.left_top(), pos2(w.left() + e, w.bottom())), West, CursorIcon::ResizeHorizontal),
+        (Rect::from_min_max(pos2(w.right() - e, w.top()), w.right_bottom()), East, CursorIcon::ResizeHorizontal),
+        (Rect::from_min_size(w.left_top(), vec2(c, c)), NorthWest, CursorIcon::ResizeNwSe),
+        (Rect::from_min_size(w.right_top() - vec2(c, 0.0), vec2(c, c)), NorthEast, CursorIcon::ResizeNeSw),
+        (Rect::from_min_size(w.left_bottom() - vec2(0.0, c), vec2(c, c)), SouthWest, CursorIcon::ResizeNeSw),
+        (Rect::from_min_size(w.right_bottom() - vec2(c, c), vec2(c, c)), SouthEast, CursorIcon::ResizeNwSe),
+    ]
 }
 
-impl ResizeEdge {
-    fn direction(self) -> ResizeDirection {
-        match self {
-            ResizeEdge::N => ResizeDirection::North,
-            ResizeEdge::S => ResizeDirection::South,
-            ResizeEdge::W => ResizeDirection::West,
-            ResizeEdge::E => ResizeDirection::East,
-            ResizeEdge::Nw => ResizeDirection::NorthWest,
-            ResizeEdge::Ne => ResizeDirection::NorthEast,
-            ResizeEdge::Sw => ResizeDirection::SouthWest,
-            ResizeEdge::Se => ResizeDirection::SouthEast,
-        }
-    }
+fn handed_off_id() -> Id {
+    Id::new("vd-resize-handed-off")
+}
 
-    fn cursor(self) -> CursorIcon {
-        match self {
-            ResizeEdge::N | ResizeEdge::S => CursorIcon::ResizeVertical,
-            ResizeEdge::W | ResizeEdge::E => CursorIcon::ResizeHorizontal,
-            ResizeEdge::Nw | ResizeEdge::Se => CursorIcon::ResizeNwSe,
-            ResizeEdge::Ne | ResizeEdge::Sw => CursorIcon::ResizeNeSw,
-        }
+/// An OS resize or move started at `pass`; `released` is the pass whose input
+/// ended the press ([`release_after_os_resize`]).
+#[derive(Clone, Copy, Debug)]
+struct HandOff {
+    pass: u64,
+    released: Option<u64>,
+}
+
+/// The OS took the press at this pass: [`release_after_os_resize`] ends it on
+/// the next input.
+fn hand_off(ctx: &Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(handed_off_id(), HandOff { pass, released: None }));
+}
+
+/// Move the window from this press (header drag). The window manager keeps
+/// the button release of the move, so the same hand-off ends the press.
+pub fn start_os_move(ctx: &Context) {
+    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+    hand_off(ctx);
+}
+
+/// The compositor takes the button release of an OS resize or move, so egui
+/// keeps the edge pressed: the zones stop hovering until the next click, and
+/// every other resize/move fails. End the press ourselves on the input after
+/// the hand-off, but only while egui still has it down and this input brings
+/// no release of its own: where the OS does send it, nothing is added, so no
+/// second release can turn into a click. Call from `raw_input_hook`.
+pub fn release_after_os_resize(ctx: &Context, raw: &mut RawInput) {
+    let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(handed_off_id())) else {
+        return;
+    };
+    if h.released.is_some() || h.pass >= ctx.cumulative_pass_nr() {
+        return;
+    }
+    let os_released = raw
+        .events
+        .iter()
+        .any(|ev| matches!(ev, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }));
+    if let Some(pos) = ctx
+        .input(|i| i.pointer.latest_pos())
+        .filter(|_| !os_released && ctx.input(|i| i.pointer.primary_down()))
+    {
+        raw.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: ctx.input(|i| i.modifiers),
+        });
+    }
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(handed_off_id(), HandOff { released: Some(pass), ..h }));
+}
+
+/// The compositor owns the pointer during an OS resize and sets its own
+/// cursor; egui-winit only re-sends a cursor that changed, so afterwards the
+/// window would keep the compositor's arrow until the next press. On the
+/// first pointer motion after the hand-off, show the default cursor for one
+/// frame so the resize cursor is sent again on the next.
+fn reshow_cursor_after_os_resize(ctx: &Context) {
+    let Some(HandOff { released: Some(pass), .. }) =
+        ctx.data(|d| d.get_temp::<HandOff>(handed_off_id()))
+    else {
+        return;
+    };
+    if pass < ctx.cumulative_pass_nr()
+        && ctx.input(|i| i.events.iter().any(|ev| matches!(ev, egui::Event::PointerMoved(_))))
+    {
+        ctx.data_mut(|d| d.remove::<HandOff>(handed_off_id()));
+        ctx.set_cursor_icon(CursorIcon::Default);
+        ctx.request_repaint();
     }
 }
 
-/// Detect the pointer over a window edge: set the resize cursor, and when a
-/// drag starts hand the resize over to the OS (`BeginResize`).
-/// Call once per frame, before building the panels, when the window
-/// is not maximized.
-pub fn window_edges(ctx: &Context) {
-    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-    if maximized {
+/// Invisible resize zones along the window's edges, above everything else; a
+/// press in one starts an OS resize in that direction. None while the window
+/// is maximized or full screen. Call once per frame, before building panels.
+pub fn resize_zones(ctx: &Context) {
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false))
+        || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+    {
+        reshow_cursor_after_os_resize(ctx);
         return;
     }
-
-    let Some(pointer) = ctx.input(|i| i.pointer.latest_pos()) else {
-        return;
-    };
-    let Some(win) = ctx.input(|i| i.viewport().inner_rect) else {
-        return;
-    };
-    if !win.contains(pointer) {
-        return;
-    };
-
-    let near_left = pointer.x - win.left() < EDGE;
-    let near_right = win.right() - pointer.x < EDGE;
-    let near_top = pointer.y - win.top() < EDGE;
-    let near_bottom = win.bottom() - pointer.y < EDGE;
-    // Corners are a bit bigger so they're easy to grab.
-    let corner_left = pointer.x - win.left() < CORNER;
-    let corner_right = win.right() - pointer.x < CORNER;
-    let corner_top = pointer.y - win.top() < CORNER;
-    let corner_bottom = win.bottom() - pointer.y < CORNER;
-
-    let edge = match (corner_left, corner_right, corner_top, corner_bottom) {
-        (true, _, true, _) => Some(ResizeEdge::Nw),
-        (_, true, true, _) => Some(ResizeEdge::Ne),
-        (true, _, _, true) => Some(ResizeEdge::Sw),
-        (_, true, _, true) => Some(ResizeEdge::Se),
-        _ => match (near_left, near_right, near_top, near_bottom) {
-            (true, _, _, _) => Some(ResizeEdge::W),
-            (_, true, _, _) => Some(ResizeEdge::E),
-            (_, _, true, _) => Some(ResizeEdge::N),
-            (_, _, _, true) => Some(ResizeEdge::S),
-            _ => None,
-        },
-    };
-
-    let Some(edge) = edge else { return };
-    ctx.set_cursor_icon(edge.cursor());
-
-    let dragging = ctx.input(|i| i.pointer.primary_down());
-    if dragging && ctx.input(|i| i.pointer.primary_pressed()) {
-        // Hand the resize to the OS; it tracks the pointer itself.
-        ctx.send_viewport_cmd(ViewportCommand::BeginResize(edge.direction()));
+    let w = ctx.screen_rect();
+    let layer = LayerId::new(Order::Foreground, Id::new("vd-resize"));
+    let zui = Ui::new(
+        ctx.clone(),
+        layer,
+        Id::new("vd-resize-zones"),
+        UiBuilder::new().max_rect(w),
+    );
+    for (i, (rect, dir, cursor)) in zones(w).into_iter().enumerate() {
+        let resp = zui
+            .interact(rect, Id::new(("vd-resize", i)), Sense::drag())
+            .on_hover_cursor(cursor);
+        if resp.drag_started_by(PointerButton::Primary) {
+            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+            hand_off(ctx);
+        }
     }
-    ctx.request_repaint();
+    // After the zones, so its one-frame cursor wins over theirs.
+    reshow_cursor_after_os_resize(ctx);
 }
 
 /// ─ □ ✕ window buttons (Nexus `.header-btn`: 32×28, radius 4;
 /// close hovers `#e02020` with a white glyph).
-pub fn window_buttons(ctx: &Context, ui: &mut egui::Ui, p: &crate::theme::Palette) {
+pub fn window_buttons(ctx: &Context, ui: &mut egui::Ui, p: &Palette) {
     let btn = |ui: &mut egui::Ui, glyph: &str, hover_fill: egui::Color32, hover_text: egui::Color32| {
         let size = egui::vec2(32.0, 28.0);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -140,11 +185,11 @@ pub fn window_buttons(ctx: &Context, ui: &mut egui::Ui, p: &crate::theme::Palett
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
     let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-    let maximize_glyph = if maximized { "❐" } else { "□" };
+    let maximize_glyph = if maximized { "▣" } else { "□" };
     if btn(ui, maximize_glyph, p.panel_hover, p.text).clicked() {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
     }
-    if btn(ui, "─", p.panel_hover, p.text).clicked() {
+    if btn(ui, "—", p.panel_hover, p.text).clicked() {
         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
     }
 }

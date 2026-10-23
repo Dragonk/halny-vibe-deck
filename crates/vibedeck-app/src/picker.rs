@@ -102,7 +102,7 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
             }
         }
         if ui
-            .button(format!("＋ {}", t.pick_folder))
+            .button(format!("+ {}", t.pick_folder))
             .on_hover_text(app.folder_picker.dir.to_string_lossy().to_string())
             .clicked()
         {

@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.5.0
+  VERSION: 0.5.1
 
 jobs:
   build:
@@ -80,8 +80,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.5.0-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.5.0-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.5.1-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.5.1-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -103,17 +103,32 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.5.0-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.5.1-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
-            ## What's new in v0.5.0
+            ## What's new in v0.5.1
+
+            - 🛠 **Window resize & drag fixed** — edge/corner resize zones
+              hand the resize to the OS the way PhotoCraft does; a stuck press
+              after a move/resize no longer blocks the next one.
+            - 🎛 **Model / mode / thinking pickers back** — always visible in the
+              input card (Nexus layout, popups open upward), fed by the ACP
+              agent's `configOptions`, switchable mid-session.
+            - 🔤 **All icons render on Windows** — bundled Noto Sans Symbols 2
+              (OFL) as a fallback font: send ➤, stop ⏹, window ✕ □ — and
+              everything else — no more tofu squares.
+            - 💬 **@ and / popups work again** — file mentions and slash commands
+              show their suggestions while you type.
+            - 🎨 **Input card 1:1 with Nexus** — toolbar inside the card, folder
+              button, 30×30 send/stop, separators and paddings per the
+              original CSS.
+
+            ## Also in v0.5.0
 
             - 🪟 **Frameless window** — no native titlebar (like Photocraft): custom
               Nexus header with ─ □ ✕ buttons, drag-to-move, double-click to maximize,
               edge/corner resize.
-            - 🎛 **Model / mode / thinking pickers** — real choices from the ACP agent
-              (`configOptions`), current selection always visible, switchable mid-session.
             - 🗂 **Workspace dock (Claude-Cowork style)** — right-hand panel with a lazy
               file tree, file preview, Git status & per-file diff, auto-refreshed after
               each turn.

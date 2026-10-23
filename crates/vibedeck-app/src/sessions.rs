@@ -76,7 +76,7 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                         .add_sized(
                             [ui.available_width(), 30.0],
                             egui::Button::new(
-                                egui::RichText::new(format!("＋ {}", t.new_session))
+                                egui::RichText::new(format!("+ {}", t.new_session))
                                     .size(12.0)
                                     .strong()
                                     .color(p.text),
@@ -157,7 +157,7 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(format!("＋ {}", t.add_project))
+                                egui::RichText::new(format!("+ {}", t.add_project))
                                     .size(12.0)
                                     .color(p.accent),
                             )
@@ -312,7 +312,7 @@ pub fn show_rail(app: &mut VibedeckApp, ui: &mut Ui) {
     if ui
         .add_sized(
             [ui.available_width(), 28.0],
-            egui::Button::new(egui::RichText::new("＋").small().color(p.text))
+            egui::Button::new(egui::RichText::new("+").small().color(p.text))
                 .fill(p.panel)
                 .rounding(egui::Rounding::same(6.0)),
         )
@@ -349,7 +349,7 @@ pub fn show_rail(app: &mut VibedeckApp, ui: &mut Ui) {
 
     // bottom nav
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-        ui.label(egui::RichText::new("ⓘ").size(9.0).color(p.dim))
+        ui.label(egui::RichText::new("i").size(9.0).color(p.dim))
             .on_hover_text(t.disclaimer_short);
         rail_nav(app, ui, "rail-stats", "📊", t.view_stats, View::Stats, &p);
         rail_nav(app, ui, "rail-settings", "⚙", t.view_settings, View::Settings, &p);
