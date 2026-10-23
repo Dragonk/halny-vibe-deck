@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console on Windows release builds
 
 mod about;
+mod charts;
 mod app;
 mod chat;
 mod dock;
@@ -15,6 +16,7 @@ mod frameless;
 mod i18n;
 mod input;
 mod md;
+mod mermaid;
 mod picker;
 mod preview;
 mod sessions;

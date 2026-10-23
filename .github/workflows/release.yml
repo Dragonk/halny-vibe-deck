@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.7.0
+  VERSION: 0.8.0
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -95,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.7.0-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.7.0-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.8.0-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.8.0-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -118,14 +118,64 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.7.0-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.8.0-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
             The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
             library next to the binary — keep them together so PDF previews render.
 
-            ## What's new in v0.7.0
+            ## What's new in v0.8.0
+
+            Previews & chat:
+
+            - 🧜 **Mermaid diagrams render offline** — a built-in local
+              renderer draws flowcharts, sequence diagrams and pie charts
+              (no internet, no mermaid.ink, your diagrams never leave the
+              app). Unsupported diagram types fall back to the source code.
+            - 📝 **Rich Markdown previews** — nested lists, task lists,
+              blockquotes, GFM tables with alignment, rules, bold/italic/
+              strikethrough and clickable links all render properly now.
+            - 🔧 **Rich tool calls** — bash blocks with `$ command`,
+              stdout/stderr and exit code, read/edit chips with red/green
+              SEARCH/REPLACE diffs, grep blocks, and collapsible subagent
+              transcripts. Status colors: yellow while running, green when
+              OK, red on error.
+            - ❓ **Question dialogs are real GUIs** — the agent's
+              ask-user questions render answer buttons *and* a free-text
+              field, just like the reference client.
+            - 💬 **Chat layout hardened** — long messages always wrap inside
+              their bubbles (no more stretched views) and the session list
+              always shows the newest conversation on top.
+
+            Stats & settings:
+
+            - 📊 **Stats dashboard rebuilt** — 7d / 30d / 90d / all-time /
+              custom date ranges plus a model filter; cards for total spend
+              (cumulative area chart), tokens (bar chart), cache hit rate,
+              activity heatmap, tool-usage donut, and a clickable recent
+              sessions list with project/model/cost tags.
+            - ⚙️ **Settings reorganized** — General / Agent (ACP) /
+              Providers / Models / MCP / Tools / Skills / Agents / Prompts /
+              Raw TOML. Setup merged into Settings → Agent (still available
+              on first run), with telemetry, trust store and session
+              logging in one place.
+            - 🌐 **Six languages** — Automatic (System) plus English,
+              Polski, Deutsch, Français, Español and Italiano, switchable at
+              runtime.
+
+            Look & feel:
+
+            - 🎨 **Nexus-style sidebar** — full-width accent *New session*
+              button, `dd.mm.yyyy · folder` session metadata, and Setup
+              removed from the navigation.
+            - 🪟 **Rounded window corners** on Windows 11 (DWM), matching
+              other modern apps.
+            - 🖱 **Grab-able scrollbars** in previews (always visible, wider)
+              and file-tab close buttons (✕) sit in the same pill as the
+              tab name.
+
+            ## Also in v0.7.0
 
             Sessions & settings:
 

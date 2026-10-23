@@ -3,8 +3,9 @@
 //! Everything runs on a background thread and produces a [`PreviewContent`]
 //! the dock renders:
 //!
-//! - Markdown → rendered preview; ```mermaid``` blocks are rendered to
-//!   images (fetched from mermaid.ink; falls back to the source code)
+//! - Markdown → rendered preview; ```mermaid``` blocks are drawn by the
+//!   built-in offline diagram renderer (mermaid.rs; unsupported types fall
+//!   back to the source code)
 //! - CSV / TSV → table
 //! - Excel (`.xlsx` / `.xls` / `.xlsm` / `.ods`) → every sheet, Excel-style
 //!   grid with sheet tabs (first 500×64 cells per sheet)
@@ -51,9 +52,8 @@ const SHEET_MAX: usize = 16;
 /// pdf caps.
 const PDF_MAX_PAGES: usize = 12;
 const PDF_PAGE_WIDTH: i32 = 900;
-/// mermaid caps.
-const MERMAID_MAX_DIAGRAMS: usize = 8;
-const MERMAID_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// mermaid cap: at most this many diagrams are split out of one document.
+const MERMAID_MAX_DIAGRAMS: usize = 16;
 
 const TEXT_EXTS: &[&str] = &[
     "txt", "log", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "properties", "env",
@@ -163,9 +163,8 @@ fn cap_lines(text: &str, max_lines: usize) -> String {
 
 // -- markdown + mermaid -----------------------------------------------------------
 
-/// Split markdown into text and mermaid-diagram segments; each diagram is
-/// fetched from mermaid.ink (base64-urlsafe PNG). Diagrams that fail to
-/// render keep their source as a fallback.
+/// Split markdown into text and mermaid-diagram segments. Diagrams keep
+/// their source — the actual rendering runs offline in the UI layer.
 fn markdown_doc(text: String) -> PreviewContent {
     let mut segments: Vec<MdSegment> = Vec::new();
     let mut cur = String::new();
@@ -188,15 +187,16 @@ fn markdown_doc(text: String) -> PreviewContent {
         } else if t.starts_with("```") {
             in_mermaid = false;
             diagrams += 1;
-            let png = if diagrams <= MERMAID_MAX_DIAGRAMS {
-                mermaid_png(&code)
+            if diagrams <= MERMAID_MAX_DIAGRAMS {
+                segments.push(MdSegment::Diagram {
+                    code: code.trim().to_string(),
+                });
             } else {
-                None
-            };
-            segments.push(MdSegment::Diagram {
-                code: code.trim().to_string(),
-                png,
-            });
+                // cap reached — keep the source as plain text
+                cur.push_str("```mermaid\n");
+                cur.push_str(&code);
+                cur.push_str("\n```\n");
+            }
         } else {
             code.push_str(line);
             code.push('\n');
@@ -210,56 +210,6 @@ fn markdown_doc(text: String) -> PreviewContent {
         segments.push(MdSegment::Text(cur));
     }
     PreviewContent::MarkdownDoc { segments }
-}
-
-/// URL-safe (padded) base64, enough for mermaid.ink payloads.
-fn base64_urlsafe(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        if chunk.len() > 1 {
-            out.push(T[(n >> 6) as usize & 63] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(T[n as usize & 63] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
-/// Fetch a mermaid diagram rendered to PNG (from the mermaid.ink service).
-/// Returns `None` on any network/render problem.
-fn mermaid_png(code: &str) -> Option<eframe::egui::ColorImage> {
-    let url = format!("https://mermaid.ink/img/{}", base64_urlsafe(code.as_bytes()));
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(MERMAID_TIMEOUT)
-        .timeout_read(MERMAID_TIMEOUT)
-        .build();
-    let resp = agent.get(&url).call().ok()?;
-    let mut bytes = Vec::new();
-    resp.into_reader()
-        .take(8 * 1024 * 1024)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() < 16 || !bytes.starts_with(b"\x89PNG") {
-        return None;
-    }
-    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
-    let (w, h) = (img.width(), img.height());
-    Some(eframe::egui::ColorImage::from_rgba_unmultiplied(
-        [w as usize, h as usize],
-        img.as_raw(),
-    ))
 }
 
 // -- csv / tsv tables -------------------------------------------------------------
@@ -1336,14 +1286,6 @@ mod tests {
     }
 
     #[test]
-    fn base64_urlsafe_matches_reference() {
-        assert_eq!(base64_urlsafe(b"hello"), "aGVsbG8=");
-        assert_eq!(base64_urlsafe(b"he"), "aGU=");
-        assert_eq!(base64_urlsafe(b"h"), "aA==");
-        assert_eq!(base64_urlsafe(b"hel"), "aGVs");
-    }
-
-    #[test]
     fn splits_mermaid_fences() {
         let md = "# Doc\n\n```mermaid\ngraph TD\nA-->B\n```\n\nafter".to_string();
         let content = markdown_doc(md);
@@ -1352,12 +1294,7 @@ mod tests {
         };
         assert_eq!(segments.len(), 3);
         assert!(matches!(&segments[1],
-            MdSegment::Diagram { code, .. } if code.contains("graph TD")));
-        // No network in tests: the fetch fails → png is None.
-        match &segments[1] {
-            MdSegment::Diagram { png, .. } => assert!(png.is_none()),
-            _ => unreachable!(),
-        }
+            MdSegment::Diagram { code } if code.contains("graph TD")));
     }
 
     #[test]

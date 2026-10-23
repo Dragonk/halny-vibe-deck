@@ -103,6 +103,14 @@ pub struct VibedeckApp {
     pub stats_pane: StatsPane,
     pub setup_pane: SetupPane,
 
+    /// Subagent session transcripts from ~/.vibe/logs, keyed by the
+    /// parent ACP session id (lazily loaded, cached).
+    pub subagent_logs:
+        std::collections::HashMap<String, Vec<vibedeck_vibe::stats::VibeSubagentSession>>,
+    /// DWM rounded corners applied on Windows 11 (one-shot).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub rounded_applied: bool,
+
     pub debug_log: Vec<String>,
     pub show_about: bool,
     pub toast: Option<(String, std::time::Instant)>,
@@ -158,6 +166,8 @@ impl VibedeckApp {
             settings_pane: SettingsPane::default(),
             stats_pane: StatsPane::default(),
             setup_pane: SetupPane::default(),
+            subagent_logs: std::collections::HashMap::new(),
+            rounded_applied: false,
             debug_log: Vec::new(),
             show_about: false,
             toast: None,
@@ -188,6 +198,19 @@ impl VibedeckApp {
 
     pub fn tr(&self) -> &'static crate::i18n::Str {
         t(self.lang)
+    }
+
+    /// Load (and cache) the subagent transcripts of an ACP session.
+    /// Returns `true` when the logs are available in the cache afterwards.
+    pub fn ensure_subagent_logs(&mut self, acp_session_id: &str) -> bool {
+        if !self.subagent_logs.contains_key(acp_session_id) {
+            let logs = vibedeck_vibe::stats::load_subagent_sessions(acp_session_id);
+            self.subagent_logs
+                .insert(acp_session_id.to_string(), logs);
+        }
+        self.subagent_logs
+            .get(acp_session_id)
+            .is_some_and(|logs| !logs.is_empty())
     }
 
     /// Resolve the effective theme ("dark" | "light") from the preference
@@ -946,29 +969,67 @@ impl VibedeckApp {
         }
 
         // Agent question modal — visible while `question` is set.
+        // The agent's choices render as full-width accent buttons AND a
+        // free-text field is always available (Enter or OK submits).
+        let question_palette = self.palette();
         if let Some(quest) = self.question.as_mut() {
             let mut submitted: Option<String> = None;
             Window::new(egui::RichText::new(format!("❓ {}", t.agent_question)).strong())
                 .resizable(false)
                 .collapsible(false)
+                .min_width(420.0)
                 .show(ctx, |ui| {
                     ui.label(&quest.question);
-                    ui.add_space(6.0);
-                    if !quest.choices.is_empty() {
-                        let choices = quest.choices.clone();
-                        for choice in choices {
-                            if ui.button(&choice).clicked() {
-                                submitted = Some(choice);
+                    ui.add_space(8.0);
+                    let choices = quest.choices.clone();
+                    if !choices.is_empty() {
+                        for choice in &choices {
+                            if ui
+                                .add_sized(
+                                    [ui.available_width(), 30.0],
+                                    egui::Button::new(
+                                        egui::RichText::new(choice)
+                                            .strong()
+                                            .color(egui::Color32::WHITE),
+                                    )
+                                    .fill(question_palette.accent)
+                                    .rounding(egui::Rounding::same(6.0)),
+                                )
+                                .clicked()
+                            {
+                                submitted = Some(choice.clone());
                             }
                         }
-                    } else {
-                        ui.text_edit_singleline(&mut quest.answer);
-                        if ui.button(t.answer).clicked() {
-                            submitted = Some(quest.answer.clone());
-                        }
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
+                    let answer = ui.add(
+                        egui::TextEdit::singleline(&mut quest.answer)
+                            .desired_width(ui.available_width())
+                            .hint_text(t.answer),
+                    );
+                    if answer.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        submitted = Some(quest.answer.clone());
+                    }
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 30.0],
+                            egui::Button::new(
+                                egui::RichText::new(format!("✓ {}", t.answer))
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(question_palette.accent)
+                            .rounding(egui::Rounding::same(6.0)),
+                        )
+                        .clicked()
+                    {
+                        submitted = Some(quest.answer.clone());
                     }
                 });
-            if let Some(answer) = submitted {
+            if let Some(answer) = submitted.filter(|a| !a.trim().is_empty()) {
                 self.acp.send(AcpCommand::AnswerQuestion {
                     request_id: quest.request_id.clone(),
                     answer,
@@ -1005,12 +1066,43 @@ pub fn ensure_ai_message(session: &mut ChatSession) -> &mut Message {
 
 impl eframe::App for VibedeckApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Windows 11 DWM rounded corners (one-shot, like other modern apps).
+        #[cfg(windows)]
+        {
+            if !self.rounded_applied {
+                if let Some(hwnd) = window_hwnd(_frame) {
+                    // DWMWA_WINDOW_CORNER_PREFERENCE = 33, DWMWCP_ROUND = 2
+                    unsafe {
+                        windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                            hwnd,
+                            33,
+                            &2u32 as *const u32 as *const core::ffi::c_void,
+                            4,
+                        );
+                    }
+                    self.rounded_applied = true;
+                }
+            }
+        }
         self.ui(ctx);
     }
 
-    /// Ends the press the OS kept during a window move/resize
-    /// (see `frameless::release_after_os_resize`).
+/// Ends the press the OS kept during a window move/resize
+/// (see `frameless::release_after_os_resize`).
     fn raw_input_hook(&mut self, ctx: &Context, raw: &mut egui::RawInput) {
         crate::frameless::release_after_os_resize(ctx, raw);
+    }
+}
+
+/// Raw Win32 window handle (Windows only), for DWM window attributes.
+#[cfg(windows)]
+fn window_hwnd(frame: &mut eframe::Frame) -> Option<windows_sys::Win32::Foundation::HWND> {
+    use raw_window_handle::HasWindowHandle;
+    let raw = frame.window_handle().ok()?.as_raw();
+    match raw {
+        raw_window_handle::RawWindowHandle::Win32(handle) => {
+            Some(handle.hwnd.get() as windows_sys::Win32::Foundation::HWND)
+        }
+        _ => None,
     }
 }

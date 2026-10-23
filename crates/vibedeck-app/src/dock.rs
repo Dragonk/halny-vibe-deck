@@ -126,10 +126,9 @@ pub struct PdfPageImg {
 #[derive(Clone, Debug)]
 pub enum MdSegment {
     Text(String),
+    /// Mermaid source — rendered offline in the UI layer (mermaid.rs).
     Diagram {
         code: String,
-        /// The rendered diagram (None → show the source as a fallback).
-        png: Option<egui::ColorImage>,
     },
 }
 
@@ -481,23 +480,54 @@ pub fn panel(app: &mut VibedeckApp, ctx: &eframe::egui::Context) {
                             for preview in app.dock.previews.clone() {
                                 let is_active =
                                     tab == DockTab::Preview(preview.path.clone());
-                                ui.selectable_label(
-                                    is_active,
-                                    egui::RichText::new(short(&preview.path)).small(),
-                                )
-                                .on_hover_text(&preview.path);
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            egui::RichText::new("✕").small(),
-                                        )
-                                        .fill(egui::Color32::TRANSPARENT),
-                                    )
-                                    .on_hover_text(t.close)
-                                    .clicked()
-                                {
-                                    close_preview = Some(preview.path.clone());
-                                }
+                                // One bordered pill per preview: name + ✕ inside
+                                // the same frame (Nexus-style tab chip).
+                                let stroke = if is_active {
+                                    egui::Stroke::new(1.0_f32, p.accent)
+                                } else {
+                                    egui::Stroke::new(1.0_f32, p.border)
+                                };
+                                egui::Frame::default()
+                                    .fill(if is_active {
+                                        p.panel_hover
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
+                                    .stroke(stroke)
+                                    .rounding(egui::Rounding::same(5.0))
+                                    .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(short(&preview.path))
+                                                            .small(),
+                                                    )
+                                                    .fill(egui::Color32::TRANSPARENT),
+                                                )
+                                                .on_hover_text(&preview.path)
+                                                .clicked()
+                                            {
+                                                app.dock.tab =
+                                                    DockTab::Preview(preview.path.clone());
+                                            }
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("✕")
+                                                            .small()
+                                                            .color(p.muted),
+                                                    )
+                                                    .fill(egui::Color32::TRANSPARENT),
+                                                )
+                                                .on_hover_text(t.close)
+                                                .clicked()
+                                            {
+                                                close_preview = Some(preview.path.clone());
+                                            }
+                                        });
+                                    });
                             }
                         });
                     });
@@ -679,7 +709,9 @@ fn preview_view(app: &mut VibedeckApp, ui: &mut Ui, t: &Str, path: &str) {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, true])
                     .id_salt(format!("preview-scroll-{path}"))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
+                        ui.style_mut().spacing.scroll.bar_width = 10.0;
                         ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
                         ui.label(
                             egui::RichText::new(text.as_str())
@@ -695,13 +727,15 @@ fn preview_view(app: &mut VibedeckApp, ui: &mut Ui, t: &Str, path: &str) {
                 );
             }
             PreviewContent::MarkdownDoc { segments } => {
-                render_markdown_doc(ui, &p, t, path, segments, textures);
+                render_markdown_doc(ui, &p, t, path, segments);
             }
             PreviewContent::Document { blocks } => {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, true])
                     .id_salt(format!("preview-doc-{path}"))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
+                        ui.style_mut().spacing.scroll.bar_width = 10.0;
                         render_document(ui, &p, blocks);
                     });
             }
@@ -755,7 +789,9 @@ fn preview_view(app: &mut VibedeckApp, ui: &mut Ui, t: &Str, path: &str) {
                 egui::ScrollArea::both()
                     .auto_shrink([false, true])
                     .id_salt(format!("preview-table-{path}"))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
+                        ui.style_mut().spacing.scroll.bar_width = 10.0;
                         render_grid(ui, &p, path, columns, rows, 300);
                     });
             }
@@ -800,35 +836,21 @@ fn texture_for(
     )
 }
 
-/// Markdown with mermaid diagrams.
-fn render_markdown_doc(
-    ui: &mut Ui,
-    p: &crate::theme::Palette,
-    t: &Str,
-    path: &str,
-    segments: &[MdSegment],
-    textures: &mut HashMap<String, TextureHandle>,
-) {
+/// Markdown with mermaid diagrams (rendered offline by mermaid.rs).
+fn render_markdown_doc(ui: &mut Ui, p: &crate::theme::Palette, t: &Str, path: &str, segments: &[MdSegment]) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, true])
         .id_salt(format!("preview-mdd-{path}"))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
         .show(ui, |ui| {
-            for (i, seg) in segments.iter().enumerate() {
+            ui.style_mut().spacing.scroll.bar_width = 10.0;
+            for seg in segments {
                 match seg {
                     MdSegment::Text(text) => crate::md::markdown(ui, text),
-                    MdSegment::Diagram { code, png } => match png {
-                        Some(img) => {
-                            let key = format!("{path}#dia#{i}");
-                            let tex = texture_for(ui, textures, &key, img.clone());
-                            ui.add(
-                                egui::Image::from_texture(tex)
-                                    .max_width(ui.available_width() - 8.0)
-                                    .rounding(4.0),
-                            )
-                            .on_hover_text(t.preview_diagram_service);
+                    MdSegment::Diagram { code } => {
+                        if crate::mermaid::render(ui, code) {
                             ui.add_space(6.0);
-                        }
-                        None => {
+                        } else {
                             egui::Frame::group(ui.style())
                                 .fill(ui.visuals().extreme_bg_color)
                                 .inner_margin(egui::Margin::symmetric(8.0, 6.0))
@@ -842,13 +864,16 @@ fn render_markdown_doc(
                                     );
                                 });
                             ui.label(
-                                egui::RichText::new(format!("⚠ {}", t.preview_diagram_failed))
-                                    .small()
-                                    .color(p.yellow),
+                                egui::RichText::new(format!(
+                                    "⚠ {}",
+                                    t.preview_diagram_unsupported
+                                ))
+                                .small()
+                                .color(p.yellow),
                             );
                             ui.add_space(6.0);
                         }
-                    },
+                    }
                 }
             }
         });

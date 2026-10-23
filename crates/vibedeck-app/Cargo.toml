@@ -37,8 +37,6 @@ pdfium-render = { version = "0.9", default-features = false, features = [
     "pdfium_latest",
     "thread_safe",
 ] }
-# mermaid diagram rendering in markdown previews (mermaid.ink png service)
-ureq = "2.10"
 toml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -50,3 +48,8 @@ sys-locale = "0.3"
 # Windows-only: embed the window icon into the executable resource section.
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
+
+# Windows-only: DWM rounded window corners on Windows 11 (DwmSetWindowAttribute).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Graphics_Dwm"] }
+raw-window-handle = "0.6"

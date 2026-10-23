@@ -23,11 +23,12 @@ const TRANSPORTS: [&str; 3] = ["http", "streamable-http", "stdio"];
 pub enum SettingsTab {
     #[default]
     General,
+    Acp,
+    Providers,
     Models,
     Mcp,
     Tools,
     Skills,
-    Logging,
     Agents,
     Prompts,
     Raw,
@@ -387,11 +388,12 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
 
     let tabs = [
         (SettingsTab::General, t.settings_general),
-        (SettingsTab::Models, t.settings_models_providers),
+        (SettingsTab::Acp, t.settings_acp_agent),
+        (SettingsTab::Providers, t.providers),
+        (SettingsTab::Models, t.models),
         (SettingsTab::Mcp, t.settings_mcp),
         (SettingsTab::Tools, t.settings_tools),
         (SettingsTab::Skills, t.settings_skills),
-        (SettingsTab::Logging, t.settings_session_logging),
         (SettingsTab::Agents, t.settings_agents),
         (SettingsTab::Prompts, t.settings_prompts),
         (SettingsTab::Raw, t.settings_raw_toml),
@@ -440,11 +442,12 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
         .auto_shrink(false)
         .show(ui, |ui| match app.settings_pane.tab {
             SettingsTab::General => general(app, ui, t),
-            SettingsTab::Models => models_providers(app, ui, t),
+            SettingsTab::Acp => acp(app, ui, t),
+            SettingsTab::Providers => providers(app, ui, t),
+            SettingsTab::Models => models(app, ui, t),
             SettingsTab::Mcp => mcp(app, ui, t),
             SettingsTab::Tools => tools(app, ui, t),
             SettingsTab::Skills => skills(app, ui, t),
-            SettingsTab::Logging => logging(app, ui, t),
             SettingsTab::Agents => agents(app, ui, t),
             SettingsTab::Prompts => prompts(app, ui, t),
             SettingsTab::Raw => raw(app, ui, t),
@@ -459,26 +462,30 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
     // -- Application -----------------------------------------------------------
     section(ui, &p, t.settings_section_app);
 
-    // Language: System / English / Polski
-    let lang_label = |code: &str| -> String {
-        match code {
-            "en" => "English".to_string(),
-            "pl" => "Polski".to_string(),
-            _ => t.settings_system.to_string(),
-        }
-    };
+    // Language: Automatic (System) + all supported UI languages
     ui.horizontal(|ui| {
         ui.label(t.settings_language);
         let mut picked: Option<String> = None;
         egui::ComboBox::from_id_salt("settings-language")
-            .selected_text(lang_label(&app.settings.language))
+            .selected_text(if app.settings.language == "system" {
+                t.settings_system.to_string()
+            } else {
+                Lang::from_code(&app.settings.language)
+                    .native_name()
+                    .to_string()
+            })
             .width(180.0)
             .show_ui(ui, |ui| {
-                for code in ["system", "en", "pl"] {
+                ui.selectable_value(
+                    &mut picked,
+                    Some("system".to_string()),
+                    t.settings_system,
+                );
+                for lang in Lang::ALL {
                     ui.selectable_value(
                         &mut picked,
-                        Some(code.to_string()),
-                        lang_label(code),
+                        Some(lang.code().to_string()),
+                        lang.native_name(),
                     );
                 }
             });
@@ -524,7 +531,12 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
         }
     });
 
-    // -- Agent (vibe-acp) --------------------------------------------------------
+    // -- Agent (ACP) ---------------------------------------------------------------
+}
+
+fn acp(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
+    let p = app.palette();
+
     section(ui, &p, t.settings_section_agent);
 
     ui.horizontal(|ui| {
@@ -555,6 +567,13 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
         }
         if ui.button(t.vibe_dir_open).clicked() {
             open_path(&vibedeck_vibe::vibe_home());
+        }
+        if ui
+            .button(format!("🛠 {}", t.settings_open_setup))
+            .clicked()
+        {
+            app.setup_pane.refresh_status_async();
+            app.view = View::Setup;
         }
     });
 
@@ -675,6 +694,31 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
 
     ui.add_space(4.0);
     ui.label(egui::RichText::new(t.settings_cli_note).small().weak());
+
+    // -- Session logging ----------------------------------------------------------
+    section(ui, &p, t.settings_session_logging);
+    egui::Grid::new("logging-grid")
+        .num_columns(2)
+        .spacing([20.0, 8.0])
+        .show(ui, |ui| {
+            checkbox_field(ui, &mut pane.sl_enabled, "enabled");
+            label_field(ui, "save_dir", &mut pane.sl_save_dir);
+            label_field(ui, "auto_compact_threshold", &mut pane.sl_threshold);
+        });
+
+    // -- System / privacy ---------------------------------------------------------
+    section(ui, &p, t.settings_section_system);
+    egui::Grid::new("system-grid")
+        .num_columns(2)
+        .spacing([20.0, 8.0])
+        .show(ui, |ui| {
+            checkbox_field(ui, &mut pane.trust_store, t.system_trust_store);
+            checkbox_field(ui, &mut pane.telemetry, t.telemetry);
+            checkbox_field(ui, &mut pane.otel, "enable_otel");
+            label_field(ui, t.otel_endpoint, &mut pane.otel_endpoint);
+            checkbox_field(ui, &mut pane.update_checks, t.update_checks);
+            checkbox_field(ui, &mut pane.notifications, t.notifications);
+        });
 }
 
 /// A settings section header.
@@ -699,9 +743,9 @@ fn open_path(path: &std::path::Path) {
     }
 }
 
-// -- Models & providers -------------------------------------------------------------
+// -- Providers ----------------------------------------------------------------------
 
-fn models_providers(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
+fn providers(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
     let pane = &mut app.settings_pane;
 
     egui::Grid::new("active-model")
@@ -779,7 +823,13 @@ fn models_providers(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
     }
 
     ui.add_space(12.0);
-    ui.separator();
+}
+
+// -- Models ------------------------------------------------------------------------
+
+fn models(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
+    let pane = &mut app.settings_pane;
+
     ui.label(egui::RichText::new(t.models).strong());
     let mut remove_model = None;
     for i in 0..pane.models.len() {
@@ -927,12 +977,6 @@ fn tools(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
         .show(ui, |ui| {
             multiline_field(ui, t.enabled_tools, &mut pane.enabled_tools, t);
             multiline_field(ui, t.disabled_tools, &mut pane.disabled_tools, t);
-            checkbox_field(ui, &mut pane.telemetry, t.telemetry);
-            checkbox_field(ui, &mut pane.otel, "enable_otel");
-            label_field(ui, t.otel_endpoint, &mut pane.otel_endpoint);
-            checkbox_field(ui, &mut pane.update_checks, t.update_checks);
-            checkbox_field(ui, &mut pane.notifications, t.notifications);
-            checkbox_field(ui, &mut pane.trust_store, t.system_trust_store);
         });
 
     ui.add_space(12.0);
@@ -1047,27 +1091,6 @@ fn skills(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
                     });
             });
     }
-}
-
-// -- Session logging ------------------------------------------------------------------
-
-fn logging(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
-    let pane = &mut app.settings_pane;
-    ui.label(
-        egui::RichText::new("[session_logging]")
-            .monospace()
-            .strong(),
-    );
-    ui.add_space(6.0);
-    egui::Grid::new("logging-grid")
-        .num_columns(2)
-        .spacing([20.0, 8.0])
-        .show(ui, |ui| {
-            checkbox_field(ui, &mut pane.sl_enabled, "enabled");
-            label_field(ui, "save_dir", &mut pane.sl_save_dir);
-            label_field(ui, "auto_compact_threshold", &mut pane.sl_threshold);
-        });
-    ui.label(egui::RichText::new(t.one_per_line).small().weak());
 }
 
 // -- Agents ----------------------------------------------------------------------------

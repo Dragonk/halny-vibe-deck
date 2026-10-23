@@ -21,7 +21,7 @@ instant startup and a tiny memory footprint, in the spirit of the
 | Renderer | React / DOM | egui / wgpu (GPU-first) |
 | Language | TypeScript | Rust |
 | RAM | hundreds of MB | tens of MB |
-| UI language | English | System / English + Polski |
+| UI language | English | Automatic (System) + English / Polski / Deutsch / Français / Español / Italiano |
 
 ## Features
 
@@ -51,9 +51,9 @@ instant startup and a tiny memory footprint, in the spirit of the
   renders as a styled document (headings, emphasis, lists, tables), **XLSX**
   opens with sheet tabs and an Excel-style grid, **PPTX** shows actual slides
   with shape geometry and embedded pictures, and Markdown supports
-  **Mermaid** diagrams (rendered via [mermaid.ink](https://mermaid.ink) —
-  the diagram source is sent to that public service, so don't put secrets
-  in diagrams if you're offline-shy).
+  **Mermaid** diagrams — flowcharts, sequence diagrams and pie charts are
+  rendered by a **built-in offline renderer** (no internet, no external
+  services; unsupported diagram types fall back to the source code).
 - **Full ACP protocol** — JSON-RPC 2.0 over stdio to `vibe-acp` on a worker
   thread: `initialize`, `session/new | load | prompt | cancel`,
   `session/set_config_option` (model/mode/thinking), streaming
@@ -76,7 +76,7 @@ instant startup and a tiny memory footprint, in the spirit of the
   estimate from the CLI price table).
 - **Setup pane** — detects/installs the CLI chain
   (`uv tool install mistral-vibe`) with one click.
-- **i18n** — English and Polski, runtime switchable.
+- **i18n** — Automatic (System) + English, Polski, Deutsch, Français, Español and Italiano, runtime switchable.
 - **Zero native dependencies** — in-app folder picker and `@file` /
   `/command` autocomplete instead of heavy dialog crates.
 
@@ -122,10 +122,9 @@ non-blocking each frame.
 
 - [x] ACP client, chat, approvals, questions, modes/models
 - [x] Config editor (full current CLI schema), agents/prompts/skills
-- [x] Stats dashboard, setup pane, EN/PL i18n
+- [x] Stats dashboard (time ranges, charts, cache), setup pane, 6-language i18n
 - [ ] Packaging (`.deb`, `.AppImage`, Windows/macOS bundles)
 - [ ] Session resume/branching UI polish
-- [ ] More languages (i18n is a single struct per language)
 
 ## Credits & license
 

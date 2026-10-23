@@ -124,6 +124,28 @@ impl Palette {
     }
 }
 
+/// Colors for the built-in offline diagram renderer (mermaid.rs),
+/// derived from the currently applied palette.
+pub fn theme_palette(ui: &egui::Ui) -> crate::mermaid::Colors {
+    let p = if ui.visuals().dark_mode {
+        Palette::dark()
+    } else {
+        Palette::light()
+    };
+    crate::mermaid::Colors {
+        bg: p.surface,
+        node: p.panel,
+        border: p.border,
+        text: p.text,
+        muted: p.muted,
+        accent: p.accent,
+        green: p.green,
+        blue: Color32::from_rgb(0x4d, 0xa3, 0xff),
+        yellow: p.yellow,
+        red: p.red,
+    }
+}
+
 /// Apply the Nexus look (colors, 6px rounding, 14px body text) to the egui
 /// context. Call once at startup and again whenever the theme setting changes.
 pub fn apply(ctx: &egui::Context, theme: &str) {

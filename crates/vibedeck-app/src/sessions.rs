@@ -24,7 +24,6 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
             ui.separator();
             nav_item(app, ui, "sidebar-nav-stats", "📊", t.view_stats, View::Stats, &p);
             nav_item(app, ui, "sidebar-nav-settings", "⚙", t.view_settings, View::Settings, &p);
-            nav_item(app, ui, "sidebar-nav-setup", "🛠", t.view_setup, View::Setup, &p);
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(t.disclaimer_short)
@@ -79,11 +78,10 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                                 egui::RichText::new(format!("+ {}", t.new_session))
                                     .size(12.0)
                                     .strong()
-                                    .color(p.text),
+                                    .color(egui::Color32::WHITE),
                             )
-                            .fill(p.panel)
-                            .rounding(egui::Rounding::same(6.0))
-                            .stroke(egui::Stroke::new(1.0_f32, p.border)),
+                            .fill(p.accent)
+                            .rounding(egui::Rounding::same(6.0)),
                         )
                         .clicked()
                     {
@@ -94,29 +92,25 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                     section_label(ui, &p, t.sessions);
 
                     // local sessions (Nexus session-item: name + date · cwd,
-                    // 3px accent left bar on the active one, min-height 44)
+                    // 3px accent left bar on the active one, min-height 44),
+                    // newest first regardless of the underlying order
                     let current = app.current;
                     let limit = app.settings.sidebar_sessions_limit.unwrap_or(30);
-                    let items: Vec<(String, String, String)> = app
-                        .sessions
-                        .iter()
-                        .take(limit)
-                        .map(|s| {
-                            (
-                                s.name.clone(),
-                                fmt_datetime(s.last_active_ms),
-                                short_path(&s.working_directory),
-                            )
-                        })
-                        .collect();
-                    for (i, (name, date, cwd)) in items.iter().enumerate() {
+                    let mut order: Vec<usize> = (0..app.sessions.len()).collect();
+                    order.sort_by(|&a, &b| {
+                        app.sessions[b]
+                            .last_active_ms
+                            .cmp(&app.sessions[a].last_active_ms)
+                    });
+                    for i in order.into_iter().take(limit) {
+                        let s = &app.sessions[i];
                         let selected = current == Some(i);
                         let busy_here = selected && app.busy;
                         let clicked = session_item(
                             ui,
                             &p,
-                            name,
-                            &format!("{date} · {cwd}"),
+                            &s.name,
+                            &format!("{} · {}", fmt_datetime(s.last_active_ms), short_path(&s.working_directory)),
                             selected,
                             busy_here,
                         );
@@ -378,7 +372,6 @@ pub fn show_rail(app: &mut VibedeckApp, ui: &mut Ui) {
             .on_hover_text(t.disclaimer_short);
         rail_nav(app, ui, "rail-stats", "📊", t.view_stats, View::Stats, &p);
         rail_nav(app, ui, "rail-settings", "⚙", t.view_settings, View::Settings, &p);
-        rail_nav(app, ui, "rail-setup", "🛠", t.view_setup, View::Setup, &p);
     });
 }
 
@@ -462,21 +455,12 @@ fn nav_item(
     let _ = id;
 }
 
-/// "23 Oct 16:45" from unix-ms.
+/// "23.10.2026" from unix-ms — Nexus shows the plain dd.mm.yyyy date.
 fn fmt_datetime(ms: i64) -> String {
     let secs = (ms.max(0) as u64) / 1000;
     let days = secs / 86_400;
-    let rem = secs % 86_400;
-    let (h, m) = (rem / 3600, (rem % 3600) / 60);
-    let (_, mo, d) = civil_from_days(days as i64);
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ];
-    let month = MONTHS
-        .get(mo.saturating_sub(1) as usize)
-        .copied()
-        .unwrap_or("Jan");
-    format!("{d} {month} {h:02}:{m:02}")
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("{d:02}.{m:02}.{y}")
 }
 
 /// Howard Hinnant's civil-from-days algorithm.
