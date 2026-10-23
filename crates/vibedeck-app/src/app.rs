@@ -493,11 +493,23 @@ impl VibedeckApp {
                 title,
             } => {
                 self.status = AcpStatus::Connected;
-                self.busy = false;
-                self.priming = false;
-                self.loading_session = None;
                 self.modes = modes;
                 self.config_options = config_options;
+                if self.priming {
+                    // Background prime of a fresh session: stash it for the
+                    // first prompt instead of claiming whatever session is
+                    // currently open — that may be a CLI mirror whose
+                    // session/load replay is still in flight.
+                    self.priming = false;
+                    self.primed_session = Some(session_id);
+                } else {
+                    self.busy = false;
+                    // Only a ready for the session being loaded may clear
+                    // the pending load — otherwise an unrelated session
+                    // (e.g. the primed one) would cancel the replay attach.
+                    if self.loading_session.as_deref() == Some(session_id.as_str()) {
+                        self.loading_session = None;
+                    }
                 if let Some(session) = self.current_session_mut() {
                     session.acp_session_id = Some(session_id);
                     if let Some(title) = title {
@@ -505,10 +517,11 @@ impl VibedeckApp {
                             session.name = title;
                         }
                     }
-                } else {
-                    // No local session yet — this is the primed background
-                    // session; the first prompt will attach to it.
-                    self.primed_session = Some(session_id);
+                    } else {
+                        // No local session yet — this is a background
+                        // session; the first prompt will attach to it.
+                        self.primed_session = Some(session_id);
+                    }
                 }
                 if let Some(text) = self.pending_prompt.take() {
                     self.send_message(text);

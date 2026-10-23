@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.8.1
+  VERSION: 0.8.2
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -95,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.8.1-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.8.1-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.8.2-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.8.2-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -118,14 +118,42 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.8.1-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.8.2-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
             The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
             library next to the binary — keep them together so PDF previews render.
 
-            ## What's new in v0.8.1
+
+            ## What's new in v0.8.2
+
+            Fixes for the rendering issues reported after 0.8.1:
+
+            - **CLI sessions load their full history again.** A race between
+              the background "prime" session and a clicked CLI session made
+              the replayed history get silently discarded — the chat showed
+              a single leftover fragment instead of the whole conversation.
+              The primed session can no longer cancel a session/load that
+              is still in flight, and the tail of the replay no longer
+              leaks into the live message stream.
+            - **Mermaid diagrams now render inside the chat.** Replies that
+              contain ```mermaid blocks drew a wall of source code where
+              Nexus shows actual diagrams — flowcharts (rect / round /
+              stadium / circle / cylinder / diamond / flag nodes, labeled
+              edges), sequence diagrams and pie charts are now drawn
+              inline, with a code-block fallback for unsupported syntax.
+            - **Session drill-down works with the new CLI log format.**
+              Sessions recorded by newer CLI versions store their
+              transcript in chunk snapshots instead of messages.jsonl,
+              so the stats drill-down showed an empty transcript. It now
+              reads the unified format (turn-ordered, tool calls with
+              names, tool outputs) and also finds sessions under
+              logs/session/unified/&lt;id&gt;.
+            - Drill-down assistant messages show their tool calls (tool
+              name + command) above the reply, like the chat view.
+
+            ## Also in v0.8.1
 
             This release fixes the two biggest complaints from 0.8.0 — how
             replayed conversations look, and how the stats dashboard compares

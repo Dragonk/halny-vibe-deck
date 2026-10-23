@@ -51,6 +51,22 @@ pub fn markdown(ui: &mut Ui, src: &str) {
                 i += 1;
             }
             i += 1; // closing fence (if any)
+            // Mermaid fences draw actual diagrams (like Nexus) instead of
+            // dumping the source as a wall of code; unparseable/unsupported
+            // diagrams fall back to the code block with a hint.
+            if lang.eq_ignore_ascii_case("mermaid") {
+                if crate::mermaid::render(ui, &code) {
+                    ui.add_space(6.0);
+                } else {
+                    code_block(ui, &lang, &code);
+                    ui.label(
+                        egui::RichText::new("⚠ diagram could not be rendered — showing source")
+                            .small()
+                            .weak(),
+                    );
+                }
+                continue;
+            }
             code_block(ui, &lang, &code);
             continue;
         }

@@ -585,6 +585,15 @@ impl Worker {
         client.replaying.insert(session_id.to_string(), Vec::new());
         let params = json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] });
         let outcome = client.request("session/load", &params, REQUEST_TIMEOUT);
+        // vibe-acp flushes the tail of the session/load replay right after
+        // the response; grace-drain it into the replay buffer instead of
+        // letting it leak into the live event stream.
+        if outcome.is_ok() {
+            for _ in 0..40 {
+                client.drain_raw();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         let replay = client
             .replaying
             .remove(session_id)

@@ -175,24 +175,36 @@ fn load_meta(meta: &Path) -> Option<VibeSession> {
 /// Locate the on-disk folder of a session by id (folder name or meta.json).
 fn find_session_dir(session_id: &str) -> Option<PathBuf> {
     let dir = sessions_log_dir();
-    // Fast path: folder named after the session.
+    // Fast path: folder named after the session (classic layout).
     let direct = dir.join(session_id);
     if direct.join("meta.json").is_file() {
         return Some(direct);
     }
-    let entries = std::fs::read_dir(&dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.join("meta.json").is_file() {
-            continue;
-        }
-        let raw = std::fs::read_to_string(path.join("meta.json")).ok()?;
-        let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        if value.get("session_id").and_then(|v| v.as_str()) == Some(session_id) {
-            return Some(path);
-        }
+    // Unified layout (newer CLI): `logs/session/unified/<id>/`.
+    let unified = dir.join("unified").join(session_id);
+    if unified.join("meta.json").is_file() {
+        return Some(unified);
     }
-    None
+    // Scan both layouts for a meta.json with a matching session id.
+    let scan = |base: &Path| -> Option<PathBuf> {
+        for entry in std::fs::read_dir(base).ok().into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.join("meta.json").is_file() {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(path.join("meta.json")) else {
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if value.get("session_id").and_then(|v| v.as_str()) == Some(session_id) {
+                return Some(path);
+            }
+        }
+        None
+    };
+    scan(&dir).or_else(|| scan(&dir.join("unified")))
 }
 
 /// Load the message log of a session.
@@ -200,7 +212,127 @@ pub fn load_session_messages(session_id: &str) -> Vec<VibeMessage> {
     let Some(dir) = find_session_dir(session_id) else {
         return Vec::new();
     };
-    read_messages(&dir.join("messages.jsonl"))
+    let classic = read_messages(&dir.join("messages.jsonl"));
+    if !classic.is_empty() {
+        return classic;
+    }
+    // Newer CLI ("unified") layout: the transcript lives in chunk snapshots.
+    read_unified_transcript(&dir.join("chunks"))
+}
+
+/// Newer CLI ("unified") sessions keep the transcript inside
+/// `chunks/*.json` snapshots: each file is a list of entries, and entries
+/// with `source: "history"` carry one message of the conversation
+/// (`message: { role, content: [...] }`). Snapshots cover single turns and
+/// overlap, so per turn the most complete snapshot is used; user entries
+/// (turn starters) are collected from every snapshot.
+fn read_unified_transcript(chunks_dir: &Path) -> Vec<VibeMessage> {
+    let Ok(entries) = std::fs::read_dir(chunks_dir) else {
+        return Vec::new();
+    };
+    // turn -> [(file, non-user history entries of that turn)]
+    let mut turns: std::collections::BTreeMap<i64, Vec<(String, Vec<serde_json::Value>)>> =
+        std::collections::BTreeMap::new();
+    // user entries deduped by content, kept per turn
+    let mut user_msgs: Vec<(i64, serde_json::Value)> = Vec::new();
+    let mut seen_user: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else {
+            continue;
+        };
+        let mut per_turn: std::collections::HashMap<i64, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        for e in list {
+            if e.get("source").and_then(|s| s.as_str()) != Some("history") {
+                continue;
+            }
+            let turn = e.get("turn_index").and_then(|t| t.as_i64()).unwrap_or(0);
+            if e.pointer("/message/role").and_then(|r| r.as_str()) == Some("user") {
+                let key = match e.pointer("/message/content") {
+                    Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                    None => String::new(),
+                };
+                if seen_user.insert(key) {
+                    user_msgs.push((turn, e));
+                }
+                continue;
+            }
+            per_turn.entry(turn).or_default().push(e);
+        }
+        for (turn, list) in per_turn {
+            turns
+                .entry(turn)
+                .or_default()
+                .push((path.display().to_string(), list));
+        }
+    }
+    let mut messages: Vec<VibeMessage> = Vec::new();
+    let mut idx = 0usize;
+    for (turn, files) in turns {
+        // user message(s) that started this turn
+        for (uturn, e) in &user_msgs {
+            if *uturn == turn {
+                if let Some(msg) = unified_entry_to_message(e, &mut idx) {
+                    messages.push(msg);
+                }
+            }
+        }
+        // most complete snapshot of this turn
+        if let Some((_, list)) = files.iter().max_by_key(|(_, l)| l.len()) {
+            for e in list {
+                if let Some(msg) = unified_entry_to_message(e, &mut idx) {
+                    messages.push(msg);
+                }
+            }
+        }
+    }
+    messages
+}
+
+/// Convert one `source: "history"` chunk entry into a [`VibeMessage`].
+fn unified_entry_to_message(entry: &serde_json::Value, idx: &mut usize) -> Option<VibeMessage> {
+    let message = entry.get("message")?;
+    let role = message
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("tool")
+        .to_string();
+    let mut content = String::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    if let Some(items) = message.get("content").and_then(|c| c.as_array()) {
+        for item in items {
+            match item.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                        if !content.is_empty() {
+                            content.push('\n');
+                        }
+                        content.push_str(text);
+                    }
+                }
+                Some("tool_call") => tool_calls.push(item.clone()),
+                _ => {}
+            }
+        }
+    }
+    if content.is_empty() && tool_calls.is_empty() {
+        return None;
+    }
+    *idx += 1;
+    Some(VibeMessage {
+        role,
+        content: (!content.is_empty()).then_some(content),
+        message_id: Some(format!("unified-{idx}")),
+        tool_call_id: None,
+        tool_calls,
+    })
 }
 
 fn read_messages(path: &Path) -> Vec<VibeMessage> {
@@ -296,6 +428,38 @@ pub fn aggregate(sessions: &[VibeSession]) -> AggregateStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unified_transcript_from_chunks() {
+        let dir = std::env::temp_dir().join(format!("vd-chunks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("a.json"),
+            r#"[
+              {"source":"history","turn_index":0,"message":{"role":"user","content":[{"type":"text","text":"hello"}]}},
+              {"source":"history","turn_index":0,"message":{"role":"assistant","content":[{"type":"text","text":"running"},{"type":"tool_call","name":"bash","arguments":{"raw":"{}"}}]}},
+              {"source":"history","turn_index":0,"message":{"role":"tool","content":[{"type":"text","text":"out"}]}}
+            ]"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("b.json"),
+            r#"[
+              {"source":"history","turn_index":0,"message":{"role":"assistant","content":[{"type":"text","text":"running"}]}},
+              {"source":"history","turn_index":1,"message":{"role":"user","content":[{"type":"text","text":"again"}]}},
+              {"source":"history","turn_index":1,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+            ]"#,
+        )
+        .unwrap();
+        let msgs = read_unified_transcript(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        let roles: Vec<&str> = msgs.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant", "tool", "user", "assistant"]);
+        assert_eq!(msgs[0].content.as_deref(), Some("hello"));
+        assert_eq!(msgs[1].tool_calls.len(), 1);
+        assert_eq!(msgs[1].content.as_deref(), Some("running"));
+        assert_eq!(msgs[4].content.as_deref(), Some("done"));
+    }
 
     fn sample_meta() -> &'static str {
         r#"{

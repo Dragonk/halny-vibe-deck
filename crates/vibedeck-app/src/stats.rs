@@ -980,6 +980,20 @@ fn transcript_row(ui: &mut Ui, msg: &VibeMessage, p: &Palette) {
                         ui.add_space(12.0);
                         ui.vertical(|ui| {
                             ui.set_width(ui.available_width() - 8.0);
+                            for tc in &msg.tool_calls {
+                                let name =
+                                    tc.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                                let raw = tc
+                                    .pointer("/arguments/raw")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                ui.label(
+                                    egui::RichText::new(format!("🔧 {name} {raw}"))
+                                        .small()
+                                        .monospace()
+                                        .color(p.muted),
+                                );
+                            }
                             crate::md::markdown(ui, &content);
                         });
                     });
