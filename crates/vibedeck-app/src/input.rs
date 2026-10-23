@@ -1,68 +1,111 @@
 //! Bottom input bar, mirroring the Nexus InputBar:
-//! a rounded input box, send/stop, and a row of model / mode / cwd pickers.
+//! a toolbar row on top (model / mode / thinking chips + cwd),
+//! then the rounded input box with a 42×42 send/stop button,
+//! then the status row with the working directory.
 
 use eframe::egui::{self, Ui};
-use vibedeck_core::proto::AcpCommand;
 
 use crate::app::VibedeckApp;
+use crate::theme::Palette;
 
 pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     let p = app.palette();
     let t = app.tr();
 
-    // -- input box ------------------------------------------------------------
+    // -- toolbar row (model / mode / thinking / cwd) ---------------------------
+    ui.horizontal(|ui| {
+        option_chip(app, ui, &p, "model", t.model);
+        option_chip(app, ui, &p, "mode", t.mode);
+        option_chip(app, ui, &p, "thinking", t.thinking);
+
+        // working directory
+        let cwd = app.current_workdir().to_string_lossy().to_string();
+        let cwd_name = short_path(&cwd);
+        if chip_button(ui, &p, &format!("📂 {cwd_name}"))
+            .on_hover_text(&cwd)
+            .clicked()
+        {
+            app.folder_picker.open = true;
+            app.folder_picker.dir = app.current_workdir();
+            app.folder_picker.entry = app.settings.working_directory.clone();
+        }
+    });
+
+    ui.add_space(6.0);
+
+    // -- input box --------------------------------------------------------------
     let send_clicked = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
     let mut text_response: Option<egui::Response> = None;
 
     egui::Frame::default()
         .fill(p.input_bg)
         .stroke(egui::Stroke::new(1.0_f32, p.border_subtle))
-        .rounding(8.0)
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .rounding(10.0)
+        .inner_margin(egui::Margin::symmetric(6.0, 6.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let response = ui.add(
                     egui::TextEdit::multiline(&mut app.input)
                         .hint_text(egui::RichText::new(t.message_placeholder).color(p.muted))
                         .desired_rows(1)
-                        .desired_width(ui.available_width() - 96.0)
+                        .desired_width(ui.available_width() - 52.0)
                         .text_color(p.text)
                         .lock_focus(true),
                 );
                 text_response = Some(response.clone());
 
-                if app.busy {
-                    if ui
-                        .add(
-                            egui::Button::new(egui::RichText::new(format!("⏹ {}", t.stop)).strong())
-                                .fill(p.panel_hover),
-                        )
-                        .clicked()
-                    {
+                // send/stop: 42×42, radius 10 — accent while enabled.
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::click());
+                let painter = ui.painter_at(rect);
+                let fill = if app.busy {
+                    p.panel_hover
+                } else if app.input.trim().is_empty() {
+                    p.panel
+                } else {
+                    p.accent
+                };
+                painter.rect_filled(rect, egui::Rounding::same(10.0), fill);
+                let glyph = if app.busy { "⏹" } else { "➤" };
+                let glyph_color = if app.busy || app.input.trim().is_empty() {
+                    p.muted
+                } else {
+                    egui::Color32::WHITE
+                };
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    glyph,
+                    egui::FontId::proportional(16.0),
+                    glyph_color,
+                );
+                let _ = painter;
+                if response.clicked() {
+                    if app.busy {
                         if let Some(session) = app.current_session() {
                             if let Some(acp_session_id) = session.acp_session_id.clone() {
-                                app.acp.send(AcpCommand::Cancel {
+                                app.acp.send(vibedeck_core::proto::AcpCommand::Cancel {
                                     session_id: acp_session_id,
                                 });
                             }
                         }
-                    }
-                } else {
-                    let send = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new(format!("➤ {}", t.send))
-                                .strong()
-                                .color(egui::Color32::WHITE),
-                        )
-                        .fill(p.accent),
-                    );
-                    if (send.clicked() || send_clicked) && response.has_focus() {
+                    } else {
                         let text = std::mem::take(&mut app.input);
                         app.send_message(text);
                     }
                 }
             });
         });
+
+    // Enter sends while the text edit has focus.
+    if send_clicked {
+        if let Some(response) = &text_response {
+            if response.has_focus() && !app.busy && !app.input.trim().is_empty() {
+                let text = std::mem::take(&mut app.input);
+                app.send_message(text);
+            }
+        }
+    }
 
     // popup: @file mentions & /slash commands
     if let Some(response) = text_response.as_ref() {
@@ -133,93 +176,101 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
         }
     }
 
-    // -- model / mode / cwd row -------------------------------------------------
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let small_btn = |ui: &mut egui::Ui, label: String| {
-            ui.add(
-                egui::Button::new(egui::RichText::new(label).small().color(p.muted))
-                    .fill(egui::Color32::TRANSPARENT)
-                    .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
-            )
-        };
+    // -- status bar: cwd --------------------------------------------------------
+    ui.add_space(2.0);
+    let cwd = app.current_workdir().to_string_lossy().to_string();
+    ui.label(
+        egui::RichText::new(if cwd.is_empty() { "—" } else { &cwd })
+            .size(10.0)
+            .color(p.dim),
+    );
+}
 
-        // model picker
-        let current_model = app
-            .settings
-            .preferred_model
-            .clone()
-            .or_else(|| app.models.first().cloned())
-            .unwrap_or_default();
-        let model_label = if current_model.is_empty() {
-            t.model.to_string()
-        } else {
-            current_model.clone()
-        };
-        ui.menu_button(
-            egui::RichText::new(model_label).small().color(p.muted),
-            |ui| {
-                let models = app.models.clone();
-                for model in models {
-                    if ui.selectable_label(model == current_model, &model).clicked() {
-                        app.settings.preferred_model = Some(model.clone());
-                        app.settings.save();
-                        if let Some(session) = app.current_session() {
-                            if let Some(acp_session_id) = session.acp_session_id.clone() {
-                                app.acp.send(AcpCommand::SetConfigOption {
-                                    session_id: acp_session_id,
-                                    key: "model".into(),
-                                    value: model,
-                                });
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                }
-                if app.models.is_empty() {
-                    ui.label(egui::RichText::new("(—)").weak());
-                }
-            },
-        );
-
-        // mode picker
-        ui.menu_button(egui::RichText::new(t.mode).small().color(p.muted), |ui| {
-            let modes = app.modes.clone();
-            for mode in modes {
-                if ui.selectable_label(false, &mode.name).clicked() {
-                    if let Some(session) = app.current_session() {
-                        if let Some(acp_session_id) = session.acp_session_id.clone() {
-                            app.acp.send(AcpCommand::SetConfigOption {
-                                session_id: acp_session_id,
-                                key: "mode".into(),
-                                value: mode.id.clone(),
-                            });
-                        }
-                    }
-                    ui.close_menu();
+/// A Nexus `.toolbar-btn` chip: 12px text, panel background, subtle border,
+/// radius 5; shows a dropdown with the option choices.
+fn option_chip(app: &mut VibedeckApp, ui: &mut Ui, p: &Palette, id: &str, fallback: &str) {
+    let Some(opt) = app.option_value(id).cloned() else {
+        return;
+    };
+    let label_text = if opt.current_label().is_empty() {
+        format!("— {fallback}")
+    } else {
+        opt.current_label()
+    };
+    let menu = chip_button(ui, p, &truncate(&label_text, 26));
+    if menu.clicked() {
+        ui.memory_mut(|m| m.open_popup(egui::Id::new(format!("chip-{id}"))));
+    }
+    let popup_id = egui::Id::new(format!("chip-{id}"));
+    egui::popup_below_widget(
+        ui,
+        popup_id,
+        &menu,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui: &mut egui::Ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            ui.set_min_width(220.0);
+            ui.set_max_width(320.0);
+            ui.label(
+                egui::RichText::new(if opt.name.is_empty() { fallback } else { &opt.name })
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            for choice in &opt.choices {
+                let selected = choice.value == opt.current_value;
+                let label = if choice.name.is_empty() {
+                    choice.value.clone()
+                } else {
+                    choice.name.clone()
+                };
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(if selected {
+                                format!("● {label}")
+                            } else {
+                                format!("  {label}")
+                            })
+                            .size(13.0)
+                            .color(if selected {
+                                p.accent
+                            } else {
+                                p.text
+                            }),
+                        )
+                        .fill(egui::Color32::TRANSPARENT),
+                    )
+                    .on_hover_text(&choice.description)
+                    .clicked()
+                {
+                    app.set_config_option(id, choice.value.clone());
+                    ui.memory_mut(|m| m.close_popup());
                 }
             }
-            if app.modes.is_empty() {
-                ui.label(egui::RichText::new("(—)").weak());
+            if opt.choices.is_empty() {
+                ui.label(egui::RichText::new("—").weak());
             }
-        });
+        },
+    );
+    menu.on_hover_text(&label_text);
+}
 
-        // working directory picker
-        let cwd = app.current_workdir().to_string_lossy().to_string();
-        if small_btn(ui, format!("📂 {}", cwd))
-            .on_hover_text(&cwd)
-            .clicked()
-        {
-            app.folder_picker.open = true;
-            app.folder_picker.dir = app.current_workdir();
-            app.folder_picker.entry = app.settings.working_directory.clone();
-        }
+fn chip_button(ui: &mut Ui, p: &Palette, label: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(label).size(12.0).color(p.muted))
+            .fill(p.panel)
+            .rounding(egui::Rounding::same(5.0))
+            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+    )
+}
 
-        // disclaimer, right-aligned
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(t.disclaimer_short).small().color(p.dim));
-        });
-    });
+fn truncate(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max_chars - 1).collect::<String>())
+    }
 }
 
 enum InputToken {
@@ -268,4 +319,16 @@ fn insert_token(input: &mut String, completion: &str) {
         input.push_str(completion);
         input.push(' ');
     }
+}
+
+fn short_path(path: &str) -> String {
+    if path.is_empty() {
+        return "—".into();
+    }
+    path.trim_end_matches('/')
+        .trim_end_matches('\\')
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_string()
 }

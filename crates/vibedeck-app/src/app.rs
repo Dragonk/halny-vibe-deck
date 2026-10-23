@@ -1,23 +1,32 @@
 //! The egui application: top-level layout, event pump, and glue
 //! between the ACP worker, the `~/.vibe` config layer and the UI.
 //!
-//! Layout mirrors the original Mistral Vibe Nexus app:
-//! a slim header (brand + agent status), a resizable sessions/projects
-//! sidebar, the chat column, and the input bar.
+//! Layout mirrors the original Mistral Vibe Nexus app 1:1:
+//! a frameless window with a slim header acting as the titlebar
+//! (brand + agent status + ─ □ ✕), an always-present sidebar
+//! (collapsible to an icon rail), the chat column with an optional
+//! right workspace dock, and the input bar.
+//!
+//! **Unofficial community project — not affiliated with Mistral AI.**
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use eframe::egui;
-use egui::{Align, CentralPanel, Context, Layout, SidePanel, TopBottomPanel, Window};
+use egui::{
+    Align, CentralPanel, Context, Id, Layout, Sense, SidePanel, TopBottomPanel, ViewportCommand,
+    Window,
+};
 use vibedeck_acp::AcpHandle;
-use vibedeck_core::proto::{AcpCommand, AcpEvent, AcpSessionInfo, AvailableCommand, ModeInfo};
+use vibedeck_core::proto::{
+    AcpCommand, AcpEvent, AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo,
+};
 use vibedeck_core::types::{ChatSession, Message, MessageSender, ThinkingBlock};
 
 use crate::i18n::{t, Lang};
 use crate::settings::SettingsPane;
 use crate::setup::SetupPane;
-use crate::state::{AcpStatus, AppSettings, FolderPicker, PendingApproval, PendingQuestion, View};
+use crate::state::{AcpStatus, AppSettings, FolderPicker, PendingApproval, PendingQuestion, UsageStats, View};
 use crate::stats::StatsPane;
 use crate::theme;
 
@@ -33,9 +42,16 @@ pub struct VibedeckApp {
     pub sessions: Vec<ChatSession>,
     pub current: Option<usize>,
     pub backend_sessions: Vec<AcpSessionInfo>,
-    pub models: Vec<String>,
+    /// Session config options (model / mode / thinking / …) advertised by
+    /// `session/new` → `configOptions` (vibe-acp ≥ 3.0).
+    pub config_options: Vec<ConfigOption>,
     pub modes: Vec<ModeInfo>,
     pub commands: Vec<AvailableCommand>,
+
+    /// Live usage counters for the active session (`usage_update` events).
+    pub usage: UsageStats,
+    /// Right workspace dock (files tree + git).
+    pub dock: crate::dock::Dock,
 
     /// A prompt waiting for `session/new` / `session/load` to finish.
     pub pending_prompt: Option<String>,
@@ -75,9 +91,11 @@ impl VibedeckApp {
             sessions: Vec::new(),
             current: None,
             backend_sessions: Vec::new(),
-            models: Vec::new(),
+            config_options: Vec::new(),
             modes: Vec::new(),
             commands: Vec::new(),
+            usage: UsageStats::default(),
+            dock: crate::dock::Dock::default(),
             pending_prompt: None,
             busy: false,
             approval: None,
@@ -140,6 +158,16 @@ impl VibedeckApp {
         self.file_index_fresh = false;
     }
 
+    /// Reset the workspace dock when the working directory changes.
+    pub fn reset_dock(&mut self) {
+        self.dock.expanded.clear();
+        self.dock.preview = None;
+        self.dock.git.branch.clear();
+        self.dock.git.entries.clear();
+        self.dock.git.diff_file = None;
+        self.dock.git.diff_text.clear();
+    }
+
     /// Ensure the @-mention index matches the current working directory.
     /// Only called from the input-bar `@` popup — never at startup.
     pub fn ensure_file_index(&mut self) {
@@ -155,6 +183,31 @@ impl VibedeckApp {
             PathBuf::from(&self.settings.working_directory)
         } else {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+        }
+    }
+
+    /// Current value of a config option (model / mode / thinking…).
+    pub fn option_value(&self, id: &str) -> Option<&ConfigOption> {
+        self.config_options.iter().find(|o| o.id == id)
+    }
+
+    /// Select a config option locally + on the agent.
+    pub fn set_config_option(&mut self, id: &str, value: String) {
+        if let Some(opt) = self.config_options.iter_mut().find(|o| o.id == id) {
+            opt.current_value = value.clone();
+        }
+        if id == "model" {
+            self.settings.preferred_model = Some(value.clone());
+            self.settings.save();
+        }
+        if let Some(session) = self.current_session() {
+            if let Some(acp_session_id) = session.acp_session_id.clone() {
+                self.acp.send(AcpCommand::SetConfigOption {
+                    session_id: acp_session_id,
+                    key: id.to_string(),
+                    value,
+                });
+            }
         }
     }
 
@@ -179,6 +232,9 @@ impl VibedeckApp {
         self.sessions.insert(0, session);
         self.current = Some(0);
         self.mark_file_index_stale();
+        self.usage = UsageStats::default();
+        self.reset_dock();
+        self.view = View::Chat;
     }
 
     pub fn start_backend_session(&mut self) {
@@ -243,10 +299,13 @@ impl VibedeckApp {
             repaint = true;
             self.apply_event(event);
         }
+        if self.dock.poll_git() {
+            repaint = true;
+        }
         if repaint {
             ctx.request_repaint();
         }
-        if self.busy || self.setup_pane.is_working() {
+        if self.busy || self.setup_pane.is_working() || self.dock.git.working() {
             // Keep the UI alive while the agent works / installer streams.
             ctx.request_repaint_after(Duration::from_millis(120));
         }
@@ -259,6 +318,9 @@ impl VibedeckApp {
     }
 
     fn apply_event(&mut self, event: AcpEvent) {
+        if self.usage.apply(&event) {
+            return; // live usage counters updated
+        }
         match event {
             AcpEvent::Initialized { protocol_version } => {
                 self.protocol_version = Some(protocol_version);
@@ -274,13 +336,13 @@ impl VibedeckApp {
             AcpEvent::SessionReady {
                 session_id,
                 modes,
-                models,
+                config_options,
                 title,
             } => {
                 self.status = AcpStatus::Connected;
                 self.busy = false;
                 self.modes = modes;
-                self.models = models;
+                self.config_options = config_options;
                 if let Some(session) = self.current_session_mut() {
                     session.acp_session_id = Some(session_id);
                     if let Some(title) = title {
@@ -293,6 +355,7 @@ impl VibedeckApp {
                     self.send_message(text);
                 }
             }
+            AcpEvent::UsageUpdate { .. } => { /* handled above */ }
             AcpEvent::SessionError { context, message } => {
                 self.busy = false;
                 self.status = AcpStatus::Error;
@@ -398,6 +461,9 @@ impl VibedeckApp {
             AcpEvent::PromptCompleted { .. } => {
                 self.busy = false;
                 self.finalize_open_messages();
+                // The agent may have touched files — refresh the git dock.
+                let cwd = self.current_workdir();
+                self.dock.refresh_status(&cwd);
             }
             AcpEvent::DebugLog(line) => {
                 self.debug_log.push(line);
@@ -433,57 +499,75 @@ impl VibedeckApp {
         let p = self.palette();
         let t = self.tr();
 
-        // -- header (Nexus-style: brand + agent status + theme toggle) ----------
+        // -- frameless window: edge resize -------------------------------
+        crate::frameless::window_edges(ctx);
+
+        // -- header (titlebar: brand + status + window buttons) ---------
         TopBottomPanel::top("header")
             .frame(
                 egui::Frame::default()
-                    .fill(p.bg)
-                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                    .fill(p.surface)
+                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
                     .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.set_min_height(28.0);
                     // brand: pixel flame + name
                     theme::paint_flame(ui, &p, 0.13);
                     ui.add_space(6.0);
-                    ui.heading(egui::RichText::new(t.app_name).strong().color(p.text));
+                    ui.label(
+                        egui::RichText::new(t.app_name)
+                            .size(13.0)
+                            .strong()
+                            .color(p.text),
+                    );
 
                     // status: "● Connected" with tooltip
                     let (status_text, color) = match self.status {
                         AcpStatus::Connected => (t.connected, p.green),
-                        AcpStatus::Connecting => (t.connecting, p.yellow),
+                        AcpStatus::Connecting => (t.connecting, p.accent),
                         AcpStatus::Disconnected => (t.disconnected, p.muted),
                         AcpStatus::Error => (t.error, p.red),
                     };
                     ui.add_space(10.0);
-                    let status_label = ui
-                        .label(
-                            egui::RichText::new(format!("● {status_text}"))
-                                .small()
-                                .color(color),
-                        )
-                        .on_hover_text(if self.acp_error.is_empty() {
-                            status_text.to_string()
-                        } else {
-                            format!("{status_text} — {}", self.acp_error)
-                        });
-                    let _ = status_label;
+                    ui.label(
+                        egui::RichText::new(format!("● {status_text}"))
+                            .size(11.0)
+                            .color(color),
+                    )
+                    .on_hover_text(if self.acp_error.is_empty() {
+                        status_text.to_string()
+                    } else {
+                        format!("{status_text} — {}", self.acp_error)
+                    });
                     if self.busy {
-                        ui.label(egui::RichText::new("⏳").small());
+                        ui.add(egui::Spinner::new().size(14.0));
                     }
 
+                    // right side: dock / theme / about / window buttons
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        crate::frameless::window_buttons(ctx, ui, &p);
+                        ui.separator();
                         if ui
                             .add(
-                                egui::Button::new(
-                                    egui::RichText::new(if self.settings.theme == "light" {
-                                        "🌙"
-                                    } else {
-                                        "☀"
-                                    })
-                                    .small(),
-                                )
-                                .fill(p.panel),
+                                egui::Button::new(egui::RichText::new("ℹ").small())
+                                    .fill(egui::Color32::TRANSPARENT),
+                            )
+                            .on_hover_text(t.about)
+                            .clicked()
+                        {
+                            self.show_about = true;
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new(if self.settings.theme == "light" {
+                                    "🌙"
+                                } else {
+                                    "☀"
+                                })
+                                .small())
+                                .fill(egui::Color32::TRANSPARENT),
                             )
                             .on_hover_text(t.settings_theme)
                             .clicked()
@@ -491,43 +575,84 @@ impl VibedeckApp {
                             let next = if self.settings.theme == "light" { "dark" } else { "light" };
                             self.set_theme(ctx, next);
                         }
-                        if ui
-                            .add(egui::Button::new(egui::RichText::new("ℹ").small()).fill(p.panel))
-                            .on_hover_text(t.about)
-                            .clicked()
-                        {
-                            self.show_about = true;
+                        // workspace dock toggle (chat only)
+                        if self.view == View::Chat {
+                            let dock_glyph = if self.dock.open { "◧" } else { "▤" };
+                            let dock_fill = if self.dock.open {
+                                p.panel_hover
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new(dock_glyph).small())
+                                        .fill(dock_fill),
+                                )
+                                .on_hover_text(t.dock_files)
+                                .clicked()
+                            {
+                                self.dock.open = !self.dock.open;
+                                if self.dock.open && self.dock.tab == crate::dock::DockTab::Git {
+                                    let cwd = self.current_workdir();
+                                    self.dock.refresh_status(&cwd);
+                                }
+                            }
                         }
                         if let Some((msg, at)) = &self.toast {
                             if at.elapsed() < Duration::from_secs(3) {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .small()
-                                        .color(p.green),
-                                );
+                                ui.label(egui::RichText::new(msg).small().color(p.green));
                             }
                         }
                     });
                 });
+
+                // The header content doubles as the titlebar drag region
+                // (Nexus-style frameless window; the right-side buttons stay
+                // clickable because they were allocated earlier and win hits).
+                let mut drag = ui.max_rect();
+                drag.max.x -= 210.0; // window buttons + toggles
+                let resp = ui.interact(drag, Id::new("titlebar-drag"), Sense::drag());
+                if resp.dragged() {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                } else if resp.double_clicked() {
+                    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+                }
             });
 
+        // -- sidebar (always visible; collapsible rail) --------------------
+        if self.settings.sidebar_collapsed {
+            SidePanel::left("sidebar-rail")
+                .exact_width(46.0)
+                .frame(
+                    egui::Frame::default()
+                        .fill(p.surface)
+                        .inner_margin(egui::Margin::same(4.0))
+                        .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+                )
+                .show(ctx, |ui| crate::sessions::show_rail(self, ui));
+        } else {
+            SidePanel::left("sessions")
+                .resizable(true)
+                .default_width(220.0)
+                .width_range(120.0..=400.0)
+                .frame(
+                    egui::Frame::default()
+                        .fill(p.surface)
+                        .inner_margin(egui::Margin::same(8.0))
+                        .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+                )
+                .show(ctx, |ui| crate::sessions::show(self, ui));
+        }
+
+        // -- main column ----------------------------------------------------
         match self.view {
             View::Chat => {
-                SidePanel::left("sessions")
-                    .resizable(true)
-                    .default_width(220.0)
-                    .width_range(120.0..=400.0)
-                    .frame(
-                        egui::Frame::default()
-                            .fill(p.surface)
-                            .inner_margin(egui::Margin::same(8.0))
-                            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
-                    )
-                    .show(ctx, |ui| crate::sessions::show(self, ui));
+                crate::dock::panel(self, ctx);
                 TopBottomPanel::bottom("input")
                     .frame(
                         egui::Frame::default()
-                            .fill(p.bg)
+                            .fill(p.surface)
                             .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                             .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
                     )
@@ -536,20 +661,33 @@ impl VibedeckApp {
                     .frame(egui::Frame::default().fill(p.bg))
                     .show(ctx, |ui| crate::chat::show(self, ui));
             }
-            View::Settings => {
+            View::Settings | View::Stats | View::Setup => {
                 CentralPanel::default()
                     .frame(egui::Frame::default().fill(p.bg))
-                    .show(ctx, |ui| crate::settings::show(self, ui));
-            }
-            View::Stats => {
-                CentralPanel::default()
-                    .frame(egui::Frame::default().fill(p.bg))
-                    .show(ctx, |ui| crate::stats::show(self, ui));
-            }
-            View::Setup => {
-                CentralPanel::default()
-                    .frame(egui::Frame::default().fill(p.bg))
-                    .show(ctx, |ui| crate::setup::show(self, ui));
+                    .show(ctx, |ui| {
+                        // Non-chat views render in the main column, next to
+                        // the sidebar — with an explicit close button.
+                        ui.horizontal(|ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui
+                                    .add(
+                                        egui::Button::new(egui::RichText::new(format!("✕ {}", t.close)).small())
+                                            .fill(p.panel),
+                                    )
+                                    .clicked()
+                                {
+                                    self.view = View::Chat;
+                                }
+                            });
+                        });
+                        ui.separator();
+                        match self.view {
+                            View::Settings => crate::settings::show(self, ui),
+                            View::Stats => crate::stats::show(self, ui),
+                            View::Setup => crate::setup::show(self, ui),
+                            _ => {}
+                        }
+                    });
             }
         }
 
@@ -678,12 +816,14 @@ impl VibedeckApp {
             }
         }
 
-        // In-app folder picker.
+        // In-app folder picker (fixed size so the confirm row never
+        // falls off-screen).
         if self.folder_picker.open {
             let mut open = true;
             Window::new(t.pick_folder)
                 .open(&mut open)
-                .default_size([520.0, 420.0])
+                .fixed_size([520.0, 440.0])
+                .resizable(false)
                 .show(ctx, |ui| crate::picker::show_folder_picker(self, ui));
             self.folder_picker.open = open && self.folder_picker.open;
         }

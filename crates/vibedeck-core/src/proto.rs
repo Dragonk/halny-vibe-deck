@@ -21,6 +21,40 @@ pub struct ModeInfo {
     pub name: String,
 }
 
+/// One selectable value of a session config option
+/// (`session/new` → `configOptions[].options[]`).
+#[derive(Clone, Debug)]
+pub struct ConfigOptionChoice {
+    pub value: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// A session config option advertised by vibe-acp
+/// (model / mode / thinking / …) with its current value and choices.
+#[derive(Clone, Debug)]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    pub current_value: String,
+    pub choices: Vec<ConfigOptionChoice>,
+}
+
+impl ConfigOption {
+    /// Human-readable label of the current value (falls back to the raw value).
+    pub fn current_label(&self) -> String {
+        self.choices
+            .iter()
+            .find(|c| c.value == self.current_value)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| self.current_value.clone())
+    }
+
+    pub fn find(&self, id: &str) -> bool {
+        self.id == id
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AvailableCommand {
     pub name: String,
@@ -40,8 +74,23 @@ pub enum AcpEvent {
     SessionReady {
         session_id: String,
         modes: Vec<ModeInfo>,
-        models: Vec<String>,
+        /// model / mode / thinking / … — the source of truth for the
+        /// toolbar pickers (vibe-acp ≥ 3.0 reports these as
+        /// `configOptions`; older servers fall back to `models`/`modes`).
+        config_options: Vec<ConfigOption>,
         title: Option<String>,
+    },
+    /// Live token usage for a turn (`session/update` → `usage_update`).
+    UsageUpdate {
+        session_id: String,
+        prompt_tokens: f64,
+        completion_tokens: f64,
+        cached_tokens: f64,
+        total_tokens: f64,
+        tokens_per_second: f64,
+        last_turn_duration_ms: f64,
+        context_used: f64,
+        context_size: f64,
     },
     /// A worker operation failed.
     SessionError { context: String, message: String },

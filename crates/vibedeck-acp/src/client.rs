@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
-use vibedeck_core::proto::{AcpCommand, AcpEvent, AcpSessionInfo, ModeInfo};
+use vibedeck_core::proto::{
+    AcpCommand, AcpEvent, AcpSessionInfo, ConfigOption, ConfigOptionChoice, ModeInfo,
+};
 
 pub const CLIENT_INFO_NAME: &str = "VibeDeck";
 
@@ -547,7 +549,7 @@ impl Worker {
         let params = json!({ "cwd": cwd, "mcpServers": [] });
         match client.request("session/new", &params, REQUEST_TIMEOUT) {
             Ok(result) => {
-                let (session_id, modes, models) = parse_new_session(&result);
+                let (session_id, modes, config_options) = parse_new_session(&result);
                 if session_id.is_empty() {
                     self.emit(AcpEvent::SessionError {
                         context: "new_session".into(),
@@ -555,16 +557,9 @@ impl Worker {
                     });
                     return;
                 }
-                // Best effort: fetch a human-readable session name.
-                let title = client
-                    .request(
-                        "session/name",
-                        &json!({ "sessionId": session_id }),
-                        Duration::from_secs(15),
-                    )
-                    .ok()
-                    .and_then(|v| v.get("name").and_then(Value::as_str).map(str::to_string));
-                self.finish_session_ready(session_id, modes, models, title, model);
+                // NOTE: `session/name` was removed — vibe-acp 3.0.2
+                // answers it with -32601 and titles come from the UI anyway.
+                self.finish_session_ready(session_id, modes, config_options, None, model);
             }
             Err(e) => self.emit(AcpEvent::SessionError {
                 context: "new_session".into(),
@@ -589,7 +584,7 @@ impl Worker {
         }
         match outcome {
             Ok(result) => {
-                let (sid, modes, models) = parse_new_session(&result);
+                let (sid, modes, config_options) = parse_new_session(&result);
                 self.finish_session_ready(
                     if sid.is_empty() {
                         session_id.to_string()
@@ -597,7 +592,7 @@ impl Worker {
                         sid
                     },
                     modes,
-                    models,
+                    config_options,
                     None,
                     model,
                 );
@@ -624,7 +619,7 @@ impl Worker {
         let params = json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] });
         match client.request("session/resume", &params, REQUEST_TIMEOUT) {
             Ok(result) => {
-                let (sid, modes, models) = parse_new_session(&result);
+                let (sid, modes, config_options) = parse_new_session(&result);
                 self.finish_session_ready(
                     if sid.is_empty() {
                         session_id.to_string()
@@ -632,7 +627,7 @@ impl Worker {
                         sid
                     },
                     modes,
-                    models,
+                    config_options,
                     None,
                     model,
                 );
@@ -654,33 +649,35 @@ impl Worker {
         &mut self,
         session_id: String,
         modes: Vec<ModeInfo>,
-        models: Vec<String>,
+        config_options: Vec<ConfigOption>,
         title: Option<String>,
         model: Option<String>,
     ) {
-        // Apply the requested model if the server advertises models.
+        // Apply the requested model if the server advertises a model option.
         if let Some(model) = model.clone() {
-            if !models.is_empty() {
-                if let Some(client) = self.client.as_mut() {
-                    let target = if models.contains(&model) {
-                        model
-                    } else {
-                        models[0].clone()
-                    };
-                    let params =
-                        json!({ "sessionId": session_id, "configId": "model", "value": target });
-                    let _ = client.request(
-                        "session/set_config_option",
-                        &params,
-                        Duration::from_secs(20),
-                    );
+            if !model.is_empty() {
+                if let Some(opt) = config_options.iter().find(|o| o.id == "model") {
+                    if opt.choices.iter().any(|c| c.value == model) {
+                        if let Some(client) = self.client.as_mut() {
+                            let params = json!({
+                                "sessionId": session_id,
+                                "configId": "model",
+                                "value": model
+                            });
+                            let _ = client.request(
+                                "session/set_config_option",
+                                &params,
+                                Duration::from_secs(20),
+                            );
+                        }
+                    }
                 }
             }
         }
         self.emit(AcpEvent::SessionReady {
             session_id,
             modes,
-            models,
+            config_options,
             title,
         });
     }
@@ -763,7 +760,10 @@ fn parse_session_list(result: &Value) -> Vec<AcpSessionInfo> {
 }
 
 /// Parse `session/new` / `session/load` / `session/resume` responses.
-fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<String>) {
+/// vibe-acp ≥ 3.0 reports `configOptions` (model / mode / thinking…);
+/// older servers report `models.availableModels` — folded into a
+/// synthesized "model" option so the UI always has one shape to render.
+fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption>) {
     let session_id = result
         .get("sessionId")
         .and_then(Value::as_str)
@@ -794,28 +794,104 @@ fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<String>) {
         })
         .unwrap_or_default();
 
-    // models: { availableModels: [...] } or a bare array of { modelId }
-    let models_value = result
-        .pointer("/models/availableModels")
-        .cloned()
-        .or_else(|| result.get("models").filter(|v| v.is_array()).cloned())
-        .unwrap_or(Value::Array(Vec::new()));
-    let models = models_value
-        .as_array()
+    // configOptions: [{id, name, currentValue, options: [{value, name, description}]}]
+    let mut config_options: Vec<ConfigOption> = result
+        .get("configOptions")
+        .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter_map(|m| {
-                    m.get("modelId")
-                        .or_else(|| m.get("id"))
-                        .or_else(|| m.get("name"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
+                .filter_map(|o| {
+                    let id = o.get("id").and_then(Value::as_str)?.to_string();
+                    let choices = o
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .map(|opts| {
+                            opts.iter()
+                                .filter_map(|c| {
+                                    Some(ConfigOptionChoice {
+                                        value: c.get("value").and_then(Value::as_str)?.to_string(),
+                                        name: c
+                                            .get("name")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        description: c
+                                            .get("description")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("")
+                                            .to_string(),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(ConfigOption {
+                        id,
+                        name: o
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        current_value: o
+                            .get("currentValue")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        choices,
+                    })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    (session_id, modes, models)
+    // Legacy `models` shape → synthesize a "model" config option.
+    if !config_options.iter().any(|o| o.id == "model") {
+        let models_value = result
+            .pointer("/models/availableModels")
+            .cloned()
+            .or_else(|| result.get("models").filter(|v| v.is_array()).cloned())
+            .unwrap_or(Value::Array(Vec::new()));
+        let models: Vec<String> = models_value
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| {
+                        m.get("modelId")
+                            .or_else(|| m.get("id"))
+                            .or_else(|| m.get("name"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !models.is_empty() {
+            let current = result
+                .pointer("/models/currentModel")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            config_options.push(ConfigOption {
+                id: "model".into(),
+                name: "Model".into(),
+                current_value: if current.is_empty() {
+                    models[0].clone()
+                } else {
+                    current
+                },
+                choices: models
+                    .into_iter()
+                    .map(|m| ConfigOptionChoice {
+                        value: m.clone(),
+                        name: m,
+                        description: String::new(),
+                    })
+                    .collect(),
+            });
+        }
+    }
+
+    (session_id, modes, config_options)
 }
 
 #[cfg(test)]
@@ -829,10 +905,62 @@ mod tests {
             "modes": { "availableModes": [ { "id": "ask", "name": "Ask" } ] },
             "models": { "availableModels": [ { "modelId": "mistral-medium-3.5" } ] }
         });
-        let (sid, modes, models) = parse_new_session(&result);
+        let (sid, modes, config_options) = parse_new_session(&result);
         assert_eq!(sid, "abc");
         assert_eq!(modes.len(), 1);
-        assert_eq!(models, vec!["mistral-medium-3.5".to_string()]);
+        let model_opt = config_options.iter().find(|o| o.id == "model").unwrap();
+        assert_eq!(model_opt.current_value, "mistral-medium-3.5");
+        assert_eq!(model_opt.choices.len(), 1);
+    }
+
+    #[test]
+    fn parses_config_options_modern_shape() {
+        // vibe-acp 3.0.2: configOptions with model / mode / thinking.
+        let result = serde_json::json!({
+            "sessionId": "abc",
+            "modes": {
+                "currentModeId": "accept-edits",
+                "availableModes": [ { "id": "accept-edits", "name": "Accept Edits" } ]
+            },
+            "configOptions": [
+                {
+                    "id": "mode",
+                    "name": "Session Mode",
+                    "currentValue": "accept-edits",
+                    "options": [ { "value": "ask", "name": "Ask" } ],
+                    "type": "select",
+                    "category": "mode"
+                },
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "currentValue": "glm-5-3-flash",
+                    "options": [
+                        { "value": "mistral-medium-3.5", "name": "Mistral Medium 3.5" },
+                        { "value": "glm-5-3-flash", "name": "GLM 5.3 Flash" }
+                    ]
+                },
+                {
+                    "id": "thinking",
+                    "name": "Thinking",
+                    "currentValue": "max",
+                    "options": [
+                        { "value": "low", "name": "Low" },
+                        { "value": "high", "name": "High" },
+                        { "value": "max", "name": "Max" }
+                    ]
+                }
+            ]
+        });
+        let (sid, _modes, config_options) = parse_new_session(&result);
+        assert_eq!(sid, "abc");
+        assert_eq!(config_options.len(), 3);
+        let model = config_options.iter().find(|o| o.id == "model").unwrap();
+        assert_eq!(model.current_value, "glm-5-3-flash");
+        assert_eq!(model.current_label(), "GLM 5.3 Flash");
+        assert_eq!(model.choices.len(), 2);
+        let thinking = config_options.iter().find(|o| o.id == "thinking").unwrap();
+        assert_eq!(thinking.choices.len(), 3);
     }
 
     #[test]
@@ -842,9 +970,15 @@ mod tests {
             "modes": [ { "id": "ask", "name": "Ask" } ],
             "models": [ { "modelId": "m1" }, { "modelId": "m2" } ]
         });
-        let (_, modes, models) = parse_new_session(&result);
+        let (_, modes, options) = parse_new_session(&result);
         assert_eq!(modes.len(), 1);
-        assert_eq!(models.len(), 2);
+        // legacy bare `models` array becomes a synthetic "model" option
+        let model_opt = options
+            .iter()
+            .find(|o| o.id == "model")
+            .expect("synthetic model option");
+        assert_eq!(model_opt.choices.len(), 2);
+        assert_eq!(model_opt.choices[0].name, "m1");
     }
 
     #[test]

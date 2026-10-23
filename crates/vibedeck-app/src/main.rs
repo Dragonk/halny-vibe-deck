@@ -10,6 +10,8 @@
 mod about;
 mod app;
 mod chat;
+mod dock;
+mod frameless;
 mod i18n;
 mod input;
 mod md;
@@ -44,6 +46,9 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([860.0, 600.0])
             .with_title("VibeDeck — GUI for Mistral Vibe CLI (unofficial)")
+            // Frameless window like the Nexus original: the app header is
+            // the titlebar (drag / ─ □ ✕, see app/frameless.rs).
+            .with_decorations(false)
             .with_icon(icon_data().unwrap_or_default()),
         renderer: Renderer::Wgpu, // GPU-first rendering, like the ArtCraft apps
         ..Default::default()

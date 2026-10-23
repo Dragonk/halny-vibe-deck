@@ -9,7 +9,7 @@ pub mod config;
 pub mod files;
 pub mod stats;
 
-pub use config::{McpServer, ModelConfig, Provider, VibeConfigFile};
+pub use config::{estimate_cost, model_prices, McpServer, ModelConfig, ModelPrice, Provider, VibeConfigFile};
 pub use files::{AgentFile, PromptFile, SkillFile};
 pub use stats::{AggregateStats, VibeMessage, VibeSession, VibeSessionStats};
 

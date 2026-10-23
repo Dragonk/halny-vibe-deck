@@ -154,6 +154,22 @@ pub struct Str {
     pub projects: &'static str,
     pub add_project: &'static str,
     pub cli_history: &'static str,
+    // dock / workspace panel
+    pub collapse: &'static str,
+    pub expand: &'static str,
+    pub dock_files: &'static str,
+    pub dock_git: &'static str,
+    pub git_no_changes: &'static str,
+    pub git_files: &'static str,
+    pub git_no_diff: &'static str,
+    pub preview_lines: &'static str,
+    // live usage / stats extras
+    pub live_usage: &'static str,
+    pub cache_tokens: &'static str,
+    pub cache_hit_rate: &'static str,
+    pub tok_per_sec: &'static str,
+    pub context_used: &'static str,
+    pub cost_estimate: &'static str,
 }
 
 pub const EN: Str = Str {
@@ -278,6 +294,20 @@ pub const EN: Str = Str {
     projects: "Projects",
     add_project: "Add project",
     cli_history: "CLI history",
+    collapse: "Collapse sidebar",
+    expand: "Expand sidebar",
+    dock_files: "Files",
+    dock_git: "Git",
+    git_no_changes: "Working tree clean (or not a git repository)",
+    git_files: "changed",
+    git_no_diff: "No unstaged diff for this file.",
+    preview_lines: "lines",
+    live_usage: "Live usage (current session)",
+    cache_tokens: "Cached tokens",
+    cache_hit_rate: "Cache hit rate",
+    tok_per_sec: "tokens/s",
+    context_used: "Context used",
+    cost_estimate: "Cost estimate",
 };
 
 pub const PL: Str = Str {
@@ -402,6 +432,20 @@ pub const PL: Str = Str {
     projects: "Projekty",
     add_project: "Dodaj projekt",
     cli_history: "Historia z CLI",
+    collapse: "Zwiń panel boczny",
+    expand: "Rozwiń panel boczny",
+    dock_files: "Pliki",
+    dock_git: "Git",
+    git_no_changes: "Drzewo robocze czyste (lub to nie repozytorium gita)",
+    git_files: "zmienionych",
+    git_no_diff: "Brak niezatwierdzonego diffu dla tego pliku.",
+    preview_lines: "linii",
+    live_usage: "Na żywo (bieżąca sesja)",
+    cache_tokens: "Tokeny z cache",
+    cache_hit_rate: "Skuteczność cache",
+    tok_per_sec: "tokenów/s",
+    context_used: "Wykorzystany kontekst",
+    cost_estimate: "Szacowany koszt",
 };
 
 pub fn t(lang: Lang) -> &'static Str {

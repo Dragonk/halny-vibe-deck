@@ -18,6 +18,8 @@ pub struct AppSettings {
     pub last_session_id: Option<String>,
     pub preferred_model: Option<String>,
     pub sidebar_sessions_limit: Option<usize>,
+    /// Sidebar collapsed to the icon rail (Nexus-like toggle).
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for AppSettings {
@@ -31,6 +33,7 @@ impl Default for AppSettings {
             last_session_id: None,
             preferred_model: None,
             sidebar_sessions_limit: Some(30),
+            sidebar_collapsed: false,
         }
     }
 }
@@ -131,4 +134,59 @@ pub struct MentionState {
 pub enum MentionKind {
     File,
     Command,
+}
+
+/// Live usage counters for the active session, fed by `usage_update`
+/// notifications (prompt / completion / cached tokens, tok/s, context).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UsageStats {
+    pub prompt_tokens: f64,
+    pub completion_tokens: f64,
+    pub cached_tokens: f64,
+    pub total_tokens: f64,
+    pub tokens_per_second: f64,
+    pub last_turn_duration_ms: f64,
+    pub context_used: f64,
+    pub context_size: f64,
+    /// Number of `usage_update` notifications seen (for "live" badge).
+    pub updates: u32,
+}
+
+impl UsageStats {
+    /// Cache hit rate: cached tokens / prompt tokens (0 when unknown).
+    pub fn cache_hit_rate(&self) -> f64 {
+        if self.prompt_tokens > 0.0 {
+            (self.cached_tokens / self.prompt_tokens).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub fn apply(&mut self, u: &vibedeck_core::proto::AcpEvent) -> bool {
+        if let vibedeck_core::proto::AcpEvent::UsageUpdate {
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            total_tokens,
+            tokens_per_second,
+            last_turn_duration_ms,
+            context_used,
+            context_size,
+            ..
+        } = u
+        {
+            self.prompt_tokens = *prompt_tokens;
+            self.completion_tokens = *completion_tokens;
+            self.cached_tokens = *cached_tokens;
+            self.total_tokens = *total_tokens;
+            self.tokens_per_second = *tokens_per_second;
+            self.last_turn_duration_ms = *last_turn_duration_ms;
+            self.context_used = *context_used;
+            self.context_size = *context_size;
+            self.updates = self.updates.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
 }

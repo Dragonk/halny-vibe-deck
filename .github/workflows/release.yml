@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.4.0
+  VERSION: 0.5.0
 
 jobs:
   build:
@@ -80,8 +80,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.4.0-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.4.0-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.5.0-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.5.0-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -103,19 +103,27 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.4.0-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.5.0-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
-            ## What's new in v0.4.0
+            ## What's new in v0.5.0
 
-            - 🎨 **1:1 Nexus look** — the original Mistral Vibe Nexus palette, header,
-              sidebar, message bubbles and the pixel-flame empty state.
-            - 📂 **Projects** — recent folders list, add/switch project from the sidebar.
-            - 🕘 **Session history** — CLI sessions (name · date · folder) with resume.
-            - 🚀 **Fast startup** — dependency probe & file indexing moved off the startup path.
-            - 🖼 **App icon** — the original window/taskbar icon on Linux and Windows.
-            - 🚫 **No stray console window** on Windows anymore.
+            - 🪟 **Frameless window** — no native titlebar (like Photocraft): custom
+              Nexus header with ─ □ ✕ buttons, drag-to-move, double-click to maximize,
+              edge/corner resize.
+            - 🎛 **Model / mode / thinking pickers** — real choices from the ACP agent
+              (`configOptions`), current selection always visible, switchable mid-session.
+            - 🗂 **Workspace dock (Claude-Cowork style)** — right-hand panel with a lazy
+              file tree, file preview, Git status & per-file diff, auto-refreshed after
+              each turn.
+            - 📊 **Cache stats** — cached-token cost and **cache hit rate** in live usage
+              and in Statistics.
+            - 🔲 **Sidebar done right** — always-present, collapsible to an icon rail;
+              Config / Statistics / Settings open beside the sidebar (closeable ✕),
+              no longer full-screen.
+            - 📂 **Folder picker fixed** — fixed-size dialog with always-visible ✔/✕.
+            - 🧹 Session & project switching repairs, minor UX polish.
 
             On first launch open **Setup** to verify the CLI, then start chatting — the first
             message triggers the Mistral login flow in the terminal-less session.

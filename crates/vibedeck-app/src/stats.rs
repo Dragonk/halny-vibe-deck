@@ -48,11 +48,87 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     let t = app.tr();
     app.stats_pane.ensure_loaded();
 
+    // -- live usage of the current session (usage_update events) ------------
+    let usage = &app.usage;
+    if usage.updates > 0 {
+        let p = app.palette();
+        egui::Frame::default()
+            .fill(p.panel)
+            .rounding(6.0)
+            .inner_margin(egui::Margin::same(10.0))
+            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("⚡ {}", t.live_usage))
+                        .small()
+                        .strong()
+                        .color(p.session_active_text),
+                );
+                ui.add_space(4.0);
+                let model = app
+                    .option_value("model")
+                    .map(|o| o.current_value.clone())
+                    .unwrap_or_default();
+                let prices = vibedeck_vibe::model_prices();
+                let cost = vibedeck_vibe::estimate_cost(
+                    &prices,
+                    &model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.cached_tokens,
+                );
+                egui::Grid::new("stats-live")
+                    .num_columns(4)
+                    .spacing([16.0, 4.0])
+                    .show(ui, |ui| {
+                        stat_cell(ui, t.stats_prompt_tokens, &fmt_count(usage.prompt_tokens));
+                        stat_cell(
+                            ui,
+                            t.stats_completion_tokens,
+                            &fmt_count(usage.completion_tokens),
+                        );
+                        stat_cell(ui, t.cache_tokens, &fmt_count(usage.cached_tokens));
+                        stat_cell(
+                            ui,
+                            t.cache_hit_rate,
+                            &format!("{:.1}%", usage.cache_hit_rate() * 100.0),
+                        );
+                        stat_cell(
+                            ui,
+                            t.tok_per_sec,
+                            &format!("{:.1}", usage.tokens_per_second),
+                        );
+                        stat_cell(
+                            ui,
+                            t.context_used,
+                            &if usage.context_size > 0.0 {
+                                format!(
+                                    "{:.0}k / {:.0}k",
+                                    usage.context_used / 1000.0,
+                                    usage.context_size / 1000.0
+                                )
+                            } else {
+                                "—".into()
+                            },
+                        );
+                        stat_cell(ui, t.cost_estimate, &fmt_cost(cost));
+                        stat_cell(
+                            ui,
+                            t.stats_model,
+                            &if model.is_empty() { "—".to_string() } else { model },
+                        );
+                    });
+            });
+        ui.add_space(10.0);
+    }
+
     ui.heading(egui::RichText::new(t.view_stats).strong());
     ui.add_space(6.0);
 
     // Totals
     let totals = aggregate(&app.stats_pane.sessions);
+    let cached_total: f64 = app.stats_pane.sessions.iter().map(|s| s.stats.cached_tokens).sum();
+    let prompt_total: f64 = totals.prompt_tokens;
     egui::Grid::new("stats-totals")
         .num_columns(2)
         .spacing([20.0, 6.0])
@@ -65,6 +141,16 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                 &fmt_count(totals.completion_tokens),
             );
             stat_row(ui, t.stats_llm_tokens, &fmt_count(totals.total_llm_tokens));
+            stat_row(ui, t.cache_tokens, &fmt_count(cached_total));
+            stat_row(
+                ui,
+                t.cache_hit_rate,
+                &if prompt_total > 0.0 {
+                    format!("{:.1}%", (cached_total / prompt_total * 100.0).clamp(0.0, 100.0))
+                } else {
+                    "—".into()
+                },
+            );
             stat_row(ui, t.stats_cost, &fmt_cost(totals.cost));
             stat_row(
                 ui,
@@ -260,6 +346,12 @@ fn stat_row(ui: &mut Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(label).weak());
     ui.label(egui::RichText::new(value).strong().monospace());
     ui.end_row();
+}
+
+/// Compact label:value pair (no end_row) for the live-usage grid.
+fn stat_cell(ui: &mut Ui, label: &str, value: &str) {
+    ui.label(egui::RichText::new(label).size(11.0).weak());
+    ui.label(egui::RichText::new(value).size(11.0).strong().monospace());
 }
 
 fn header_row(ui: &mut Ui, labels: &[&str]) {

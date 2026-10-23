@@ -1,8 +1,11 @@
 //! The chat view, 1:1 with the Nexus ChatView:
 //! - empty state: pixel-art flame + "New chat" / "Start a conversation"
 //!   + agent status subtitle,
-//! - message bubbles: user right (#2c1c17) / AI left (#1d1d21), 6px radius,
-//! - thinking blocks & tool calls inside the AI bubble.
+//! - **user messages**: right-aligned bubble, panel background, radius
+//!   18/18/4/18, padding 10×18,
+//! - **AI messages**: no bubble — a 28×28 accent avatar with the white
+//!   pixel flame + plain 14px text on the app background (this is what
+//!   the original CSS does), with thinking blocks & tool calls inline.
 
 use eframe::egui::{self, ScrollArea, Ui};
 use vibedeck_core::types::{FileAction, Message, MessageSender, ToolCall, ToolStatus};
@@ -29,13 +32,19 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     let Some(idx) = app.current else { return };
     // Move session data into the closure without borrowing `app`.
     let messages: Vec<Message> = app.sessions[idx].messages.clone();
+    let busy = app.busy;
     ScrollArea::vertical()
         .auto_shrink(false)
         .stick_to_bottom(true)
+        .id_salt("chat-scroll")
         .show(ui, |ui| {
             ui.add_space(10.0);
             for msg in &messages {
-                message_bubble(ui, msg, t.tool_output, t.thinking, &p);
+                match msg.sender {
+                    MessageSender::User => user_bubble(ui, msg, &p),
+                    MessageSender::Ai => ai_row(ui, msg, busy, t.tool_output, t.thinking, &p),
+                    MessageSender::System => system_line(ui, msg, &p),
+                }
                 ui.add_space(8.0);
             }
             ui.add_space(6.0);
@@ -60,7 +69,7 @@ fn empty_state(app: &mut VibedeckApp, ui: &mut Ui, has_session: bool) {
         };
         ui.label(
             egui::RichText::new(title)
-                .size(22.0)
+                .size(20.0)
                 .strong()
                 .color(p.text),
         );
@@ -73,7 +82,7 @@ fn empty_state(app: &mut VibedeckApp, ui: &mut Ui, has_session: bool) {
             AcpStatus::Error => t.agent_connection_error,
             AcpStatus::Disconnected => t.configure_acp,
         };
-        ui.label(egui::RichText::new(subtitle).color(p.muted));
+        ui.label(egui::RichText::new(subtitle).size(14.0).color(p.muted));
 
         if app.status == AcpStatus::Error && !app.acp_error.is_empty() {
             ui.add_space(8.0);
@@ -111,77 +120,109 @@ fn empty_state(app: &mut VibedeckApp, ui: &mut Ui, has_session: bool) {
     });
 }
 
-fn message_bubble(
+/// User message: right-aligned bubble (panel bg, radius 18/18/4/18).
+fn user_bubble(ui: &mut Ui, msg: &Message, p: &theme::Palette) {
+    let avail = ui.available_width();
+    let max_w = (avail * 0.75).max(120.0);
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+        egui::Frame::default()
+            .inner_margin(egui::Margin::symmetric(18.0, 10.0))
+            .rounding(egui::Rounding {
+                nw: 18.0,
+                ne: 18.0,
+                sw: 4.0,
+                se: 18.0,
+            })
+            .fill(p.panel)
+            .show(ui, |ui| {
+                ui.set_max_width(max_w - 24.0);
+                if !msg.attachments.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        for att in &msg.attachments {
+                            ui.label(
+                                egui::RichText::new(format!("📎 {}", att.path))
+                                    .monospace()
+                                    .small()
+                                    .color(p.accent),
+                            );
+                        }
+                    });
+                }
+                ui.label(egui::RichText::new(&msg.content).color(p.text));
+            });
+    });
+}
+
+/// AI message: 28×28 accent avatar with the white flame + plain text —
+/// no bubble, exactly like `.msg-ai` in the Nexus stylesheet.
+fn ai_row(
     ui: &mut Ui,
     msg: &Message,
+    busy: bool,
     output_label: &str,
     thinking_label: &str,
     p: &theme::Palette,
 ) {
-    let is_user = msg.sender == MessageSender::User;
+    egui::Frame::default()
+        .inner_margin(egui::Margin::symmetric(12.0, 0.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // avatar
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                let painter = ui.painter_at(rect);
+                painter.rect_filled(rect, egui::Rounding::same(6.0), p.accent);
+                theme::paint_flame_mono_at(&painter, rect, egui::Color32::WHITE);
+                if busy && !msg.is_complete {
+                    let anchor = rect.right_bottom() + egui::vec2(-7.0, -7.0);
+                    egui::Spinner::new()
+                        .size(14.0)
+                        .paint_at(ui, egui::Rect::from_min_size(anchor, egui::vec2(14.0, 14.0)));
+                }
+                let _ = response;
+                ui.add_space(12.0);
 
-    // Bubble: user right / AI left, max ~75% width (Nexus style).
-    let avail = ui.available_width();
-    let max_w = (avail * 0.75).max(120.0);
-    let frame = egui::Frame::default()
-        .inner_margin(egui::Margin::same(10.0))
-        .rounding(6.0)
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            if is_user { p.border_subtle } else { p.border_subtle },
-        ))
-        .fill(if is_user { p.user_msg } else { p.ai_msg });
-
-    let layout = if is_user {
-        egui::Layout::right_to_left(egui::Align::Min)
-    } else {
-        egui::Layout::left_to_right(egui::Align::Min)
-    };
-    ui.with_layout(layout, |ui| {
-        frame.show(ui, |ui| {
-            ui.set_max_width(max_w - 12.0);
-            // attachments (@files)
-            if !msg.attachments.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    for att in &msg.attachments {
-                        ui.label(
-                            egui::RichText::new(format!("📎 {}", att.path))
-                                .monospace()
-                                .small()
-                                .color(p.accent),
+                // content column
+                ui.vertical(|ui| {
+                    let max_w = (ui.available_width() * 0.95).max(120.0);
+                    ui.set_max_width(max_w);
+                    // thinking blocks
+                    for block in &msg.thinking {
+                        ui.collapsing(
+                            egui::RichText::new(format!(
+                                "🧠 {thinking_label}{}",
+                                if block.is_complete { "" } else { "…" }
+                            ))
+                            .small()
+                            .color(p.muted),
+                            |ui| {
+                                ui.style_mut().override_text_style = Some(egui::TextStyle::Small);
+                                ui.label(&block.content);
+                            },
                         );
                     }
+                    // tool calls
+                    for tc in &msg.tool_calls {
+                        tool_call(ui, tc, output_label, p);
+                    }
+                    // message body — plain markdown text, no bubble
+                    crate::md::markdown(ui, &msg.content);
+                    if !msg.is_complete && msg.content.is_empty() && msg.tool_calls.is_empty() {
+                        ui.label(egui::RichText::new("…").color(p.muted));
+                    }
                 });
-            }
-            // thinking blocks
-            for block in &msg.thinking {
-                ui.collapsing(
-                    egui::RichText::new(format!(
-                        "🧠 {thinking_label}{}",
-                        if block.is_complete { "" } else { "…" }
-                    ))
-                    .small()
-                    .color(p.muted),
-                    |ui| {
-                        ui.style_mut().override_text_style = Some(egui::TextStyle::Small);
-                        ui.label(&block.content);
-                    },
-                );
-            }
-            // tool calls
-            for tc in &msg.tool_calls {
-                tool_call(ui, tc, output_label, p);
-            }
-            // message body
-            if is_user {
-                ui.label(egui::RichText::new(&msg.content).strong().color(p.text));
-            } else {
-                crate::md::markdown(ui, &msg.content);
-                if !msg.is_complete && msg.content.is_empty() && msg.tool_calls.is_empty() {
-                    ui.label(egui::RichText::new("…").color(p.muted));
-                }
-            }
+            });
         });
+}
+
+fn system_line(ui: &mut Ui, msg: &Message, p: &theme::Palette) {
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new(&msg.content)
+                .small()
+                .weak()
+                .color(p.muted),
+        );
     });
 }
 

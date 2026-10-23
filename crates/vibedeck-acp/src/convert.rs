@@ -70,6 +70,24 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
         });
     }
 
+    // --- live usage (vibe-acp ≥ 3.0: `usage_update`) -----------------------
+    if session_update == Some("usage_update") {
+        let meta = update.get("_meta");
+        let f = |v: Option<&Value>| v.and_then(Value::as_f64).unwrap_or(0.0);
+        let (used, size) = (f(update.get("used")), f(update.get("size")));
+        events.push(AcpEvent::UsageUpdate {
+            session_id: session_id.clone(),
+            prompt_tokens: f(meta.and_then(|m| m.get("promptTokens"))),
+            completion_tokens: f(meta.and_then(|m| m.get("completionTokens"))),
+            cached_tokens: f(meta.and_then(|m| m.get("cachedTokens"))),
+            total_tokens: f(meta.and_then(|m| m.get("totalTokens"))),
+            tokens_per_second: f(meta.and_then(|m| m.get("tokensPerSecond"))),
+            last_turn_duration_ms: f(meta.and_then(|m| m.get("lastTurnDuration"))),
+            context_used: used,
+            context_size: size,
+        });
+    }
+
     // --- tool calls (modern shape) ----------------------------------------
     if session_update == Some("tool_call") || type_tag == Some("tool_call") {
         if let Some(ev) = tool_call_started(&session_id, update) {
@@ -386,6 +404,36 @@ mod tests {
         assert!(
             matches!(convert_update(&params).as_slice(), [AcpEvent::MessageChunk { text, .. }] if text == "Old shape")
         );
+    }
+
+    #[test]
+    fn usage_update_event() {
+        let params = serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "usage_update",
+                "used": 8000,
+                "size": 800000,
+                "_meta": {
+                    "steps": 2,
+                    "promptTokens": 1000,
+                    "completionTokens": 500,
+                    "cachedTokens": 600,
+                    "totalTokens": 1500,
+                    "tokensPerSecond": 42.5,
+                    "lastTurnDuration": 3.2
+                }
+            }
+        });
+        let events = convert_update(&params);
+        match events.as_slice() {
+            [AcpEvent::UsageUpdate { prompt_tokens, cached_tokens, context_size, .. }] => {
+                assert_eq!(*prompt_tokens, 1000.0);
+                assert_eq!(*cached_tokens, 600.0);
+                assert_eq!(*context_size, 800000.0);
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
     }
 
     #[test]

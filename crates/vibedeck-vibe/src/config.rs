@@ -12,6 +12,75 @@ use toml::{Table, Value};
 
 use crate::vibe_home;
 
+/// Per-million-token prices of a `[[models]]` entry (USD / Mtok),
+/// used for the live cost estimate in the Statistics view.
+#[derive(Clone, Debug, Default)]
+pub struct ModelPrice {
+    pub name: String,
+    /// matches by `name` or `alias`
+    pub alias: Option<String>,
+    pub input_price: f64,
+    pub output_price: f64,
+    pub cached_input_price: f64,
+}
+
+/// Read the `[[models]]` price table from `~/.vibe/config.toml`.
+/// Returns an empty list when the file is missing or has no prices.
+pub fn model_prices() -> Vec<ModelPrice> {
+    let path: PathBuf = vibe_home().join("config.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(value) = content.parse::<Value>() else {
+        return Vec::new();
+    };
+    let Some(models) = value.get("models").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    models
+        .iter()
+        .filter_map(|m| {
+            let name = m.get("name").and_then(Value::as_str)?.to_string();
+            let f = |k: &str| {
+                m.get(k)
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
+                    .unwrap_or(0.0)
+            };
+            Some(ModelPrice {
+                alias: m
+                    .get("alias")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                name,
+                input_price: f("input_price"),
+                output_price: f("output_price"),
+                cached_input_price: f("cached_input_price"),
+            })
+        })
+        .collect()
+}
+
+/// Estimate the turn cost from token counts and the price table
+/// (USD, per-million-token pricing as written by the CLI).
+pub fn estimate_cost(
+    prices: &[ModelPrice],
+    model: &str,
+    prompt_tokens: f64,
+    completion_tokens: f64,
+    cached_tokens: f64,
+) -> f64 {
+    let price = prices
+        .iter()
+        .find(|p| p.name == model || p.alias.as_deref() == Some(model));
+    let Some(price) = price else {
+        return 0.0;
+    };
+    (prompt_tokens * price.input_price
+        + completion_tokens * price.output_price
+        + cached_tokens * price.cached_input_price)
+        / 1_000_000.0
+}
+
 /// A provider preset (`[[providers]]`).
 #[derive(Clone, Debug, Default)]
 pub struct Provider {

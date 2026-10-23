@@ -26,6 +26,7 @@ pub struct Palette {
     #[allow(dead_code)]
     pub accent_hover: Color32,
     pub user_msg: Color32,
+    #[allow(dead_code)]
     pub ai_msg: Color32,
     pub input_bg: Color32,
     pub session_active_bg: Color32,
@@ -194,7 +195,40 @@ pub fn paint_flame(ui: &mut egui::Ui, p: &Palette, scale: f32) -> egui::Response
     let size = flame_size(scale);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let rects: [(Color32, f32, f32, f32, f32); 10] = [
+    let origin = rect.left_top();
+    for (color, x, y, w, h) in flame_rects(p) {
+        let px = egui::Rect::from_min_size(
+            origin + egui::vec2(x * scale, y * scale),
+            egui::vec2(w * scale, h * scale),
+        );
+        painter.rect_filled(px, 0.0, color);
+    }
+    response
+}
+
+/// Paint a single-color (mono) pixel flame inside `rect` — the AI avatar
+/// glyph in the Nexus chat view (white flame on the accent background).
+pub fn paint_flame_mono_at(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    // viewBox 212.121×151.515 — keep the aspect, center vertically.
+    let scale = (rect.width() / 212.121).min(rect.height() / 151.515);
+    let fw = 212.121 * scale;
+    let fh = 151.515 * scale;
+    let origin = egui::pos2(
+        rect.left() + (rect.width() - fw) / 2.0,
+        rect.top() + (rect.height() - fh) / 2.0,
+    );
+    for (_, x, y, w, h) in flame_rects_mono() {
+        let px = egui::Rect::from_min_size(
+            origin + egui::vec2(x * scale, y * scale),
+            egui::vec2(w * scale, h * scale),
+        );
+        painter.rect_filled(px, 0.0, color);
+    }
+}
+
+/// The 10 pixel-flame rects (ChatView.tsx SVG), with palette colors.
+fn flame_rects(p: &Palette) -> [(Color32, f32, f32, f32, f32); 10] {
+    [
         (p.flame_yellowbright, 30.303, 0.0, 30.303, 30.303),
         (p.flame_yellowbright, 151.515, 0.0, 30.303, 30.303),
         (p.flame_yellow, 30.303, 30.303, 60.606, 30.303),
@@ -205,14 +239,21 @@ pub fn paint_flame(ui: &mut egui::Ui, p: &Palette, scale: f32) -> egui::Response
         (p.flame_orange, 151.515, 90.909, 30.303, 30.303),
         (p.flame_red, 0.0, 121.212, 90.909, 30.303),
         (p.flame_red, 121.212, 121.212, 90.909, 30.303),
-    ];
-    let origin = rect.left_top();
-    for (color, x, y, w, h) in rects {
-        let px = egui::Rect::from_min_size(
-            origin + egui::vec2(x * scale, y * scale),
-            egui::vec2(w * scale, h * scale),
-        );
-        painter.rect_filled(px, 0.0, color);
-    }
-    response
+    ]
+}
+
+/// The same rects, color stripped (positions only).
+fn flame_rects_mono() -> [(Color32, f32, f32, f32, f32); 10] {
+    [
+        (Color32::PLACEHOLDER, 30.303, 0.0, 30.303, 30.303),
+        (Color32::PLACEHOLDER, 151.515, 0.0, 30.303, 30.303),
+        (Color32::PLACEHOLDER, 30.303, 30.303, 60.606, 30.303),
+        (Color32::PLACEHOLDER, 121.212, 30.303, 60.606, 30.303),
+        (Color32::PLACEHOLDER, 30.303, 60.606, 151.515, 30.303),
+        (Color32::PLACEHOLDER, 30.303, 90.909, 30.303, 30.303),
+        (Color32::PLACEHOLDER, 90.909, 90.909, 30.303, 30.303),
+        (Color32::PLACEHOLDER, 151.515, 90.909, 30.303, 30.303),
+        (Color32::PLACEHOLDER, 0.0, 121.212, 90.909, 30.303),
+        (Color32::PLACEHOLDER, 121.212, 121.212, 90.909, 30.303),
+    ]
 }

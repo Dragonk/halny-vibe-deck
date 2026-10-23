@@ -24,6 +24,9 @@ pub struct VibeSessionStats {
     pub steps: f64,
     #[serde(default)]
     pub session_prompt_tokens: f64,
+    /// Cached (reused) prompt tokens reported by the CLI, when present.
+    #[serde(default, alias = "session_cached_tokens", alias = "cached_input_tokens")]
+    pub cached_tokens: f64,
     #[serde(default)]
     pub session_completion_tokens: f64,
     #[serde(default)]
@@ -113,28 +116,60 @@ pub struct VibeSubagentSession {
 }
 
 /// All sessions, newest first.
+///
+/// Two on-disk layouts are supported:
+/// - classic: `logs/session/<id>/meta.json` (stats included),
+/// - vibe-acp ≥ 3.0: `logs/session/unified/<id>/meta.json`
+///   (no `stats` block — token/cost metrics come from the live
+///   `usage_update` ACP notifications instead).
 pub fn load_sessions() -> Vec<VibeSession> {
     let dir = sessions_log_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    let mut sessions: Vec<VibeSession> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let meta = entry.path().join("meta.json");
-            let raw = std::fs::read_to_string(&meta).ok()?;
-            let mut session: VibeSession = serde_json::from_str(&raw).ok()?;
-            if session.session_id.is_empty() {
-                session.session_id = entry.file_name().to_str().unwrap_or_default().to_string();
+    let mut sessions: Vec<VibeSession> = Vec::new();
+    // classic layout
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || entry.file_name().to_str() == Some("unified") {
+                continue;
             }
-            if session.session_id.is_empty() || session.start_time.is_empty() {
-                return None;
+            if let Some(s) = load_meta(&path.join("meta.json")) {
+                sessions.push(s);
             }
-            Some(session)
-        })
-        .collect();
+        }
+    }
+    // unified layout (newer CLI)
+    let unified = dir.join("unified");
+    if let Ok(entries) = std::fs::read_dir(&unified) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Some(s) = load_meta(&path.join("meta.json")) {
+                sessions.push(s);
+            }
+        }
+    }
     sessions.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+    sessions.dedup_by(|a, b| a.session_id == b.session_id && a.start_time == b.start_time);
     sessions
+}
+
+/// Parse one `meta.json`; falls back to the folder name for the id.
+fn load_meta(meta: &Path) -> Option<VibeSession> {
+    let raw = std::fs::read_to_string(meta).ok()?;
+    let mut session: VibeSession = serde_json::from_str(&raw).ok()?;
+    if session.session_id.is_empty() {
+        session.session_id = meta
+            .parent()?
+            .file_name()?
+            .to_str()?
+            .to_string();
+    }
+    if session.session_id.is_empty() || session.start_time.is_empty() {
+        return None;
+    }
+    Some(session)
 }
 
 /// Locate the on-disk folder of a session by id (folder name or meta.json).

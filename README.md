@@ -26,8 +26,10 @@ instant startup and a tiny memory footprint, in the spirit of the
 ## Features
 
 - **1:1 Nexus look** — the original Mistral Vibe Nexus palette (dark & light),
-  header with agent status, sessions/projects sidebar, message bubbles and the
-  pixel-flame empty state.
+  frameless window with a custom titlebar (drag / ─ □ ✕, edge resize), header
+  with agent status, a permanent collapsible sidebar (icon rail when collapsed),
+  AI messages with the accent flame avatar and user bubbles with the original
+  rounding, and the pixel-flame empty state.
 - **Projects** — recent folders list in the sidebar; add or switch the working
   directory of a session in one click.
 - **Session history** — sessions recorded by the CLI (`session/list`) with
@@ -35,11 +37,19 @@ instant startup and a tiny memory footprint, in the spirit of the
 - **Fast startup** — dependency probing and file indexing happen lazily, never
   blocking the first frame. The original window icon is embedded (Linux &
   Windows), and no stray console window opens on Windows.
+- **Model / mode / thinking pickers** — the toolbar reads live
+  `configOptions` from vibe-acp ≥ 3.0 (`session/new`): switch the model,
+  session mode (ask / accept-edits / …) and thinking level (low / high / max)
+  per session — plus a working-directory chip and `@file` / `/command`
+  autocomplete in the input bar.
+- **Workspace dock** — a right panel with a lazy project file tree with text
+  previews and a Git tab (branch, changed files, per-file diffs), refreshed
+  after every completed turn (in the spirit of Claude Cowork).
 - **Full ACP protocol** — JSON-RPC 2.0 over stdio to `vibe-acp` on a worker
   thread: `initialize`, `session/new | load | prompt | cancel`,
-  `session/set_config_option` (model/mode switching), streaming
+  `session/set_config_option` (model/mode/thinking), streaming
   `agent_message_chunk` / `agent_thought_chunk` / `tool_call` updates,
-  tool-approval and agent-question modals.
+  `usage_update` live token counters, tool-approval and agent-question modals.
 - **Latest CLI config** — a round-trip-safe editor for `~/.vibe/config.toml`:
   `active_model`, `default_agent`, `theme`, `[[providers]]`, `[[models]]`,
   `[[mcp_servers]]` (http / streamable-http / stdio, auth headers, timeouts),
@@ -51,7 +61,10 @@ instant startup and a tiny memory footprint, in the spirit of the
 - **Agents, prompts, skills** — manage `~/.vibe/agents/*.toml` (incl.
   subagents), `~/.vibe/prompts/*.md` and inspect discovered skills.
 - **Stats dashboard** — totals and per-session cost/token/tool-call usage from
-  `~/.vibe/logs/session/`, with message drill-down and subagent sessions.
+  `~/.vibe/logs/session/` (including the new `unified/` layout), with message
+  drill-down, subagent sessions, **cached-token cost and cache hit rate**, and
+  a live usage panel for the current session (tokens, tok/s, context, cost
+  estimate from the CLI price table).
 - **Setup pane** — detects/installs the CLI chain
   (`uv tool install mistral-vibe`) with one click.
 - **i18n** — English and Polski, runtime switchable.

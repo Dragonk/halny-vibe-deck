@@ -83,8 +83,13 @@ pub fn search_files(index: &[(String, bool)], query: &str, limit: usize) -> Vec<
 }
 
 /// In-app modal folder picker: breadcrumb navigation + list.
+/// The scroll area is height-bounded and the confirm/cancel row sits
+/// *below* it, so the buttons are always reachable regardless of how
+/// many entries the current directory has.
 pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
     let t = app.tr();
+    let p = app.palette();
+
     ui.horizontal(|ui| {
         if ui.button(format!("⬆ {}", t.parent_dir)).clicked() {
             if let Some(parent) = app.folder_picker.dir.parent().map(Path::to_path_buf) {
@@ -96,12 +101,27 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
                 app.folder_picker.dir = home;
             }
         }
-        ui.label(
-            egui::RichText::new(app.folder_picker.dir.to_string_lossy().to_string())
-                .monospace()
-                .small(),
-        );
+        if ui
+            .button(format!("＋ {}", t.pick_folder))
+            .on_hover_text(app.folder_picker.dir.to_string_lossy().to_string())
+            .clicked()
+        {
+            let dir = app.folder_picker.dir.to_string_lossy().to_string();
+            app.settings.working_directory = dir.clone();
+            app.settings.remember_folder(&dir);
+            app.settings.save();
+            app.mark_file_index_stale();
+            app.reset_dock();
+            app.folder_picker.open = false;
+            app.new_local_session();
+        }
     });
+    ui.label(
+        egui::RichText::new(app.folder_picker.dir.to_string_lossy().to_string())
+            .monospace()
+            .small()
+            .color(p.muted),
+    );
     ui.separator();
 
     let mut entries: Vec<_> = std::fs::read_dir(&app.folder_picker.dir)
@@ -115,8 +135,11 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
     entries.sort_by_key(|e| e.to_lowercase());
 
     egui::ScrollArea::vertical()
-        .auto_shrink(false)
+        .max_height(280.0)
+        .auto_shrink([false, false])
+        .id_salt("folder-picker-list")
         .show(ui, |ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             for name in &entries {
                 if ui
                     .selectable_label(false, egui::RichText::new(format!("📁 {name}")).small())
@@ -127,14 +150,22 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
                     app.folder_picker.dir = next;
                 }
             }
+            if entries.is_empty() {
+                ui.label(egui::RichText::new("…").weak());
+            }
         });
 
     ui.separator();
     ui.horizontal(|ui| {
         if ui
-            .add(egui::Button::new(
-                egui::RichText::new(format!("✔ {}", t.pick_folder)).strong(),
-            ))
+            .add(
+                egui::Button::new(
+                    egui::RichText::new(format!("✔ {}", t.pick_folder))
+                        .strong()
+                        .color(egui::Color32::WHITE),
+                )
+                .fill(p.accent),
+            )
             .clicked()
         {
             let dir = app.folder_picker.dir.to_string_lossy().to_string();
@@ -142,7 +173,9 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
             app.settings.remember_folder(&dir);
             app.settings.save();
             app.mark_file_index_stale();
+            app.reset_dock();
             app.folder_picker.open = false;
+            app.new_local_session();
         }
         if ui.button(t.cancel).clicked() {
             app.folder_picker.open = false;
