@@ -91,10 +91,18 @@ impl Client {
         raw_rx: Receiver<RawMsg>,
         event_tx: Sender<AcpEvent>,
     ) -> Result<Self> {
-        let mut child = Command::new(acp_path)
-            .stdin(Stdio::piped())
+        let mut cmd = Command::new(acp_path);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        // Never flash a console window for the child process on Windows.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("failed to spawn `{acp_path}`"))?;
 

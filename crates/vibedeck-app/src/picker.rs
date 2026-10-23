@@ -141,7 +141,7 @@ pub fn show_folder_picker(app: &mut VibedeckApp, ui: &mut Ui) {
             app.settings.working_directory = dir.clone();
             app.settings.remember_folder(&dir);
             app.settings.save();
-            app.refresh_file_index();
+            app.mark_file_index_stale();
             app.folder_picker.open = false;
         }
         if ui.button(t.cancel).clicked() {

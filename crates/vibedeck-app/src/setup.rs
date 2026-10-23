@@ -13,15 +13,58 @@ pub struct SetupPane {
     pub status: SetupStatus,
     pub log: Vec<(String, bool)>, // (message, is_error)
     pub rx: Option<Receiver<SetupProgress>>,
+    /// Result channel of an in-flight background dependency probe.
+    status_rx: Option<Receiver<SetupStatus>>,
+    /// Set while `refresh_status_async` is running.
+    probing: bool,
+    /// The Settings "auto-detect" button is waiting for a probe result.
+    pub autodetect: bool,
 }
 
 impl SetupPane {
+    /// Synchronous probe — kept for callers that explicitly want to block.
+    #[allow(dead_code)]
     pub fn refresh_status(&mut self) {
         self.status = vibedeck_setup::check_setup();
     }
 
+    /// Probe dependencies on a background thread (used at startup and when
+    /// opening the Setup view — never blocks the UI thread).
+    pub fn refresh_status_async(&mut self) {
+        if self.probing {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<SetupStatus>();
+        self.status_rx = Some(rx);
+        self.probing = true;
+        std::thread::Builder::new()
+            .name("vibedeck-setup-probe".into())
+            .spawn(move || {
+                let _ = tx.send(vibedeck_setup::check_setup());
+            })
+            .expect("failed to spawn setup probe thread");
+    }
+
     pub fn is_working(&self) -> bool {
         self.rx.is_some()
+    }
+
+    /// Drain the background dependency probe.
+    /// Returns `true` if a fresh probe result just arrived.
+    pub fn poll_status(&mut self) -> bool {
+        let mut fresh = false;
+        if let Some(rx) = self.status_rx.take() {
+            match rx.try_recv() {
+                Ok(status) => {
+                    self.status = status;
+                    self.probing = false;
+                    fresh = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => self.status_rx = Some(rx),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.probing = false,
+            }
+        }
+        fresh
     }
 
     /// Drain install progress from the background thread.
@@ -79,7 +122,7 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
             ))
             .clicked()
         {
-            app.setup_pane.refresh_status();
+            app.setup_pane.refresh_status_async();
         }
         let working = app.setup_pane.is_working();
         let install_label = if working {

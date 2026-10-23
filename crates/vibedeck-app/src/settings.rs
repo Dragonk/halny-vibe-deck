@@ -469,13 +469,7 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
                 }
             });
             if let Some(th) = theme_clicked {
-                app.settings.theme = th.into();
-                app.settings.save();
-                ui.ctx().set_visuals(if th == "light" {
-                    egui::Visuals::light()
-                } else {
-                    egui::Visuals::dark()
-                });
+                app.set_theme(ui.ctx(), th); // saves + applies the Nexus palette
             }
             ui.end_row();
 
@@ -514,11 +508,8 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         if ui.button(t.settings_acp_autodetect).clicked() {
-            app.setup_pane.refresh_status();
-            if let Some(p) = app.setup_pane.status.vibe_acp_path.clone() {
-                app.settings.acp_path = p.to_string_lossy().to_string();
-                app.settings.save();
-            }
+            app.setup_pane.autodetect = true;
+            app.setup_pane.refresh_status_async();
         }
         let connect_label = t.open;
         if ui.button(format!("🔌 {connect_label}")).clicked() {

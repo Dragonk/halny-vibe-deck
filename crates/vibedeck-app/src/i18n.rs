@@ -144,6 +144,16 @@ pub struct Str {
     pub setup_missing: &'static str,
     pub setup_done: &'static str,
     pub setup_hint: &'static str,
+    // Nexus-style empty state / sidebar
+    pub new_chat: &'static str,
+    pub start_conversation: &'static str,
+    pub agent_ready: &'static str,
+    pub connecting_to_agent: &'static str,
+    pub agent_connection_error: &'static str,
+    pub configure_acp: &'static str,
+    pub projects: &'static str,
+    pub add_project: &'static str,
+    pub cli_history: &'static str,
 }
 
 pub const EN: Str = Str {
@@ -259,6 +269,15 @@ pub const EN: Str = Str {
     setup_missing: "not found",
     setup_done: "Ready — vibe-acp located. You can start chatting.",
     setup_hint: "VibeDeck talks to the Mistral Vibe CLI (vibe-acp). The CLI is installed with uv (`uv tool install mistral-vibe`).",
+    new_chat: "New chat",
+    start_conversation: "Start a conversation",
+    agent_ready: "Agent is ready. Type a message to begin.",
+    connecting_to_agent: "Connecting to agent…",
+    agent_connection_error: "Agent connection error",
+    configure_acp: "Configure the ACP path in Setup to connect.",
+    projects: "Projects",
+    add_project: "Add project",
+    cli_history: "CLI history",
 };
 
 pub const PL: Str = Str {
@@ -374,6 +393,15 @@ pub const PL: Str = Str {
     setup_missing: "nie znaleziono",
     setup_done: "Gotowe — vibe-acp dostępny. Możesz zacząć czat.",
     setup_hint: "VibeDeck komunikuje się z Mistral Vibe CLI (vibe-acp). CLI instaluje się przez uv (`uv tool install mistral-vibe`).",
+    new_chat: "Nowy czat",
+    start_conversation: "Rozpocznij rozmowę",
+    agent_ready: "Agent gotowy. Napisz wiadomość, aby rozpocząć.",
+    connecting_to_agent: "Łączenie z agentem…",
+    agent_connection_error: "Błąd połączenia z agentem",
+    configure_acp: "Skonfiguruj ścieżkę ACP w Instalacji, aby się połączyć.",
+    projects: "Projekty",
+    add_project: "Dodaj projekt",
+    cli_history: "Historia z CLI",
 };
 
 pub fn t(lang: Lang) -> &'static Str {

@@ -25,6 +25,16 @@ instant startup and a tiny memory footprint, in the spirit of the
 
 ## Features
 
+- **1:1 Nexus look** — the original Mistral Vibe Nexus palette (dark & light),
+  header with agent status, sessions/projects sidebar, message bubbles and the
+  pixel-flame empty state.
+- **Projects** — recent folders list in the sidebar; add or switch the working
+  directory of a session in one click.
+- **Session history** — sessions recorded by the CLI (`session/list`) with
+  name, date and folder, resumable with one click.
+- **Fast startup** — dependency probing and file indexing happen lazily, never
+  blocking the first frame. The original window icon is embedded (Linux &
+  Windows), and no stray console window opens on Windows.
 - **Full ACP protocol** — JSON-RPC 2.0 over stdio to `vibe-acp` on a worker
   thread: `initialize`, `session/new | load | prompt | cancel`,
   `session/set_config_option` (model/mode switching), streaming

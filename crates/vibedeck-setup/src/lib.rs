@@ -102,10 +102,15 @@ pub fn check_setup() -> SetupStatus {
     let uv_path = find_binary("uv");
     let vibe_acp_path = find_binary("vibe-acp");
     let vibe_cli_version = find_binary("vibe").and_then(|vibe| {
-        Command::new(vibe)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
+        let mut cmd = Command::new(vibe);
+        cmd.arg("--version").stdin(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
@@ -120,11 +125,19 @@ pub fn check_setup() -> SetupStatus {
 
 fn run(cmd: &str, args: &[&str], on_line: &mut impl FnMut(SetupProgress)) -> Result<()> {
     use std::io::BufRead;
-    let mut child = Command::new(cmd)
-        .args(args)
+    let mut proc = Command::new(cmd);
+    proc.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Never flash a console window for the child process on Windows.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        proc.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = proc
         .spawn()
         .map_err(|e| anyhow!("failed to run `{cmd} {args:?}`: {e}"))?;
 

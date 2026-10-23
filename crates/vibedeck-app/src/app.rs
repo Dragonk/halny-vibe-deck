@@ -1,11 +1,15 @@
 //! The egui application: top-level layout, event pump, and glue
 //! between the ACP worker, the `~/.vibe` config layer and the UI.
+//!
+//! Layout mirrors the original Mistral Vibe Nexus app:
+//! a slim header (brand + agent status), a resizable sessions/projects
+//! sidebar, the chat column, and the input bar.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use eframe::egui;
-use egui::{Align, CentralPanel, Context, Layout, SidePanel, TopBottomPanel, Ui, Window};
+use egui::{Align, CentralPanel, Context, Layout, SidePanel, TopBottomPanel, Window};
 use vibedeck_acp::AcpHandle;
 use vibedeck_core::proto::{AcpCommand, AcpEvent, AcpSessionInfo, AvailableCommand, ModeInfo};
 use vibedeck_core::types::{ChatSession, Message, MessageSender, ThinkingBlock};
@@ -15,8 +19,7 @@ use crate::settings::SettingsPane;
 use crate::setup::SetupPane;
 use crate::state::{AcpStatus, AppSettings, FolderPicker, PendingApproval, PendingQuestion, View};
 use crate::stats::StatsPane;
-
-const SIDEBAR_BG: egui::Color32 = egui::Color32::from_rgb(0x10, 0x11, 0x15);
+use crate::theme;
 
 pub struct VibedeckApp {
     pub settings: AppSettings,
@@ -42,6 +45,9 @@ pub struct VibedeckApp {
     pub question: Option<PendingQuestion>,
     pub input: String,
     pub file_index: Vec<(String, bool)>,
+    /// Whether `file_index` matches the current working directory.
+    /// (Lazily built on the first `@` mention — keeps startup fast.)
+    pub file_index_fresh: bool,
     pub folder_picker: FolderPicker,
 
     pub settings_pane: SettingsPane,
@@ -55,13 +61,12 @@ pub struct VibedeckApp {
 
 impl VibedeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Dark theme by default (a light option exists in Settings).
-        egui::Context::set_visuals(&cc.egui_ctx, egui::Visuals::dark());
-
         let settings = AppSettings::load();
         let lang = Lang::from_code(&settings.language);
-        let acp = AcpHandle::spawn();
+        // Apply the saved theme (Nexus dark by default).
+        theme::apply(&cc.egui_ctx, &settings.theme);
 
+        let acp = AcpHandle::spawn();
         let mut app = Self {
             view: View::Setup,
             status: AcpStatus::Disconnected,
@@ -79,6 +84,7 @@ impl VibedeckApp {
             question: None,
             input: String::new(),
             file_index: Vec::new(),
+            file_index_fresh: false,
             folder_picker: FolderPicker::default(),
             settings_pane: SettingsPane::default(),
             stats_pane: StatsPane::default(),
@@ -91,27 +97,33 @@ impl VibedeckApp {
             settings,
         };
 
-        // Locate dependencies and auto-connect if vibe-acp is available.
-        app.setup_pane.refresh_status();
-        let acp_path = if !app.settings.acp_path.is_empty() {
-            Some(app.settings.acp_path.clone())
-        } else {
-            app.setup_pane
-                .status
-                .vibe_acp_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string())
-        };
-        if let Some(path) = acp_path {
-            app.start_agent(&path);
+        // Fast start: if we already know the vibe-acp path from the settings,
+        // connect immediately without any blocking dependency scan. The UI
+        // is usable right away; the handshake completes asynchronously.
+        if !app.settings.acp_path.is_empty() {
+            app.start_agent(&app.settings.acp_path.clone());
             app.view = View::Chat;
+        } else {
+            // Otherwise probe dependencies in the background; when the
+            // result arrives (see `poll_setup`), auto-connect if found.
+            app.setup_pane.refresh_status_async();
         }
-        app.refresh_file_index();
         app
     }
 
     pub fn tr(&self) -> &'static crate::i18n::Str {
         t(self.lang)
+    }
+
+    pub fn palette(&self) -> theme::Palette {
+        theme::Palette::for_theme(&self.settings.theme)
+    }
+
+    /// Re-apply the theme after a settings change.
+    pub fn set_theme(&mut self, ctx: &Context, theme: &str) {
+        self.settings.theme = theme.to_string();
+        self.settings.save();
+        theme::apply(ctx, theme);
     }
 
     pub fn start_agent(&mut self, acp_path: &str) {
@@ -123,9 +135,19 @@ impl VibedeckApp {
         });
     }
 
-    pub fn refresh_file_index(&mut self) {
-        let cwd = self.current_workdir();
-        self.file_index = crate::picker::index_files(&cwd);
+    /// Mark the `@`-mention file index as outdated (rebuilt lazily).
+    pub fn mark_file_index_stale(&mut self) {
+        self.file_index_fresh = false;
+    }
+
+    /// Ensure the @-mention index matches the current working directory.
+    /// Only called from the input-bar `@` popup — never at startup.
+    pub fn ensure_file_index(&mut self) {
+        if !self.file_index_fresh {
+            let cwd = self.current_workdir();
+            self.file_index = crate::picker::index_files(&cwd);
+            self.file_index_fresh = true;
+        }
     }
 
     pub fn current_workdir(&self) -> PathBuf {
@@ -156,6 +178,7 @@ impl VibedeckApp {
         session.working_directory = cwd;
         self.sessions.insert(0, session);
         self.current = Some(0);
+        self.mark_file_index_stale();
     }
 
     pub fn start_backend_session(&mut self) {
@@ -405,188 +428,161 @@ impl VibedeckApp {
 
     pub fn ui(&mut self, ctx: &Context) {
         self.drain_events(ctx);
+        self.poll_setup();
 
-        TopBottomPanel::bottom("statusbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(self.tr().disclaimer_short)
-                        .small()
-                        .weak(),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        let p = self.palette();
+        let t = self.tr();
+
+        // -- header (Nexus-style: brand + agent status + theme toggle) ----------
+        TopBottomPanel::top("header")
+            .frame(
+                egui::Frame::default()
+                    .fill(p.bg)
+                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                    .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // brand: pixel flame + name
+                    theme::paint_flame(ui, &p, 0.13);
+                    ui.add_space(6.0);
+                    ui.heading(egui::RichText::new(t.app_name).strong().color(p.text));
+
+                    // status: "● Connected" with tooltip
                     let (status_text, color) = match self.status {
-                        AcpStatus::Connected => (
-                            self.tr().connected,
-                            egui::Color32::from_rgb(0x50, 0xc8, 0x78),
-                        ),
-                        AcpStatus::Connecting => (
-                            self.tr().connecting,
-                            egui::Color32::from_rgb(0xff, 0xc0, 0x45),
-                        ),
-                        AcpStatus::Disconnected => (
-                            self.tr().disconnected,
-                            egui::Color32::from_rgb(0x99, 0x99, 0x99),
-                        ),
-                        AcpStatus::Error => {
-                            (self.tr().error, egui::Color32::from_rgb(0xe5, 0x48, 0x4d))
-                        }
+                        AcpStatus::Connected => (t.connected, p.green),
+                        AcpStatus::Connecting => (t.connecting, p.yellow),
+                        AcpStatus::Disconnected => (t.disconnected, p.muted),
+                        AcpStatus::Error => (t.error, p.red),
                     };
-                    if !self.acp_error.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "⚠ {} — {}",
-                                self.tr().error,
-                                self.acp_error
-                            ))
-                            .small()
-                            .color(egui::Color32::from_rgb(0xe5, 0x48, 0x4d)),
-                        );
-                    }
-                    if let Some((msg, at)) = &self.toast {
-                        if at.elapsed() < Duration::from_secs(3) {
-                            ui.label(egui::RichText::new(msg).small().color(color));
-                        }
-                    }
+                    ui.add_space(10.0);
+                    let status_label = ui
+                        .label(
+                            egui::RichText::new(format!("● {status_text}"))
+                                .small()
+                                .color(color),
+                        )
+                        .on_hover_text(if self.acp_error.is_empty() {
+                            status_text.to_string()
+                        } else {
+                            format!("{status_text} — {}", self.acp_error)
+                        });
+                    let _ = status_label;
                     if self.busy {
-                        ui.label(
-                            egui::RichText::new(format!("⏳ {}", self.tr().waiting_for_agent))
-                                .small(),
-                        );
+                        ui.label(egui::RichText::new("⏳").small());
                     }
-                    ui.label(egui::RichText::new(status_text).small().color(color));
-                });
-            });
-        });
 
-        TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading(egui::RichText::new(self.tr().app_name).strong());
-                let mut select = |v: View| {
-                    let selected = self.view == v;
-                    let label = match v {
-                        View::Chat => self.tr().view_chat,
-                        View::Settings => self.tr().view_settings,
-                        View::Stats => self.tr().view_stats,
-                        View::Setup => self.tr().view_setup,
-                    };
-                    let button = egui::Button::new(label).selected(selected);
-                    if ui.add(button).clicked() {
-                        self.view = v;
-                        match v {
-                            View::Settings => self.settings_pane.ensure_loaded(),
-                            View::Stats => self.stats_pane.ensure_loaded(),
-                            View::Setup => self.setup_pane.refresh_status(),
-                            View::Chat => {}
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(if self.settings.theme == "light" {
+                                        "🌙"
+                                    } else {
+                                        "☀"
+                                    })
+                                    .small(),
+                                )
+                                .fill(p.panel),
+                            )
+                            .on_hover_text(t.settings_theme)
+                            .clicked()
+                        {
+                            let next = if self.settings.theme == "light" { "dark" } else { "light" };
+                            self.set_theme(ctx, next);
                         }
-                    }
-                };
-                select(View::Chat);
-                select(View::Settings);
-                select(View::Stats);
-                select(View::Setup);
-
-                ui.separator();
-
-                // Model & mode pickers (only useful in chat view).
-                if self.view == View::Chat {
-                    self.ui_model_picker(ui);
-                    self.ui_mode_picker(ui);
-                }
-
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("ℹ").clicked() {
-                        self.show_about = true;
-                    }
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("ℹ").small()).fill(p.panel))
+                            .on_hover_text(t.about)
+                            .clicked()
+                        {
+                            self.show_about = true;
+                        }
+                        if let Some((msg, at)) = &self.toast {
+                            if at.elapsed() < Duration::from_secs(3) {
+                                ui.label(
+                                    egui::RichText::new(msg)
+                                        .small()
+                                        .color(p.green),
+                                );
+                            }
+                        }
+                    });
                 });
             });
-        });
 
         match self.view {
             View::Chat => {
                 SidePanel::left("sessions")
                     .resizable(true)
-                    .default_width(240.0)
-                    .frame(egui::Frame::default().fill(SIDEBAR_BG))
+                    .default_width(220.0)
+                    .width_range(120.0..=400.0)
+                    .frame(
+                        egui::Frame::default()
+                            .fill(p.surface)
+                            .inner_margin(egui::Margin::same(8.0))
+                            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+                    )
                     .show(ctx, |ui| crate::sessions::show(self, ui));
                 TopBottomPanel::bottom("input")
-                    .frame(egui::Frame::default().fill(SIDEBAR_BG))
+                    .frame(
+                        egui::Frame::default()
+                            .fill(p.bg)
+                            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                            .stroke(egui::Stroke::new(1.0_f32, p.border_subtle)),
+                    )
                     .show(ctx, |ui| crate::input::show(self, ui));
-                CentralPanel::default().show(ctx, |ui| crate::chat::show(self, ui));
+                CentralPanel::default()
+                    .frame(egui::Frame::default().fill(p.bg))
+                    .show(ctx, |ui| crate::chat::show(self, ui));
             }
             View::Settings => {
-                CentralPanel::default().show(ctx, |ui| crate::settings::show(self, ui));
+                CentralPanel::default()
+                    .frame(egui::Frame::default().fill(p.bg))
+                    .show(ctx, |ui| crate::settings::show(self, ui));
             }
             View::Stats => {
-                CentralPanel::default().show(ctx, |ui| crate::stats::show(self, ui));
+                CentralPanel::default()
+                    .frame(egui::Frame::default().fill(p.bg))
+                    .show(ctx, |ui| crate::stats::show(self, ui));
             }
             View::Setup => {
-                CentralPanel::default().show(ctx, |ui| crate::setup::show(self, ui));
+                CentralPanel::default()
+                    .frame(egui::Frame::default().fill(p.bg))
+                    .show(ctx, |ui| crate::setup::show(self, ui));
             }
         }
 
         self.ui_windows(ctx);
     }
 
-    fn ui_model_picker(&mut self, ui: &mut Ui) {
-        let current = self
-            .settings
-            .preferred_model
-            .clone()
-            .or_else(|| self.models.first().cloned())
-            .unwrap_or_default();
-        let label = if current.is_empty() {
-            self.tr().model.to_string()
-        } else {
-            current.clone()
-        };
-        ui.menu_button(label, |ui| {
-            for model in self.models.clone() {
-                if ui.selectable_label(model == current, &model).clicked() {
-                    self.settings.preferred_model = Some(model.clone());
-                    self.settings.save();
-                    if let Some(session) = self.current_session() {
-                        if let Some(acp_session_id) = session.acp_session_id.clone() {
-                            self.acp.send(AcpCommand::SetConfigOption {
-                                session_id: acp_session_id,
-                                key: "model".into(),
-                                value: model,
-                            });
-                        }
-                    }
-                    ui.close_menu();
-                }
+    /// Poll the background dependency probe; auto-connect on first result.
+    fn poll_setup(&mut self) {
+        let fresh = self.setup_pane.poll_status();
+        if !fresh {
+            return;
+        }
+        if self.setup_pane.autodetect {
+            // Settings → auto-detect: fill in the path only.
+            self.setup_pane.autodetect = false;
+            if let Some(p) = self.setup_pane.status.vibe_acp_path.clone() {
+                self.settings.acp_path = p.to_string_lossy().to_string();
+                self.settings.save();
+                self.notify(self.tr().saved);
             }
-            if self.models.is_empty() {
-                ui.label(egui::RichText::new("(—)").weak());
+        } else if self.settings.acp_path.is_empty() {
+            // Startup probe: connect right away when vibe-acp is available.
+            if let Some(path) = self.setup_pane.status.vibe_acp_path.clone() {
+                let path_str = path.to_string_lossy().to_string();
+                self.start_agent(&path_str);
+                self.view = View::Chat;
             }
-        });
-    }
-
-    fn ui_mode_picker(&mut self, ui: &mut Ui) {
-        let label = self.tr().mode.to_string();
-        ui.menu_button(label, |ui| {
-            for mode in self.modes.clone() {
-                if ui.selectable_label(false, &mode.name).clicked() {
-                    if let Some(session) = self.current_session() {
-                        if let Some(acp_session_id) = session.acp_session_id.clone() {
-                            self.acp.send(AcpCommand::SetConfigOption {
-                                session_id: acp_session_id,
-                                key: "mode".into(),
-                                value: mode.id.clone(),
-                            });
-                        }
-                    }
-                    ui.close_menu();
-                }
-            }
-            if self.modes.is_empty() {
-                ui.label(egui::RichText::new("(—)").weak());
-            }
-        });
+        }
     }
 
     fn ui_windows(&mut self, ctx: &Context) {
         let t = self.tr();
+        let p = self.palette();
 
         // About window.
         if self.show_about {
@@ -623,7 +619,17 @@ impl VibedeckApp {
                         });
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button(format!("✅ {}", t.approve)).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("✅ {}", t.approve))
+                                        .strong()
+                                        .color(egui::Color32::WHITE),
+                                )
+                                .fill(p.accent),
+                            )
+                            .clicked()
+                        {
                             decision = Some("proceed_once");
                         }
                         if ui.button(format!("❌ {}", t.reject)).clicked() {

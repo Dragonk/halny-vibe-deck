@@ -183,6 +183,7 @@ fn styled(
 }
 
 /// One-line plain preview (for session lists): strips markdown markers.
+#[allow(dead_code)]
 pub fn plain_preview(markdown: &str, max_chars: usize) -> String {
     let mut s = markdown
         .replace(['#', '*', '`', '>'], "")

@@ -19,8 +19,13 @@ vibedeck-setup = { workspace = true }
 
 eframe = { version = "0.29", features = ["wgpu"] }
 egui = { version = "0.29" }
+png = "0.17"
 toml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
+
+# Windows-only: embed the window icon into the executable resource section.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
