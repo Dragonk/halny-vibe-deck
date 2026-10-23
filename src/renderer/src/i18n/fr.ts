@@ -267,4 +267,9 @@ export const fr = {
   rawTomlError: 'Erreur TOML : {{error}}',
   reload: 'Recharger',
   binaryPreviewHint: 'Aperçu binaire non pris en charge — utilisez ↗ pour ouvrir le fichier en externe',
+  inputCachedLabel: 'Entrée en cache',
+  cacheHitLabel: 'taux de cache',
+  defaultToolsHint: 'Les outils intégrés du CLI mistral-vibe fonctionnent sans configuration — voici les valeurs par défaut :',
+  cachedInputPriceHint: 'Vide = modèle sans prise en charge du cache — les tokens en cache sont facturés au prix d’entrée.',
+  openPreview: 'Aperçu',
 }

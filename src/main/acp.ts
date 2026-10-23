@@ -26,6 +26,7 @@ export interface AcpHistoryToolCall {
   status: 'running' | 'done' | 'error'
   input?: Record<string, unknown>
   output?: string
+  diffs?: Array<{ path: string; oldText: string | null; newText: string }>
 }
 
 export interface AcpHistoryMessage {
@@ -261,6 +262,25 @@ export class AcpManager {
     return parts.length > 0 ? parts.join('\n') : undefined
   }
 
+  /** Extract ACP diff content blocks ({type:'diff', path, oldText, newText}) from a tool update. */
+  private diffBlocks(
+    update: Record<string, unknown>
+  ): Array<{ path: string; oldText: string | null; newText: string }> | undefined {
+    const content = update.content as unknown
+    if (!Array.isArray(content)) return undefined
+    const diffs: Array<{ path: string; oldText: string | null; newText: string }> = []
+    for (const block of content as Array<Record<string, unknown>>) {
+      if (!block || typeof block !== 'object') continue
+      if (block.type !== 'diff') continue
+      const p = block.path
+      if (typeof p !== 'string' || p.length === 0) continue
+      const oldText = (block.oldText ?? block.old_text) as string | null
+      const newText = (block.newText ?? block.new_text) as string | undefined
+      if (newText === undefined) continue
+      diffs.push({ path: p, oldText: oldText ?? null, newText })
+    }
+    return diffs.length > 0 ? diffs : undefined
+  }
   private normalizeToolStatus(s: unknown): 'running' | 'done' | 'error' {
     if (s === 'completed' || s === 'done' || s === 'success') return 'done'
     if (s === 'failed' || s === 'error') return 'error'
@@ -335,7 +355,8 @@ export class AcpManager {
               title: toolName,
               kind: (update.kind ?? 'execute') as string,
               status: this.normalizeToolStatus(update.status ?? 'in_progress'),
-              input: this.parseRawInput(update.rawInput ?? update.raw_input)
+              input: this.parseRawInput(update.rawInput ?? update.raw_input),
+              diffs: this.diffBlocks(update)
             }
           })
         }
@@ -351,7 +372,8 @@ export class AcpManager {
               sessionId,
               toolCallId,
               status: this.normalizeToolStatus(update.status),
-              output: this.toolOutputText(update)
+              output: this.toolOutputText(update),
+              diffs: this.diffBlocks(update)
             }
           })
         }
@@ -496,7 +518,8 @@ export class AcpManager {
             title: toolName,
             kind: (update.kind as string) ?? 'execute',
             status: this.normalizeToolStatus(update.status ?? 'in_progress'),
-            input: this.parseRawInput(update.rawInput ?? update.raw_input)
+            input: this.parseRawInput(update.rawInput ?? update.raw_input),
+            diffs: this.diffBlocks(update)
           }
           toolCallsById.set(toolCallId, tc)
           ensureAi().toolCalls!.push(tc)
@@ -508,6 +531,8 @@ export class AcpManager {
           if (tc) {
             const out = this.toolOutputText(update)
             if (out !== undefined) tc.output = out
+            const rdiffs = this.diffBlocks(update)
+            if (rdiffs) tc.diffs = rdiffs
             tc.status = this.normalizeToolStatus(update.status)
           }
         }

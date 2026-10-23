@@ -482,7 +482,7 @@ function CostCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<ty
 }
 
 function TokenCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<typeof useTranslation> }): React.JSX.Element {
-  type Filter = 'both' | 'input' | 'output'
+  type Filter = 'both' | 'input' | 'cached' | 'output'
   const [filter, setFilter] = useState<Filter>('both')
 
   const totalInput = sessions.reduce((s, sess) => s + (sess.stats.sessionPromptTokens ?? 0), 0)
@@ -490,13 +490,25 @@ function TokenCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<t
     (s, sess) => s + (sess.stats.sessionCompletionTokens ?? 0),
     0
   )
+  const totalCached = sessions.reduce(
+    (s, sess) => s + (sess.stats.sessionCachedTokens ?? 0),
+    0
+  )
+  const cacheHitPct = totalInput > 0 ? Math.round((totalCached / totalInput) * 100) : 0
   const totalBoth = totalInput + totalOutput
   const avgTps =
     sessions.length > 0
       ? sessions.reduce((s, sess) => s + (sess.stats.tokensPerSecond ?? 0), 0) / sessions.length
       : 0
 
-  const displayTotal = filter === 'input' ? totalInput : filter === 'output' ? totalOutput : totalBoth
+  const displayTotal =
+    filter === 'input'
+      ? totalInput
+      : filter === 'cached'
+        ? totalCached
+        : filter === 'output'
+          ? totalOutput
+          : totalBoth
 
   const barData = useMemo(() => {
     return sessions
@@ -507,26 +519,39 @@ function TokenCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<t
         label: dayLabel(new Date(s.startTime)),
         values:
           filter === 'input'
-            ? [s.stats.sessionPromptTokens ?? 0]
-            : filter === 'output'
-              ? [s.stats.sessionCompletionTokens ?? 0]
-              : [s.stats.sessionPromptTokens ?? 0, s.stats.sessionCompletionTokens ?? 0]
+            ? [
+                (s.stats.sessionPromptTokens ?? 0) - (s.stats.sessionCachedTokens ?? 0),
+                s.stats.sessionCachedTokens ?? 0,
+              ]
+            : filter === 'cached'
+              ? [s.stats.sessionCachedTokens ?? 0]
+              : filter === 'output'
+                ? [s.stats.sessionCompletionTokens ?? 0]
+                : [
+                    (s.stats.sessionPromptTokens ?? 0) - (s.stats.sessionCachedTokens ?? 0),
+                    s.stats.sessionCachedTokens ?? 0,
+                    s.stats.sessionCompletionTokens ?? 0,
+                  ]
       }))
   }, [sessions, filter])
 
   const barColors =
     filter === 'input'
-      ? ['var(--color-accent)']
-      : filter === 'output'
-        ? ['var(--color-primary)']
-        : ['var(--color-accent)', 'var(--color-primary)']
+      ? ['var(--color-accent)', 'var(--color-warning)']
+      : filter === 'cached'
+        ? ['var(--color-warning)']
+        : filter === 'output'
+          ? ['var(--color-primary)']
+          : ['var(--color-accent)', 'var(--color-warning)', 'var(--color-primary)']
 
   const barLegend =
     filter === 'both'
-      ? [tr.inputLabel, tr.outputLabel]
+      ? [tr.inputLabel, tr.inputCachedLabel, tr.outputLabel]
       : filter === 'input'
-        ? [tr.inputLabel]
-        : [tr.outputLabel]
+        ? [tr.inputLabel, tr.inputCachedLabel]
+        : filter === 'cached'
+          ? [tr.inputCachedLabel]
+          : [tr.outputLabel]
 
   return (
     <div className="stat-card">
@@ -537,19 +562,28 @@ function TokenCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<t
         </div>
         <div className="card-meta">
           <div>{avgTps.toFixed(0)} {tr.tokPerSecAvg}</div>
+          <div className="cache-hit-meta">
+            {String.fromCharCode(9889)} {tr.cacheHitLabel} {cacheHitPct}%
+          </div>
           <div>
-            {formatTokens(totalInput)} {tr.inOut.split(' / ')[0]} / {formatTokens(totalOutput)} {tr.inOut.split(' / ')[1]}
+            {tr.inputLabel} {formatTokens(totalInput)} · {tr.inputCachedLabel} {formatTokens(totalCached)} · {tr.outputLabel} {formatTokens(totalOutput)}
           </div>
         </div>
       </div>
       <div className="pill-row">
-        {(['both', 'input', 'output'] as Filter[]).map((f) => (
+        {(['both', 'input', 'cached', 'output'] as Filter[]).map((f) => (
           <button
             key={f}
             className={`pill ${filter === f ? 'active' : ''}`}
             onClick={() => setFilter(f)}
           >
-            {f === 'both' ? tr.both : f === 'input' ? tr.inputLabel : tr.outputLabel}
+            {f === 'both'
+              ? tr.both
+              : f === 'input'
+                ? tr.inputLabel
+                : f === 'cached'
+                  ? tr.inputCachedLabel
+                  : tr.outputLabel}
           </button>
         ))}
       </div>
@@ -686,6 +720,14 @@ function SessionList({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType
                   <div className="session-row-meta">
                     <span>{start.toLocaleDateString()}</span>
                     <span>{formatDuration(durationSecs)}</span>
+                    <span>
+                      {tr.inputLabel} {formatTokens(s.stats.sessionPromptTokens ?? 0)}
+                      {s.stats.sessionCachedTokens
+                        ? ` (${tr.inputCachedLabel} ${formatTokens(s.stats.sessionCachedTokens)})`
+                        : ''}
+                      {' · '}
+                      {tr.outputLabel} {formatTokens(s.stats.sessionCompletionTokens ?? 0)}
+                    </span>
                   </div>
                 </div>
                 <div className="session-row-tags">

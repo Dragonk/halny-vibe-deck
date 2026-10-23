@@ -164,7 +164,7 @@ function rawFunctionNameToTitleFromInput(
   tr: Record<TranslationKeys, string>,
 ): string {
   const getFilename = (): string => {
-    const p = (inp.path ?? inp.file_path ?? inp.filename ?? "") as string;
+    const p = (inp.path ?? inp.file_path ?? inp.filePath ?? inp.filename ?? "") as string;
     if (!p) return "";
     return " " + p.split(/[/\\]/).pop();
   };
@@ -176,7 +176,9 @@ function rawFunctionNameToTitleFromInput(
   if (
     lower === "search_replace" ||
     lower === "str_replace" ||
-    lower === "edit_file"
+    lower === "edit_file" ||
+    lower === "edit" ||
+    lower.endsWith(".edit")
   ) {
     return tr.toolPatching + getFilename();
   }
@@ -254,9 +256,9 @@ function ReadFileBlock({
   tr: Record<TranslationKeys, string>;
 }): React.JSX.Element {
   const inp = toolCall.input ?? {};
-  const inputPath = (inp.path ?? inp.file_path ?? "") as string;
-  const startLine = inp.start_line as number | undefined;
-  const endLine = inp.end_line as number | undefined;
+  const inputPath = (inp.path ?? inp.file_path ?? inp.filePath ?? "") as string;
+  const startLine = (inp.start_line ?? inp.startLine) as number | undefined;
+  const endLine = (inp.end_line ?? inp.endLine) as number | undefined;
   const lineRange =
     startLine != null
       ? `:${startLine}${endLine != null ? `-${endLine}` : ""}`
@@ -513,6 +515,73 @@ function BashBlock({
   );
 }
 
+// Clickable path row with a quick preview button for tool call file paths.
+function ToolFilePathLink({
+  path,
+  acpSessionId,
+  tr,
+}: {
+  path: string;
+  acpSessionId?: string;
+  tr: Record<TranslationKeys, string>;
+}): React.JSX.Element {
+  const openFilePreview = useStore((s) => s.openFilePreview);
+  return (
+    <div className="tool-file-path-row">
+      <span className="tool-file-path">{path}</span>
+      <button
+        className="tool-path-preview-btn"
+        title={tr.openPreview}
+        onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId))}
+      >
+        ↗
+      </button>
+    </div>
+  );
+}
+
+// Renders structured edit diffs (ACP diff content blocks, e.g. from the
+// new edit tool) with a clickable path and +/- coloring.
+function EditDiffBlock({
+  toolCall,
+  tr,
+  acpSessionId,
+}: {
+  toolCall: ToolCall;
+  tr: Record<TranslationKeys, string>;
+  acpSessionId?: string;
+}): React.JSX.Element {
+  const diffs = toolCall.diffs ?? [];
+  const outStr = toolCall.output ?? "";
+  const isError = outStr.includes("<tool_error>");
+  return (
+    <div className={isError ? "tool-rich-error" : "tool-rich-diff"}>
+      {diffs.map((d, i) => (
+        <div key={i} className="tool-diff-pair">
+          <ToolFilePathLink path={d.path} acpSessionId={acpSessionId} tr={tr} />
+          {d.oldText != null && d.oldText.length > 0 && (
+            <pre className="tool-diff-removed">
+              {d.oldText.split("\n").map((l) => `- ${l}`).join("\n")}
+            </pre>
+          )}
+          {d.newText.length > 0 && (
+            <pre className="tool-diff-added">
+              {d.newText.split("\n").map((l) => `+ ${l}`).join("\n")}
+            </pre>
+          )}
+        </div>
+      ))}
+      {isError ? (
+        <pre className="tool-error-output">
+          {outStr.replace(/<\/?tool_error>/g, "").trim()}
+        </pre>
+      ) : (
+        <span className="tool-success-badge">✓ {tr.toolAppliedOk}</span>
+      )}
+    </div>
+  );
+}
+
 function ToolCallRichContent({
   toolCall,
   tr,
@@ -524,6 +593,9 @@ function ToolCallRichContent({
 }): React.JSX.Element | null {
   const name = toolCall.title.toLowerCase();
   const inp = toolCall.input ?? {};
+  if (toolCall.diffs && toolCall.diffs.length > 0) {
+    return <EditDiffBlock toolCall={toolCall} tr={tr} acpSessionId={acpSessionId} />;
+  }
   const out = toolCall.output
     ? (parseToolOutput(toolCall.output) ?? toolCall.output)
     : undefined;
@@ -534,12 +606,15 @@ function ToolCallRichContent({
     typeof inp.cmd === "string" ||
     typeof inp.script === "string";
   const hasReadFileInput =
-    (typeof inp.path === "string" || typeof inp.file_path === "string") &&
+    (typeof inp.path === "string" ||
+      typeof inp.file_path === "string" ||
+      typeof inp.filePath === "string") &&
     (inp.offset !== undefined ||
       inp.limit !== undefined ||
       inp.start_line !== undefined);
   const hasSearchReplaceInput =
     inp.old_string !== undefined ||
+    inp.oldString !== undefined ||
     inp.old_str !== undefined ||
     (typeof inp.content === "string" && inp.content.includes("<<<<<<<")) ||
     (typeof inp.file_path === "string" &&
@@ -579,6 +654,8 @@ function ToolCallRichContent({
 
   // search_replace / str_replace / edit_file / create_file
   if (
+    name === "edit" ||
+    name.endsWith(".edit") ||
     name.includes("replace") ||
     name.includes("str_replace") ||
     name.includes("edit_file") ||
@@ -586,7 +663,7 @@ function ToolCallRichContent({
     name.includes("write") ||
     hasSearchReplaceInput
   ) {
-    const path = (inp.path ?? inp.file_path ?? inp.filename ?? "") as string;
+    const path = (inp.path ?? inp.file_path ?? inp.filePath ?? inp.filename ?? "") as string;
 
     // Check if output indicates an error (more robust check)
     const outStr = out ?? "";
@@ -604,7 +681,8 @@ function ToolCallRichContent({
         );
 
     // Extract old/new content from input
-    let oldStr = (inp.old_string ??
+    let oldStr = (inp.oldString ??
+      inp.old_string ??
       inp.old_str ??
       inp.oldText ??
       inp.search ??
@@ -612,7 +690,8 @@ function ToolCallRichContent({
       inp.target ??
       inp.old_content ??
       "") as string;
-    let newStr = (inp.new_string ??
+    let newStr = (inp.newString ??
+      inp.new_string ??
       inp.new_str ??
       inp.newText ??
       inp.replace ??
@@ -652,7 +731,22 @@ function ToolCallRichContent({
 
     const oldLines = oldStr ? parseDiffBlock(oldStr) : [];
     const newLines = newStr ? parseDiffBlock(newStr) : [];
-    const hasDiff = oldLines.length > 0 || newLines.length > 0;
+    // New CLI edit tool: batch of change objects
+    const batchPairs: Array<{ oldStr: string; newStr: string; replaceAll?: boolean }> = [];
+    if (Array.isArray(inp.changes)) {
+      for (const ch of inp.changes as Array<Record<string, unknown>>) {
+        if (!ch) continue;
+        const o = (ch.oldString ?? ch.old_string ?? "") as string;
+        const n = (ch.newString ?? ch.new_string ?? "") as string;
+        batchPairs.push({
+          oldStr: o,
+          newStr: n,
+          replaceAll: ch.replaceAll === true || ch.replace_all === true,
+        });
+      }
+    }
+    const hasDiff =
+      oldLines.length > 0 || newLines.length > 0 || batchPairs.length > 0;
 
     // Status badge (shown alongside the diff, not instead of it)
     const statusBadge = (() => {
@@ -688,17 +782,31 @@ function ToolCallRichContent({
       const errorMsg = outStr.replace(/<\/?tool_error>/g, "").trim();
       return (
         <div className="tool-rich-error">
-          {path && <div className="tool-file-path">{path}</div>}
-          {hasDiff && (
+          {path && (
+            <ToolFilePathLink path={path} acpSessionId={acpSessionId} tr={tr} />
+          )}
+          {oldLines.length > 0 && (
             <pre className="tool-diff-removed">
               {oldLines.map((l) => `- ${l}`).join("\n")}
             </pre>
           )}
-          {hasDiff && (
+          {newLines.length > 0 && (
             <pre className="tool-diff-added">
               {newLines.map((l) => `+ ${l}`).join("\n")}
             </pre>
           )}
+          {batchPairs.map((p, i) => (
+            <div key={i} className="tool-diff-pair">
+              {p.oldStr && (
+                <pre className="tool-diff-removed">
+                  {p.oldStr.split("\n").map((l) => `- ${l}`).join("\n")}
+                </pre>
+              )}
+              <pre className="tool-diff-added">
+                {p.newStr.split("\n").map((l) => `+ ${l}`).join("\n")}
+              </pre>
+            </div>
+          ))}
           <pre className="tool-error-output">{errorMsg}</pre>
         </div>
       );
@@ -707,14 +815,33 @@ function ToolCallRichContent({
     if (hasDiff) {
       return (
         <div className="tool-rich-diff">
-          {path && <div className="tool-file-path">{path}</div>}
+          {path && (
+            <ToolFilePathLink path={path} acpSessionId={acpSessionId} tr={tr} />
+          )}
           {statusBadge}
-          <pre className="tool-diff-removed">
-            {oldLines.map((l) => `- ${l}`).join("\n")}
-          </pre>
-          <pre className="tool-diff-added">
-            {newLines.map((l) => `+ ${l}`).join("\n")}
-          </pre>
+          {oldLines.length > 0 && (
+            <pre className="tool-diff-removed">
+              {oldLines.map((l) => `- ${l}`).join("\n")}
+            </pre>
+          )}
+          {newLines.length > 0 && (
+            <pre className="tool-diff-added">
+              {newLines.map((l) => `+ ${l}`).join("\n")}
+            </pre>
+          )}
+          {batchPairs.map((p, i) => (
+            <div key={i} className="tool-diff-pair">
+              {p.replaceAll && <div className="tool-read-meta">replace_all</div>}
+              {p.oldStr && (
+                <pre className="tool-diff-removed">
+                  {p.oldStr.split("\n").map((l) => `- ${l}`).join("\n")}
+                </pre>
+              )}
+              <pre className="tool-diff-added">
+                {p.newStr.split("\n").map((l) => `+ ${l}`).join("\n")}
+              </pre>
+            </div>
+          ))}
         </div>
       );
     }
@@ -723,7 +850,9 @@ function ToolCallRichContent({
     if (out) {
       return (
         <div className="tool-rich-diff">
-          {path && <div className="tool-file-path">{path}</div>}
+          {path && (
+            <ToolFilePathLink path={path} acpSessionId={acpSessionId} tr={tr} />
+          )}
           {statusBadge ?? <pre className="tool-bash-output">{out}</pre>}
         </div>
       );
@@ -731,7 +860,9 @@ function ToolCallRichContent({
 
     return (
       <div className="tool-rich-result">
-        {path && <div className="tool-file-path">{path}</div>}
+      {path && (
+        <ToolFilePathLink path={path} acpSessionId={acpSessionId} tr={tr} />
+      )}
         {statusBadge}
       </div>
     );
@@ -746,7 +877,7 @@ function ToolCallRichContent({
     hasGrepInput
   ) {
     const pattern = (inp.pattern ?? inp.query ?? inp.regex ?? "") as string;
-    const path = (inp.path ?? inp.directory ?? inp.dir ?? "") as string;
+    const path = (inp.path ?? inp.directory ?? inp.dir ?? inp.filePath ?? "") as string;
     return (
       <div className="tool-rich-grep">
         <div className="tool-grep-header">
@@ -760,7 +891,7 @@ function ToolCallRichContent({
 
   // glob / list_dir / ls
   if (name.includes("glob") || name.includes("list") || name === "ls") {
-    const path = (inp.path ?? inp.directory ?? inp.dir ?? "") as string;
+    const path = (inp.path ?? inp.directory ?? inp.dir ?? inp.filePath ?? "") as string;
     const pattern = (inp.pattern ?? "") as string;
     return (
       <div className="tool-rich-grep">
@@ -1318,7 +1449,7 @@ function parseContent(content: string): MarkdownSegment[] {
 // Extracts a primary file/directory path from a tool call input, if present.
 function extractToolCallPath(toolCall: ToolCall): string | null {
   const inp = toolCall.input ?? {};
-  const candidates = [inp.path, inp.file_path, inp.filename, inp.file, inp.dir, inp.directory];
+  const candidates = [inp.path, inp.file_path, inp.filePath, inp.filename, inp.file, inp.dir, inp.directory];
   for (const c of candidates) {
     if (typeof c === "string" && c.length > 0) return c;
   }
@@ -1374,7 +1505,7 @@ function looksLikeInlinePath(text: string): boolean {
   if (p.includes("://")) return false;
   const BS = String.fromCharCode(92);
   const abs = p.startsWith("/") || p.startsWith(BS) || /^[A-Za-z]:/.test(p);
-  const rel = p.includes("/") && /^[A-Za-z0-9._-]/.test(p.charAt(0));
+  const rel = (p.includes("/") || p.includes(BS)) && /^[A-Za-z0-9._-]/.test(p.charAt(0));
   return abs || rel;
 }
 

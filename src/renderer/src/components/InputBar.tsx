@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
+import { resolveLanguage, translateModeName, translateThinkingLevel } from '../i18n/terms'
+import type { TermsLang } from '../i18n/terms'
 import type { AppConfig, ConfigOption } from '../types'
 import UsageBar from './UsageBar'
 
@@ -62,12 +64,14 @@ function ConfigChip({
   currentValue,
   label,
   disabled,
+  lang,
   onSelect,
 }: {
   option: ConfigOption | undefined
   currentValue: string
   label: string
   disabled?: boolean
+  lang?: TermsLang
   onSelect: (value: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -82,8 +86,13 @@ function ConfigChip({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const displayName =
-    option?.options.find((o) => o.value === currentValue)?.name ?? currentValue ?? '—'
+  const displayName = (() => {
+    const found = option?.options.find((o) => o.value === currentValue)
+    if (!found) return currentValue ?? '—'
+    if (option?.id === 'mode') return translateModeName(found.value, lang ?? 'en')
+    if (option?.id === 'thinking') return translateThinkingLevel(found.value, lang ?? 'en')
+    return found.name
+  })()
 
   return (
     <div className="ic-chip-wrap" ref={ref}>
@@ -111,7 +120,13 @@ function ConfigChip({
             >
               <span className="ic-chip-item-check">{o.value === currentValue ? '✓' : ''}</span>
               <span className="ic-chip-item-body">
-                <span className="ic-chip-item-name">{o.name}</span>
+                <span className="ic-chip-item-name">
+                  {option.id === 'mode'
+                    ? translateModeName(o.value, lang ?? 'en')
+                    : option.id === 'thinking'
+                      ? translateThinkingLevel(o.value, lang ?? 'en')
+                      : o.name}
+                </span>
                 {o.description && <span className="ic-chip-item-desc">{o.description}</span>}
               </span>
             </button>
@@ -160,6 +175,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   } = useStore()
 
   const tr = useTranslation(config.language)
+  const lang = resolveLanguage(config.language)
 
   const [inputText, setInputText] = useState('')
   const [isStarting, setIsStarting] = useState(false)
@@ -894,6 +910,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               currentValue={currentModel}
               label={tr.modelPicker}
               disabled={!pickersReady || isCurrentSessionBusy}
+              lang={lang}
               onSelect={(v) => handleConfigSelect('model', v)}
             />
             <ConfigChip
@@ -901,6 +918,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               currentValue={currentMode}
               label={tr.modePicker}
               disabled={!pickersReady}
+              lang={lang}
               onSelect={(v) => handleConfigSelect('mode', v)}
             />
             <ConfigChip
@@ -908,6 +926,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               currentValue={currentThinking}
               label={tr.thinkingPicker}
               disabled={!pickersReady}
+              lang={lang}
               onSelect={(v) => handleConfigSelect('thinking', v)}
             />
 

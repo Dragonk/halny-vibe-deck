@@ -5,6 +5,12 @@ export interface FileChange {
   deletions?: number
 }
 
+export interface ToolCallDiff {
+  path: string
+  oldText: string | null
+  newText: string
+}
+
 export interface ToolCall {
   id: string
   title: string
@@ -13,6 +19,7 @@ export interface ToolCall {
   input?: Record<string, unknown>
   output?: string
   fileChanges?: FileChange[]
+  diffs?: ToolCallDiff[]
 }
 
 export interface ThinkingBlock {

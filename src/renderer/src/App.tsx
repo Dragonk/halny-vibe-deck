@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
 import type { AcpHistoryMessage } from './store'
 import { useTranslation, t } from './i18n'
-import type { AppConfig, ConfigOption } from './types'
+import type { AppConfig, ConfigOption, ToolCallDiff } from './types'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
@@ -325,6 +325,7 @@ export default function App(): React.JSX.Element {
             kind: (d.kind as string) ?? '',
             status: (d.status as 'running' | 'done' | 'error') ?? 'running',
             input: d.input as Record<string, unknown> | undefined,
+            diffs: d.diffs as ToolCallDiff[] | undefined,
           })
           break
         }
@@ -338,6 +339,7 @@ export default function App(): React.JSX.Element {
             mergeToolCall(localId, d.toolCallId as string, {
               status: (d.status as 'running' | 'done' | 'error') ?? 'running',
               output: d.output as string | undefined,
+              diffs: d.diffs as ToolCallDiff[] | undefined,
             })
           }
           break

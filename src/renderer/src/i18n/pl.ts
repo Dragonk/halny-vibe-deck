@@ -267,4 +267,9 @@ export const pl = {
   rawTomlError: 'Błąd TOML: {{error}}',
   reload: 'Wczytaj ponownie',
   binaryPreviewHint: 'Brak podglądu pliku binarnego — użyj przycisku ↗, aby otworzyć plik zewnętrznie',
+  inputCachedLabel: 'Wejście cache',
+  cacheHitLabel: 'skuteczność cache',
+  defaultToolsHint: 'Wbudowane narzędzia mistral-vibe CLI działają bez wpisu w config.toml — poniżej domyślne:',
+  cachedInputPriceHint: 'Puste = model bez wsparcia cache — tokeny z cache rozliczane po cenie wejścia.',
+  openPreview: 'Podgląd',
 }

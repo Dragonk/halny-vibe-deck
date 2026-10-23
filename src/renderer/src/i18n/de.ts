@@ -267,4 +267,9 @@ export const de = {
   rawTomlError: 'TOML-Fehler: {{error}}',
   reload: 'Neu laden',
   binaryPreviewHint: 'Binärvorschau nicht unterstützt — Datei mit ↗ extern öffnen',
+  inputCachedLabel: 'Cache-Eingabe',
+  cacheHitLabel: 'Cache-Trefferquote',
+  defaultToolsHint: 'Eingebaute Tools des mistral-vibe-CLI funktionieren ohne Konfiguration — dies sind die Standardwerte:',
+  cachedInputPriceHint: 'Leer = Modell ohne Cache-Unterstützung — Cache-Tokens werden zum Eingabepreis abgerechnet.',
+  openPreview: 'Vorschau',
 }

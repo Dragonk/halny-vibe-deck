@@ -5,6 +5,21 @@ import type { Language } from '../i18n'
 
 type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw'
 
+// Built-in tools of the mistral-vibe CLI that work without any config.toml entry.
+const DEFAULT_VIBE_TOOLS = [
+  'bash',
+  'edit',
+  'grep',
+  'read_file',
+  'write_file',
+  'web_fetch',
+  'web_search',
+  'todo',
+  'task',
+  'skill',
+  'ask_user_question',
+]
+
 interface VibeToolPermission {
   permission: string
   allowlist?: string[]
@@ -78,7 +93,7 @@ interface VibeModelConfig {
   input_price?: number
   output_price?: number
   thinking?: 'off' | 'low' | 'medium' | 'high' | 'max'
-  cached_input_price?: number
+  cached_input_price?: number | null
   top_p?: number
   max_output_tokens?: number
   thinking_levels?: string[]
@@ -449,7 +464,18 @@ export default function SettingsView(): React.JSX.Element {
               )}
             </div>
           ) : (
-            <p className="empty-text">{tr.noToolsConfigured}</p>
+            <div>
+              <p className="empty-text">{tr.noToolsConfigured}</p>
+              <p className="default-tools-note">{tr.defaultToolsHint}</p>
+              <div className="tool-perm-list">
+                {DEFAULT_VIBE_TOOLS.filter(
+                  (t) =>
+                    !configuredTools.includes(t) &&
+                    !configuredTools.includes('tools.' + t) &&
+                    !toolPerms[t]
+                ).map((t) => renderToolPermissionRow(agentName, t, { permission: 'ask' }))}
+              </div>
+            </div>
           )}
         </div>
         <div className="field">
@@ -935,7 +961,15 @@ export default function SettingsView(): React.JSX.Element {
                       </div>
                     )})
                   ) : (
-                    <p className="empty-text">{tr.noToolsAvailable || 'No tools configured'}</p>
+                    <div>
+                      <p className="default-tools-note">{tr.defaultToolsHint}</p>
+                      {DEFAULT_VIBE_TOOLS.map((t) => (
+                        <div key={t} className="tool-item">
+                          <span className="tool-name">{t}</span>
+                          <span className="tool-permission">ask</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )}
@@ -1163,7 +1197,15 @@ export default function SettingsView(): React.JSX.Element {
                     </div>
                   )})
                 ) : (
-                  <p className="empty-text">{tr.noToolsAvailable || 'No tools configured'}</p>
+                  <div>
+                    <p className="default-tools-note">{tr.defaultToolsHint}</p>
+                    {DEFAULT_VIBE_TOOLS.map((t) => (
+                      <div key={t} className="tool-item">
+                        <span className="tool-name">{t}</span>
+                        <span className="tool-permission">ask</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -1572,10 +1614,16 @@ export default function SettingsView(): React.JSX.Element {
                             className="field-input"
                             type="number"
                             step="0.01"
-                            placeholder="0.0"
-                            value={model.cached_input_price ?? 0}
-                            onChange={(e) => handleUpdateModel(idx, { cached_input_price: Number(e.target.value) })}
+                            placeholder="—"
+                            value={model.cached_input_price ?? ''}
+                            onChange={(e) =>
+                              handleUpdateModel(idx, {
+                                cached_input_price:
+                                  e.target.value === '' ? null : Number(e.target.value),
+                              })
+                            }
                           />
+                          <p className="field-hint">{tr.cachedInputPriceHint}</p>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.topP}</label>

@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 
+const BS = String.fromCharCode(92)
+
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -28,20 +30,32 @@ interface Props {
   cwd: string
 }
 
+// Normalize a directory path so the load key and the render key always
+// match (Windows paths arrive with backslashes; keys must be stable).
+function normalizeDirPath(dir: string): string {
+  return dir.split(BS).join('/')
+}
+
 export default function FileTree({ cwd }: Props): React.JSX.Element {
   const { openFilePreview, config } = useStore()
   const tr = useTranslation(config.language)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [entriesByDir, setEntriesByDir] = useState<Record<string, DirEntry[]>>({})
 
-  const loadDir = useCallback((dir: string) => {
-    window.api.fs.listDir(dir).then((entries) => {
-      const sorted = [...(entries as DirEntry[])].sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-        return a.name.localeCompare(b.name)
+  const loadDir = useCallback((rawDir: string) => {
+    const dir = normalizeDirPath(rawDir)
+    window.api.fs
+      .listDir(dir)
+      .then((entries) => {
+        const sorted = [...(entries as DirEntry[])].sort((a, b) => {
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+          return a.name.localeCompare(b.name)
+        })
+        setEntriesByDir((prev) => ({ ...prev, [dir]: sorted }))
       })
-      setEntriesByDir((prev) => ({ ...prev, [dir]: sorted }))
-    })
+      .catch(() => {
+        setEntriesByDir((prev) => ({ ...prev, [dir]: [] }))
+      })
   }, [])
 
   useEffect(() => {
@@ -76,7 +90,7 @@ export default function FileTree({ cwd }: Props): React.JSX.Element {
         {entries
           .filter((e) => !(e.isDir && SKIP_DIRS.has(e.name)))
           .map((entry) => {
-            const fullPath = `${dir}/${entry.name}`.replace(/\\/g, '/')
+            const fullPath = `${dir}/${entry.name}`.split(BS).join('/')
             const isExpanded = expanded.has(fullPath)
             return (
               <div key={fullPath}>
@@ -102,12 +116,11 @@ export default function FileTree({ cwd }: Props): React.JSX.Element {
               </div>
             )
           })}
-        {(entriesByDir[dir] ?? []).length === 0 &&
-          entriesByDir[dir] !== undefined && (
-            <div className="filetree-empty" style={{ paddingLeft: 6 + depth * 12 }}>
-              {tr.fileTreeEmpty}
-            </div>
-          )}
+        {entries.length === 0 && (
+          <div className="filetree-empty" style={{ paddingLeft: 6 + depth * 12 }}>
+            {tr.fileTreeEmpty}
+          </div>
+        )}
       </>
     )
   }
@@ -117,7 +130,7 @@ export default function FileTree({ cwd }: Props): React.JSX.Element {
       <div className="filetree-root" title={cwd}>
         <span className="filetree-root-name">📁 {rootName}</span>
       </div>
-      <div className="filetree-body">{renderEntries(cwd.replace(/\\/g, '/'), 0)}</div>
+      <div className="filetree-body">{renderEntries(normalizeDirPath(cwd), 0)}</div>
     </div>
   )
 }

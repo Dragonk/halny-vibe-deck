@@ -24,6 +24,7 @@ export interface AcpHistoryToolCall {
   status: "running" | "done" | "error";
   input?: Record<string, unknown>;
   output?: string;
+  diffs?: Array<{ path: string; oldText: string | null; newText: string }>;
 }
 
 export interface AcpHistoryMessage {
@@ -636,6 +637,7 @@ export const useStore = create<AppStore>((set, get) => ({
               status: tc.status === "error" ? ("error" as const) : ("done" as const),
               input: tc.input,
               output: tc.output,
+              diffs: tc.diffs,
             }))
           : undefined;
       messages.push({
