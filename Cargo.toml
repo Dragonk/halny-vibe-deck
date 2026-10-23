@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vibedeck-core",
+    "crates/vibedeck-acp",
+    "crates/vibedeck-vibe",
+    "crates/vibedeck-setup",
+    "crates/vibedeck-app",
+]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/Dragonk/vibedeck"
+description = "VibeDeck — fast, native desktop GUI (nakładka) for the Mistral Vibe CLI"
+
+[workspace.dependencies]
+vibedeck-core = { path = "crates/vibedeck-core" }
+vibedeck-acp = { path = "crates/vibedeck-acp" }
+vibedeck-vibe = { path = "crates/vibedeck-vibe" }
+vibedeck-setup = { path = "crates/vibedeck-setup" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+dirs = "5"
+log = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
