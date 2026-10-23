@@ -31,6 +31,14 @@ png = "0.17"
 calamine = "0.37"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 pdf-extract = "0.7"
+# real previews: styled docx/pptx parsing (quick-xml), rendered pdf pages (pdfium)
+quick-xml = "0.42"
+pdfium-render = { version = "0.9", default-features = false, features = [
+    "pdfium_latest",
+    "thread_safe",
+] }
+# mermaid diagram rendering in markdown previews (mermaid.ink png service)
+ureq = "2.10"
 toml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

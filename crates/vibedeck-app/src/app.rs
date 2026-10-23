@@ -205,6 +205,9 @@ impl VibedeckApp {
     pub fn reset_dock(&mut self) {
         self.dock.expanded.clear();
         self.dock.previews.clear();
+        self.dock.textures.clear();
+        self.dock.slide_idx.clear();
+        self.dock.sheet_idx.clear();
         self.dock.tab = crate::dock::DockTab::Files;
         self.dock.git.branch.clear();
         self.dock.git.entries.clear();

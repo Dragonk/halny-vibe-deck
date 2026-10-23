@@ -9,7 +9,8 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.5.2
+  VERSION: 0.6.0
+  PDFIUM_TAG: chromium/7881
 
 jobs:
   build:
@@ -34,15 +35,29 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: cargo test --workspace --locked
 
+      - name: Fetch pdfium (linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          curl -sL https://github.com/bblanchon/pdfium-binaries/releases/download/${{ env.PDFIUM_TAG }}/pdfium-linux-x64.tgz | tar -xz
+          cp lib/libpdfium.so target/release/
+
       - name: Package (linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: tar -czf vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz -C target/release vibedeck
+        run: tar -czf vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz -C target/release vibedeck libpdfium.so
+
+      - name: Fetch pdfium (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          curl.exe -sL -o pdfium.tgz https://github.com/bblanchon/pdfium-binaries/releases/download/${{ env.PDFIUM_TAG }}/pdfium-win-x64.tgz
+          tar -xzf pdfium.tgz bin/pdfium.dll
+          Copy-Item bin\pdfium.dll target\release\
 
       - name: Package (windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          Compress-Archive -Path target\release\vibedeck.exe -DestinationPath vibedeck-${{ env.VERSION }}-x86_64-windows.zip
+          Compress-Archive -Path target\release\vibedeck.exe,target\release\pdfium.dll -DestinationPath vibedeck-${{ env.VERSION }}-x86_64-windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -80,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.5.2-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.5.2-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.6.0-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.6.0-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -103,11 +118,34 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.5.2-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.6.0-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
-            ## What's new in v0.5.2
+            The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
+            library next to the binary — keep them together so PDF previews render.
+
+            ## What's new in v0.6.0
+
+            Real file previews — no more plain text dumps:
+
+            - 📄 **PDF pages are rendered** (via bundled pdfium) — actual page
+              images with the original layout, scrollable, first pages first.
+            - 📝 **DOCX renders as a document** — headings sized and colored,
+              bold/italic/underline/strikethrough, lists, tables, centered or
+              right-aligned paragraphs, hyperlinks preserved.
+            - 📊 **XLSX opens like Excel** — sheet tabs at the bottom, header
+              row, striped rows, column auto-sizing, multiple sheets (up to 16).
+            - 🖼 **PPTX shows actual slides** — real 16:9 slide geometry, shape
+              fills, centered/aligned text runs, embedded slide pictures, with
+              slide navigation.
+            - 🧜 **Mermaid diagrams in Markdown** — ```mermaid blocks are
+              rendered as images inline in the preview (via mermaid.ink; the
+              diagram source is sent to that service — see README).
+            - 📈 CSV/TSV and plain images unchanged, plus a nicer markdown
+              render with headings, lists and code blocks.
+
+            ## Also in v0.5.2
 
             - 🎛 **Model / mode / thinking dropdowns work** — clicking a chip
               now opens the choice list (the v0.5.1 popup never survived the

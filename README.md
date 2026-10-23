@@ -42,9 +42,17 @@ instant startup and a tiny memory footprint, in the spirit of the
   session mode (ask / accept-edits / …) and thinking level (low / high / max)
   per session — plus a working-directory chip and `@file` / `/command`
   autocomplete in the input bar.
-- **Workspace dock** — a right panel with a lazy project file tree with text
+- **Workspace dock** — a right panel with a lazy project file tree with
   previews and a Git tab (branch, changed files, per-file diffs), refreshed
-  after every completed turn (in the spirit of Claude Cowork).
+  after every completed turn (in the spirit of Claude Cowork). Previews are
+  real renders, not text dumps: **PDF** pages are rasterized with the bundled
+  [pdfium](https://github.com/bblanchon/pdfium-binaries) library, **DOCX**
+  renders as a styled document (headings, emphasis, lists, tables), **XLSX**
+  opens with sheet tabs and an Excel-style grid, **PPTX** shows actual slides
+  with shape geometry and embedded pictures, and Markdown supports
+  **Mermaid** diagrams (rendered via [mermaid.ink](https://mermaid.ink) —
+  the diagram source is sent to that public service, so don't put secrets
+  in diagrams if you're offline-shy).
 - **Full ACP protocol** — JSON-RPC 2.0 over stdio to `vibe-acp` on a worker
   thread: `initialize`, `session/new | load | prompt | cancel`,
   `session/set_config_option` (model/mode/thinking), streaming
@@ -123,7 +131,8 @@ non-blocking each frame.
 - Original project: [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus) (Apache-2.0)
 - Window move/resize behaviour follows [storytold/photocraft](https://github.com/storytold/photocraft)'s approach to frameless egui windows.
 - Bundled [Noto Sans Symbols 2](https://fonts.google.com/noto/specimen/Noto+Sans+Symbols+2) for interface glyphs — SIL OFL 1.1, see `crates/vibedeck-app/assets/NotoSansSymbols2-OFL.txt`.
-- File previews use the open-source crates [calamine](https://crates.io/crates/calamine) (Excel), [pdf-extract](https://crates.io/crates/pdf-extract) (PDF) and [zip](https://crates.io/crates/zip) (docx/pptx text).
+- File previews use the open-source crates [calamine](https://crates.io/crates/calamine) (Excel), [quick-xml](https://crates.io/crates/quick-xml) (docx/pptx parsing), [zip](https://crates.io/crates/zip) (OOXML containers), [pdfium-render](https://crates.io/crates/pdfium-render) (PDF rendering) and [pdf-extract](https://crates.io/crates/pdf-extract) (text-only PDF fallback).
+- Bundled [pdfium](https://github.com/bblanchon/pdfium-binaries) binaries (Apache-2.0 / BSD) ship inside the release archives so PDF previews work out of the box; pdfium is loaded from the executable directory first.
 - VibeDeck is licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 
 ---
