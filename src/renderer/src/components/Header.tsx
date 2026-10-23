@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
 
 export default function Header(): React.JSX.Element {
-  const { theme, toggleTheme, acpStatus, acpError, config } = useStore()
+  const { theme, toggleTheme, acpStatus, acpError, config, dockOpen, setDockOpen } = useStore()
   const tr = useTranslation(config.language)
 
   const getThemeIcon = () => {
@@ -47,8 +47,12 @@ export default function Header(): React.JSX.Element {
           <span className="activity-text">{activity.text}</span>
           <div className="activity-tooltip chart-tooltip">
             <div>{t(tr, 'statusLabel', { status: activity.text })}</div>
-            {acpStatus === 'connected' && <div style={{ marginTop: 2 }}>{tr.agentLabel}</div>}
-            {acpStatus === 'error' && acpError && <div style={{ marginTop: 2, color: '#f87171' }}>{acpError}</div>}
+            {acpStatus === 'connected' && (
+              <div style={{ marginTop: 2 }}>{tr.agentLabel}</div>
+            )}
+            {acpStatus === 'error' && acpError && (
+              <div style={{ marginTop: 2, color: '#f87171' }}>{acpError}</div>
+            )}
           </div>
         </div>
       </div>
@@ -57,31 +61,34 @@ export default function Header(): React.JSX.Element {
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
-          className="header-btn theme-btn"
-          onClick={toggleTheme}
-          title={getThemeTitle()}
+          className={`header-btn dock-toggle-btn ${dockOpen ? 'active' : ''}`}
+          onClick={() => setDockOpen(!dockOpen)}
+          title={tr.dockToggle}
         >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="15" y1="3" x2="15" y2="21" />
+          </svg>
+        </button>
+        <button className="header-btn theme-btn" onClick={toggleTheme} title={getThemeTitle()}>
           {getThemeIcon()}
         </button>
-        <button
-          className="header-btn"
-          onClick={() => window.api.window.minimize()}
-          title={tr.minimize}
-        >
+        <button className="header-btn" onClick={() => window.api.window.minimize()} title={tr.minimize}>
           ─
         </button>
-        <button
-          className="header-btn"
-          onClick={() => window.api.window.maximize()}
-          title={tr.maximize}
-        >
+        <button className="header-btn" onClick={() => window.api.window.maximize()} title={tr.maximize}>
           □
         </button>
-        <button
-          className="header-btn close-btn"
-          onClick={() => window.api.window.close()}
-          title={tr.close}
-        >
+        <button className="header-btn close-btn" onClick={() => window.api.window.close()} title={tr.close}>
           ✕
         </button>
       </div>

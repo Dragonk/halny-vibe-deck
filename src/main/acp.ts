@@ -3,11 +3,45 @@ import { BrowserWindow } from 'electron'
 import * as readline from 'readline'
 import { randomUUID } from 'crypto'
 
+export interface AcpConfigOptionChoice {
+  value: string
+  name: string
+  description?: string
+}
+
+export interface AcpConfigOption {
+  id: string
+  name: string
+  description?: string
+  category?: string
+  type: 'select' | 'boolean'
+  currentValue: string | boolean
+  options: AcpConfigOptionChoice[]
+}
+
+export interface AcpHistoryToolCall {
+  id: string
+  title: string
+  kind: string
+  status: 'running' | 'done' | 'error'
+  input?: Record<string, unknown>
+  output?: string
+}
+
+export interface AcpHistoryMessage {
+  role: 'user' | 'ai'
+  content: string
+  thinking?: Array<{ id: string; content: string }>
+  toolCalls?: AcpHistoryToolCall[]
+}
+
 export interface AcpEvent {
   type:
     | 'InitializationComplete'
     | 'SessionsList'
     | 'SessionInitialized'
+    | 'SessionHistory'
+    | 'SessionInfoUpdate'
     | 'MessageChunk'
     | 'ThinkingChunk'
     | 'ThinkingComplete'
@@ -18,6 +52,8 @@ export interface AcpEvent {
     | 'AskUserQuestion'
     | 'Plan'
     | 'AvailableCommandsUpdate'
+    | 'UsageUpdate'
+    | 'ConfigOptionsUpdate'
     | 'Error'
     | 'DebugLog'
     | 'Disconnected'
@@ -29,8 +65,12 @@ interface PendingRequest {
   reject: (err: Error) => void
 }
 
-type AcpMode = { id: string; name: string }
-type AcpModel = { modelId: string }
+type AcpMode = { id: string; name: string; description?: string }
+
+/** One buffered raw session/update notification (replay during session/load). */
+type RawUpdate = Record<string, unknown>
+
+const REQUEST_TIMEOUT_MS = 180_000
 
 export class AcpManager {
   private process: ChildProcess | null = null
@@ -39,9 +79,8 @@ export class AcpManager {
   private win: BrowserWindow | null = null
   private _pendingSummaryChunks: string[] | null = null
   private _pendingSummaryId: string | null = null
-  private _resumeNotSupported = false
-  // ACP sessions currently loading from disk — suppress replay notifications for these
-  private _suppressedSessions = new Set<string>()
+  /** session/load in flight for these ACP session ids — replay is buffered, not emitted */
+  private _replaying = new Map<string, RawUpdate[]>()
 
   setWindow(win: BrowserWindow): void {
     this.win = win
@@ -61,15 +100,15 @@ export class AcpManager {
       }
       const id = randomUUID()
       const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'
-      console.log('[ACP] >>> method:', method, 'id:', id, 'pending.size:', this.pending.size + 1)
+      console.log('[ACP] >>> method:', method, 'id:', id)
       this.pending.set(id, { resolve, reject })
 
       const timeout = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id)
-          reject(new Error(`ACP request timeout: ${method}`))
+          reject(new Error('ACP request timeout: ' + method))
         }
-      }, 120_000)
+      }, REQUEST_TIMEOUT_MS)
 
       this.pending.get(id)!.resolve = (v) => {
         clearTimeout(timeout)
@@ -86,12 +125,11 @@ export class AcpManager {
 
   private handleLine(line: string): void {
     if (!line.trim()) return
-    console.log('[ACP] <<<', line.substring(0, 200))
     let msg: Record<string, unknown>
     try {
       msg = JSON.parse(line)
     } catch {
-      this.emit({ type: 'DebugLog', data: { message: `parse error: ${line}` } })
+      this.emit({ type: 'DebugLog', data: { message: 'parse error: ' + line.slice(0, 200) } })
       return
     }
 
@@ -100,13 +138,12 @@ export class AcpManager {
 
     // Response to our request
     if (id && !method && (msg.result !== undefined || msg.error !== undefined)) {
-      console.log('[ACP] Response for id:', id, 'pending.size:', this.pending.size)
       const pending = this.pending.get(id)
       if (pending) {
         this.pending.delete(id)
         if (msg.error) {
           const err = msg.error as { code: number; message: string }
-          pending.reject(new Error(`[${err.code}] ${err.message}`))
+          pending.reject(new Error('[' + err.code + '] ' + err.message))
         } else {
           if (id === this._pendingSummaryId && this._pendingSummaryChunks) {
             const summary = this._pendingSummaryChunks.join('')
@@ -121,9 +158,8 @@ export class AcpManager {
       return
     }
 
-    // Agent request to client (has id + method) — auto-approve all
+    // Agent request to client (has id + method)
     if (id !== undefined && method) {
-      console.log('[ACP] Agent request:', method, 'id:', id)
       this.handleAgentRequest(id, method, msg.params as Record<string, unknown>)
       return
     }
@@ -134,256 +170,400 @@ export class AcpManager {
     }
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Config options helpers
+  // ---------------------------------------------------------------------------
+
+  private parseConfigOptions(
+    raw: unknown
+  ): AcpConfigOption[] {
+    if (!Array.isArray(raw)) return []
+    const out: AcpConfigOption[] = []
+    for (const item of raw as Array<Record<string, unknown>>) {
+      const id = (item.id ?? item.configId) as string | undefined
+      if (!id) continue
+      const type = (item.type as string) === 'boolean' ? 'boolean' : 'select'
+      const optionsRaw = (item.options ?? []) as Array<Record<string, unknown>>
+      out.push({
+        id,
+        name: (item.name as string) ?? id,
+        description: item.description as string | undefined,
+        category: (item.category as string) ?? undefined,
+        type,
+        currentValue: (item.currentValue as string | boolean) ?? (type === 'boolean' ? false : ''),
+        options: optionsRaw.map((o) => ({
+          value: String(o.value ?? ''),
+          name: (o.name as string) ?? String(o.value ?? ''),
+          description: o.description as string | undefined
+        }))
+      })
+    }
+    return out
+  }
+
+  private parseModes(result: Record<string, unknown>): {
+    modes: AcpMode[]
+    currentModeId: string | null
+  } {
+    const modesRaw = (result.modes as Record<string, unknown> | undefined) ?? {}
+    const available = (modesRaw.availableModes as AcpMode[] | undefined) ?? []
+    const modes = available.map((m) => ({ id: m.id, name: m.name, description: m.description }))
+    const currentModeId = (modesRaw.currentModeId as string | undefined) ?? (modes.length > 0 ? modes[0].id : null)
+    return { modes, currentModeId }
+  }
+
+  // ---------------------------------------------------------------------------
+  // session/update handling (live + replay)
+  // ---------------------------------------------------------------------------
+
+  private contentText(content: unknown): string {
+    if (typeof content === 'string') return content
+    if (content && typeof content === 'object') {
+      const c = content as Record<string, unknown>
+      if (typeof c.text === 'string') return c.text
+      if (typeof c.thinking === 'string') return c.thinking
+    }
+    return ''
+  }
+
+  /** Extract displayable text out of a tool call content/rawOutput payload. */
+  private toolOutputText(update: Record<string, unknown>): string | undefined {
+    const rawOutput = update.rawOutput ?? update.raw_output ?? update.output
+    const content = update.content
+    const parts: string[] = []
+
+    if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (block.type === 'content' || block.type === 'tool_error') {
+          const inner = this.contentText(block.content)
+          if (inner) parts.push(inner)
+        } else if (block.type === 'file_edit' || block.type === 'terminal') {
+          const inner = this.contentText(block.content)
+          if (inner) parts.push(inner)
+        }
+      }
+    } else if (content && typeof content === 'object') {
+      const inner = this.contentText(content)
+      if (inner) parts.push(inner)
+    }
+
+    if (parts.length === 0) {
+      if (typeof rawOutput === 'string') return rawOutput
+      if (rawOutput !== undefined && rawOutput !== null) {
+        try {
+          return JSON.stringify(rawOutput, null, 2)
+        } catch {
+          return String(rawOutput)
+        }
+      }
+    }
+    return parts.length > 0 ? parts.join('\n') : undefined
+  }
+
+  private normalizeToolStatus(s: unknown): 'running' | 'done' | 'error' {
+    if (s === 'completed' || s === 'done' || s === 'success') return 'done'
+    if (s === 'failed' || s === 'error') return 'error'
+    return 'running'
+  }
+
+  private parseRawInput(raw: unknown): Record<string, unknown> | undefined {
+    if (!raw) return undefined
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw)
+      } catch {
+        return undefined
+      }
+    }
+    if (typeof raw === 'object') return raw as Record<string, unknown>
+    return undefined
+  }
+
   private handleSessionUpdate(params: Record<string, unknown>): void {
     const sessionId = params.sessionId as string
-    // Suppress replay notifications while session/load is in progress for this session
-    if (this._suppressedSessions.has(sessionId)) return
     const update = params.update as Record<string, unknown>
+    if (!update) return
 
-    const type = update.type as string | undefined
-    const kind = update.kind as string | undefined
     const sessionUpdate = update.sessionUpdate as string | undefined
+    const type = update.type as string | undefined
 
-    // Text content updates - check sessionUpdate for thinking vs message
-    const content = update.content as Record<string, unknown> | undefined
-    if (content?.text) {
-      const text = content.text as string
-      
-      if (sessionUpdate === 'agent_thought_chunk') {
-        // This is thinking/reasoning content
-        this.emit({
-          type: 'ThinkingChunk',
-          data: { sessionId, blockId: 'thinking', text }
-        })
-      } else if (sessionUpdate === 'agent_message_chunk') {
-        // This is the actual assistant message
-        if (this._pendingSummaryChunks) {
-          this._pendingSummaryChunks.push(text)
-        } else {
-          this.emit({ type: 'MessageChunk', data: { sessionId, text } })
-        }
-      }
-      // Other sessionUpdate values (like tool_call) are handled in their own branches
-    }
-    
-    // Handle thinking end marker
-    if (sessionUpdate === 'agent_thought_end') {
-      this.emit({
-        type: 'ThinkingComplete',
-        data: { sessionId, blockId: 'thinking' }
-      })
+    // Replay buffering: while session/load is in flight for this session,
+    // hold the raw update; assembly happens when the response arrives.
+    if (this._replaying.has(sessionId)) {
+      this._replaying.get(sessionId)!.push(params)
+      return
     }
 
-    // Handle available commands update (comes directly in update, not in type field)
-    const availableCommands = update.availableCommands as Array<{
-      name: string
-      description: string
-      input?: { hint?: string }
-    }> | undefined
-    if (availableCommands) {
-      this.emit({
-        type: 'AvailableCommandsUpdate',
-        data: { sessionId, commands: availableCommands }
-      })
-    }
+    switch (sessionUpdate) {
+      case 'user_message_chunk':
+        // Live user echo — the renderer already displays the message it sent.
+        break
 
-    // Helper: parse rawInput (may be JSON string or object)
-    const parseRawInput = (raw: unknown): Record<string, unknown> | undefined => {
-      if (!raw) return undefined
-      if (typeof raw === 'string') {
-        try { return JSON.parse(raw) } catch { return undefined }
-      }
-      if (typeof raw === 'object') return raw as Record<string, unknown>
-      return undefined
-    }
-
-    // Helper: normalize ACP status strings to our internal values
-    const normalizeStatus = (s: string): 'running' | 'done' | 'error' => {
-      if (s === 'completed' || s === 'done' || s === 'success') return 'done'
-      if (s === 'failed' || s === 'error') return 'error'
-      return 'running'
-    }
-
-
-
-    // Tool call start (session_update="tool_call")
-    if (sessionUpdate === 'tool_call' || type === 'tool_call') {
-      const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
-      const toolName = (update.title ?? update.name) as string | undefined
-      const rawInput = update.rawInput ?? update.raw_input
-
-      if (toolCallId && toolName) {
-        this.toolCallNames.set(toolCallId, toolName)
-        console.log('[ACP] Emitting ToolCall start:', toolName, toolCallId)
-        this.emit({
-          type: 'ToolCall',
-          data: {
-            sessionId,
-            toolCallId,
-            title: toolName,
-            kind: (kind ?? update.kind ?? 'execute') as string,
-            status: 'running',
-            input: parseRawInput(rawInput),
-          }
-        })
-      }
-    }
-
-    // Tool call completion (session_update="tool_call_update")
-    if (sessionUpdate === 'tool_call_update') {
-      const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
-      const rawStatus = (update.status ?? '') as string
-      const rawOutput = update.output ?? update.result ?? update.content
-      const output = rawOutput === undefined ? undefined
-        : typeof rawOutput === 'string' ? rawOutput
-        : JSON.stringify(rawOutput, null, 2)
-      if (toolCallId) {
-        console.log('[ACP] Emitting ToolCallUpdate:', toolCallId, rawStatus)
-        this.emit({
-          type: 'ToolCallUpdate',
-          data: {
-            sessionId,
-            toolCallId,
-            status: normalizeStatus(rawStatus),
-            output
-          }
-        })
-      }
-      return // don't fall through to switch
-    }
-
-    // Switch for type-tagged updates (older/alternative protocol format)
-    switch (type) {
       case 'agent_message_chunk': {
-        const chunk = update.chunk as Record<string, unknown>
-        if (typeof chunk?.text === 'string') {
-          if (this._pendingSummaryChunks) {
-            this._pendingSummaryChunks.push(chunk.text as string)
-          } else {
-            this.emit({ type: 'MessageChunk', data: { sessionId, text: chunk.text } })
-          }
-        }
-        // Thinking/reasoning blocks
-        if (chunk?.type === 'thinking' && typeof chunk?.thinking === 'string') {
-          this.emit({
-            type: 'ThinkingChunk',
-            data: { sessionId, blockId: chunk.id ?? 'thinking', text: chunk.thinking }
-          })
-        }
-        if (chunk?.type === 'thinking_end') {
-          this.emit({
-            type: 'ThinkingComplete',
-            data: { sessionId, blockId: chunk.id ?? 'thinking' }
-          })
+        const text = this.contentText(update.content)
+        const messageId = (update.messageId as string | undefined) ?? 'current'
+        if (text) {
+          this.emit({ type: 'MessageChunk', data: { sessionId, text, messageId } })
         }
         break
       }
+
+      case 'agent_thought_chunk': {
+        const text = this.contentText(update.content)
+        const blockId = (update.messageId as string | undefined) ?? 'thinking'
+        if (text) {
+          this.emit({ type: 'ThinkingChunk', data: { sessionId, blockId, text } })
+        }
+        break
+      }
+
+      case 'agent_thought_end':
+        this.emit({ type: 'ThinkingComplete', data: { sessionId, blockId: 'thinking' } })
+        break
+
       case 'tool_call': {
-        // Only emit if not already handled by sessionUpdate branch above
-        if (sessionUpdate !== 'tool_call') {
-          const tc = update.toolCall as Record<string, unknown>
-          const input = tc?.input as Record<string, unknown> | undefined
-          const toolName = (tc?.name as string) ?? ''
-          const fileChanges = this.extractFileChanges(toolName, input)
+        const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
+        const toolName = (update.title ?? update.name) as string | undefined
+        if (toolCallId && toolName) {
+          this.toolCallNames.set(toolCallId, toolName)
           this.emit({
             type: 'ToolCall',
             data: {
               sessionId,
-              toolCallId: tc?.id ?? '',
+              toolCallId,
               title: toolName,
-              kind: (tc?.type as string) ?? '',
-              status: 'running',
-              input,
-              fileChanges
+              kind: (update.kind ?? 'execute') as string,
+              status: this.normalizeToolStatus(update.status ?? 'in_progress'),
+              input: this.parseRawInput(update.rawInput ?? update.raw_input)
             }
           })
         }
         break
       }
+
       case 'tool_call_update': {
-        // Only emit if not already handled by sessionUpdate branch above
-        if (sessionUpdate !== 'tool_call_update') {
-          const tc = update.toolCall as Record<string, unknown>
-          const rawSt = (tc?.status as string) ?? ''
-          const rawOut = tc?.output ?? tc?.result ?? tc?.content
-          const output = rawOut === undefined ? undefined
-            : typeof rawOut === 'string' ? rawOut
-            : JSON.stringify(rawOut, null, 2)
-          const st: 'running' | 'done' | 'error' =
-            rawSt === 'completed' || rawSt === 'done' ? 'done'
-            : rawSt === 'failed' || rawSt === 'error' ? 'error'
-            : 'running'
+        const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
+        if (toolCallId) {
           this.emit({
             type: 'ToolCallUpdate',
             data: {
               sessionId,
-              toolCallId: tc?.id ?? '',
-              status: st,
-              output
+              toolCallId,
+              status: this.normalizeToolStatus(update.status),
+              output: this.toolOutputText(update)
             }
           })
         }
         break
       }
-      case 'plan': {
-        this.emit({ type: 'Plan', data: { sessionId, entries: update.entries ?? [] } })
+
+      case 'plan':
+      case 'plan_update':
+        this.emit({ type: 'Plan', data: { sessionId, entries: (update.entries as unknown[]) ?? [] } })
+        break
+
+      case 'available_commands_update': {
+        const commands = (update.availableCommands as Array<Record<string, unknown>>) ?? []
+        this.emit({
+          type: 'AvailableCommandsUpdate',
+          data: {
+            sessionId,
+            commands: commands.map((c) => ({
+              name: c.name as string,
+              description: (c.description as string) ?? '',
+              hint: ((c.input as Record<string, unknown> | undefined)?.hint as string) ?? undefined
+            }))
+          }
+        })
         break
       }
-      default:
-        this.emit({ type: 'DebugLog', data: { message: `unknown update: ${type}` } })
+
+      case 'config_option_update': {
+        const options = this.parseConfigOptions(update.configOptions)
+        if (options.length > 0) {
+          this.emit({ type: 'ConfigOptionsUpdate', data: { sessionId, configOptions: options } })
+        }
+        break
+      }
+
+      case 'current_mode_update': {
+        const modeId = (update.currentModeId as string) ?? undefined
+        if (modeId) {
+          this.emit({ type: 'ConfigOptionsUpdate', data: { sessionId, modeChanged: modeId } })
+        }
+        break
+      }
+
+      case 'session_info_update': {
+        const title = (update.title as string) ?? undefined
+        this.emit({ type: 'SessionInfoUpdate', data: { sessionId, title } })
+        break
+      }
+
+      case 'usage_update': {
+        const meta = (update._meta ?? update.meta) as Record<string, unknown> | undefined
+        const cost = (update.cost as Record<string, unknown> | undefined) ?? undefined
+        this.emit({
+          type: 'UsageUpdate',
+          data: {
+            sessionId,
+            contextUsed: (update.used as number) ?? 0,
+            contextSize: (update.size as number) ?? 0,
+            cost: cost ? { amount: cost.amount as number, currency: (cost.currency as string) ?? 'USD' } : undefined,
+            steps: (meta?.steps as number) ?? undefined,
+            promptTokens: (meta?.promptTokens as number) ?? undefined,
+            completionTokens: (meta?.completionTokens as number) ?? undefined,
+            cachedTokens: (meta?.cachedTokens as number) ?? undefined,
+            totalTokens: (meta?.totalTokens as number) ?? undefined,
+            tokensPerSecond: (meta?.tokensPerSecond as number) ?? undefined,
+            lastTurnDuration: (meta?.lastTurnDuration as number) ?? undefined,
+            lastTurnTotalTokens: (meta?.lastTurnTotalTokens as number) ?? undefined
+          }
+        })
+        break
+      }
+
+      default: {
+        // Legacy/alternative protocol shapes
+        if (type === 'agent_message_chunk') {
+          const chunk = update.chunk as Record<string, unknown> | undefined
+          const text = this.contentText(chunk)
+          if (text) {
+            if (this._pendingSummaryChunks) this._pendingSummaryChunks.push(text)
+            else this.emit({ type: 'MessageChunk', data: { sessionId, text } })
+          }
+        } else {
+          this.emit({ type: 'DebugLog', data: { message: 'unknown update: ' + (sessionUpdate ?? type) } })
+        }
+      }
     }
   }
 
-  private extractFileChanges(
-    toolName: string,
-    input?: Record<string, unknown>
-  ): Array<{ path: string; action: string }> | undefined {
-    if (!input) return undefined
-    const path = (input.path ?? input.file_path ?? input.filename) as string | undefined
-    if (!path) return undefined
 
-    const lowerName = toolName.toLowerCase()
-    let action: string
-    if (lowerName.includes('creat') || lowerName.includes('write') || lowerName.includes('new')) {
-      action = 'added'
-    } else if (lowerName.includes('delet') || lowerName.includes('remov')) {
-      action = 'deleted'
-    } else {
-      action = 'modified'
+  // ---------------------------------------------------------------------------
+  // Replay assembly (real session resume)
+  // ---------------------------------------------------------------------------
+
+  private assembleHistory(rawUpdates: RawUpdate[]): { messages: AcpHistoryMessage[]; title?: string } {
+    const messages: AcpHistoryMessage[] = []
+    const toolCallsById = new Map<string, AcpHistoryToolCall>()
+    let currentAi: AcpHistoryMessage | null = null
+
+    const ensureAi = (): AcpHistoryMessage => {
+      if (!currentAi) {
+        currentAi = { role: 'ai', content: '', thinking: [], toolCalls: [] }
+        messages.push(currentAi)
+      }
+      return currentAi
     }
-    return [{ path, action }]
+
+    for (const params of rawUpdates) {
+      const update = (params.update as Record<string, unknown>) ?? {}
+      const sessionUpdate = update.sessionUpdate as string | undefined
+      const type = update.type as string | undefined
+      const kind = sessionUpdate ?? type
+
+      if (kind === 'user_message_chunk') {
+        const text = this.contentText(update.content) || this.contentText(update.chunk)
+        if (text) {
+          messages.push({ role: 'user', content: text })
+          currentAi = null
+        }
+      } else if (kind === 'agent_message_chunk') {
+        const text = this.contentText(update.content) || this.contentText(update.chunk)
+        if (text) {
+          ensureAi().content += text
+        }
+      } else if (kind === 'agent_thought_chunk') {
+        const text = this.contentText(update.content) || this.contentText(update.chunk)
+        if (text) {
+          const ai = ensureAi()
+          const blocks = (ai.thinking ??= [])
+          const last = blocks[blocks.length - 1]
+          if (last) {
+            last.content += text
+          } else {
+            blocks.push({ id: 'thinking', content: text })
+          }
+        }
+      } else if (kind === 'tool_call') {
+        const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
+        const toolName = (update.title ?? update.name) as string | undefined
+        if (toolCallId && toolName) {
+          const tc: AcpHistoryToolCall = {
+            id: toolCallId,
+            title: toolName,
+            kind: (update.kind as string) ?? 'execute',
+            status: this.normalizeToolStatus(update.status ?? 'in_progress'),
+            input: this.parseRawInput(update.rawInput ?? update.raw_input)
+          }
+          toolCallsById.set(toolCallId, tc)
+          ensureAi().toolCalls!.push(tc)
+        }
+      } else if (kind === 'tool_call_update') {
+        const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
+        if (toolCallId) {
+          const tc = toolCallsById.get(toolCallId)
+          if (tc) {
+            const out = this.toolOutputText(update)
+            if (out !== undefined) tc.output = out
+            tc.status = this.normalizeToolStatus(update.status)
+          }
+        }
+      }
+    }
+
+    // Session title: the last session_info_update that carries one
+    const lastInfo = rawUpdates
+      .map((p) => (p.update as Record<string, unknown>) ?? {})
+      .filter((u) => (u.sessionUpdate ?? u.type) === 'session_info_update' && typeof u.title === 'string')
+      .map((u) => u.title as string)
+    const title = lastInfo.length > 0 ? lastInfo[lastInfo.length - 1] : undefined
+
+    // Drop empty AI wrappers (only thinking/toolcalls present is fine, but no
+    // content at all and no calls means nothing to show)
+    return { messages, title }
   }
+
+  // ---------------------------------------------------------------------------
+  // Agent → client requests (approvals, questions)
+  // ---------------------------------------------------------------------------
 
   private pendingApprovals = new Map<string, boolean>()
   private toolCallNames = new Map<string, string>()
 
   private handleAgentRequest(id: string, method: string, params: unknown): void {
-    // ask_user_question: show question UI and wait for user answer
-    const isQuestion = method === 'ask_user_question' || method.includes('ask_user') || method === 'user/question'
+    const isQuestion =
+      method === 'ask_user_question' || method.includes('ask_user') || method === 'user/question'
     if (isQuestion) {
       const p = params as Record<string, unknown>
       this.emit({
         type: 'AskUserQuestion',
-        data: { requestId: id, question: p?.question ?? p?.prompt ?? '', choices: p?.choices ?? p?.options ?? [] }
+        data: {
+          requestId: id,
+          question: (p?.question as string) ?? (p?.prompt as string) ?? '',
+          choices: (p?.choices ?? p?.options ?? []) as string[]
+        }
       })
       this.pendingApprovals.set(id, false)
       return
     }
 
-    // Methods that require explicit user approval
     const needsApproval = method.includes('approv') || method.includes('permission') || method === 'tool/call'
     if (needsApproval) {
       const p = params as Record<string, unknown>
-      const toolCallId = (p?.toolCall as Record<string, unknown> | undefined)?.toolCallId as string | undefined
-      const toolName = toolCallId ? (this.toolCallNames.get(toolCallId) ?? undefined) : undefined
+      const toolCallId = (
+        (p?.toolCall as Record<string, unknown> | undefined)?.toolCallId as string | undefined
+      )
+      const toolName = toolCallId ? this.toolCallNames.get(toolCallId) ?? undefined : undefined
       this.emit({
         type: 'ToolApprovalRequest',
         data: { requestId: id, method, params: { ...(p ?? {}), resolvedToolName: toolName } }
       })
-      // Store as pending — will be resolved by approveToolRequest()
       this.pendingApprovals.set(id, false)
     } else {
-      // Auto-approve protocol-level requests (fs/*, terminal/*, initialize, etc.)
+      // Auto-approve protocol-level requests
       const response = JSON.stringify({ jsonrpc: '2.0', id, result: { approved: true } }) + '\n'
       this.process?.stdin?.write(response)
     }
@@ -412,9 +592,13 @@ export class AcpManager {
     this.process?.stdin?.write(response)
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+
   async start(acpPath: string): Promise<void> {
     if (this.process) await this.stop()
-    this._resumeNotSupported = false
 
     const proc = spawn(acpPath, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -426,11 +610,9 @@ export class AcpManager {
     rl.on('line', (line) => this.handleLine(line))
 
     proc.stderr!.on('data', (d: Buffer) => {
-      this.emit({ type: 'DebugLog', data: { message: `stderr: ${d.toString().trim()}` } })
+      this.emit({ type: 'DebugLog', data: { message: 'stderr: ' + d.toString().trim() } })
     })
 
-    // Guard: only clear `this.process` if the exiting process is still the current one.
-    // Without this, stop() → new spawn() → old exit event would null out the new process.
     proc.on('exit', (code) => {
       if (this.process === proc) {
         this.process = null
@@ -439,10 +621,10 @@ export class AcpManager {
       }
     })
 
-    // Initialize handshake (no clientCapabilities — vibe-acp returns -32603 if unexpected fields present)
+    // Initialize handshake (no clientCapabilities — vibe-acp rejects unexpected fields)
     const result = (await this.sendRequest('initialize', {
       protocolVersion: 1,
-      clientInfo: { name: 'Mistral Vibe Nexus', version: '0.2.0' }
+      clientInfo: { name: 'Mistral Vibe Nexus', version: '0.3.0' }
     })) as Record<string, unknown>
 
     this.emit({
@@ -450,7 +632,6 @@ export class AcpManager {
       data: { protocolVersion: result.protocolVersion ?? 1 }
     })
 
-    // Load session history from ACP
     await this.listSessions()
   }
 
@@ -458,62 +639,53 @@ export class AcpManager {
     try {
       const result = (await this.sendRequest('session/list', {})) as Record<string, unknown>
       const raw = (result.sessions ?? result.items ?? []) as Array<Record<string, unknown>>
-      const sessions = raw.map((s) => ({
-        sessionId: s.sessionId ?? s.id ?? '',
-        name: (s.name ?? s.title ?? '') as string,
-        cwd: (s.cwd ?? s.workingDirectory ?? '') as string,
-        startTime: (s.startTime ?? s.createdAt ?? '') as string
-      })).filter((s) => s.sessionId)
+      const sessions = raw
+        .map((s) => ({
+          sessionId: (s.sessionId ?? s.id ?? '') as string,
+          title: (s.title ?? s.name ?? '') as string,
+          cwd: (s.cwd ?? s.workingDirectory ?? '') as string,
+          updatedAt: (s.updatedAt ?? s.updated_at ?? s.startTime ?? '') as string
+        }))
+        .filter((s) => s.sessionId)
+        // Newest first — the sidebar relies on this order
+        .sort(
+          (a, b) =>
+            (b.updatedAt ? new Date(b.updatedAt).getTime() : 0) -
+            (a.updatedAt ? new Date(a.updatedAt).getTime() : 0)
+        )
       this.emit({ type: 'SessionsList', data: { sessions } })
     } catch {
-      // session/list not supported — emit empty list silently
       this.emit({ type: 'SessionsList', data: { sessions: [] } })
     }
   }
 
-  async newSession(cwd: string, model: string): Promise<void> {
+  async newSession(cwd: string): Promise<void> {
     const result = (await this.sendRequest('session/new', {
       cwd,
       mcpServers: []
     })) as Record<string, unknown>
 
     this.currentSessionId = result.sessionId as string
-
-    const modes: Array<{ id: string; name: string }> = ((
-      (result.modes as Record<string, unknown>)?.availableModes as AcpMode[]
-    ) ?? []).map((m) => ({ id: m.id, name: m.name }))
-
-    const models: string[] = ((
-      (result.models as Record<string, unknown>)?.availableModels as AcpModel[]
-    ) ?? []).map((m) => m.modelId)
-
-    // Try to get session title/name
-    let sessionTitle: string | undefined
-    try {
-      const nameResult = (await this.sendRequest('session/name', {
-        sessionId: this.currentSessionId
-      })) as Record<string, unknown>
-      sessionTitle = nameResult.name as string | undefined
-    } catch {
-      // Session name not available
-    }
+    const { modes, currentModeId } = this.parseModes(result)
+    const configOptions = this.parseConfigOptions(result.configOptions)
 
     this.emit({
       type: 'SessionInitialized',
-      data: { sessionId: this.currentSessionId, modes, models, sessionTitle }
+      data: {
+        sessionId: this.currentSessionId,
+        modes,
+        currentModeId,
+        configOptions
+      }
     })
-
-    // Set default model
-    if (model && models.length > 0) {
-      const target = models.includes(model) ? model : models[0]
-      await this.setConfigOption('model', target).catch(() => {})
-    }
   }
 
-  async loadSession(sessionId: string, cwd: string, model: string): Promise<void> {
+  async loadSession(sessionId: string, cwd: string): Promise<void> {
     console.log('[ACP] loadSession:', sessionId, 'cwd:', cwd)
-    // Suppress replay notifications during load so renderer doesn't see duplicate old messages
-    this._suppressedSessions.add(sessionId)
+    // Buffer replayed updates while the request is in flight; vibe-acp replays
+    // the whole history via session/update BEFORE the session/load response
+    // arrives, so emitting them live would lose them.
+    this._replaying.set(sessionId, [])
     try {
       const result = (await this.sendRequest('session/load', {
         sessionId,
@@ -523,80 +695,29 @@ export class AcpManager {
 
       this.currentSessionId = sessionId
 
-      const modes: Array<{ id: string; name: string }> = ((
-        (result.modes as Record<string, unknown>)?.availableModes as AcpMode[]
-      ) ?? []).map((m) => ({ id: m.id, name: m.name }))
+      const buffered = this._replaying.get(sessionId) ?? []
+      this._replaying.delete(sessionId)
+      const { messages, title } = this.assembleHistory(buffered)
 
-      const models: string[] = ((
-        (result.models as Record<string, unknown>)?.availableModels as AcpModel[]
-      ) ?? []).map((m) => m.modelId)
-
-      this.emit({
-        type: 'SessionInitialized',
-        data: { sessionId, modes, models, sessionTitle: undefined }
-      })
-
-      if (model && models.length > 0) {
-        const target = models.includes(model) ? model : models[0]
-        await this.setConfigOption('model', target).catch(() => {})
-      }
-    } finally {
-      this._suppressedSessions.delete(sessionId)
-    }
-  }
-
-  async resumeSession(sessionId: string, cwd: string, model: string): Promise<void> {
-    if (this._resumeNotSupported) {
-      console.log('[ACP] resumeSession skipped - not supported, creating new session')
-      await this.newSession(cwd, model)
-      return
-    }
-
-    console.log('[ACP] resumeSession called with sessionId:', sessionId, 'cwd:', cwd, 'model:', model)
-    try {
-      const result = (await this.sendRequest('session/resume', {
-        sessionId,
-        cwd,
-        mcpServers: []
-      })) as Record<string, unknown>
-
-      console.log('[ACP] session/resume result:', JSON.stringify(result).substring(0, 200))
-      this.currentSessionId = sessionId
-
-      const modes: Array<{ id: string; name: string }> = ((
-        (result.modes as Record<string, unknown>)?.availableModes as AcpMode[]
-      ) ?? []).map((m) => ({ id: m.id, name: m.name }))
-
-      const models: string[] = ((
-        (result.models as Record<string, unknown>)?.availableModels as AcpModel[]
-      ) ?? []).map((m) => m.modelId)
+      const { modes, currentModeId } = this.parseModes(result)
+      const configOptions = this.parseConfigOptions(result.configOptions)
 
       this.emit({
-        type: 'SessionInitialized',
-        data: { sessionId: this.currentSessionId, modes, models, sessionTitle: undefined }
+        type: 'SessionHistory',
+        data: { sessionId, messages, title }
       })
-
-      if (model && models.length > 0) {
-        const target = models.includes(model) ? model : models[0]
-        await this.setConfigOption('model', target).catch(() => {})
-      }
+      this.emit({
+        type: 'SessionInitialized',
+        data: { sessionId, modes, currentModeId, configOptions, sessionTitle: title }
+      })
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      if (errMsg.includes('Method not implemented') || errMsg.includes('Method not found')) {
-        console.log('[ACP] session/resume not supported, marking and falling back to new session')
-        this._resumeNotSupported = true
-        await this.newSession(cwd, model)
-      } else {
-        console.log('[ACP] session/resume error:', err)
-        console.log('[ACP] falling back to new session')
-        await this.newSession(cwd, model)
-      }
+      this._replaying.delete(sessionId)
+      throw err
     }
   }
 
   async sendPrompt(text: string, acpSessionId?: string): Promise<void> {
     const sid = acpSessionId ?? this.currentSessionId
-    console.log('[ACP] sendPrompt called, sid:', sid, 'currentSessionId:', this.currentSessionId)
     if (!sid) throw new Error('No active session')
     if (sid !== this.currentSessionId) {
       this.currentSessionId = sid
@@ -622,7 +743,6 @@ export class AcpManager {
       method: 'session/cancel',
       params: { sessionId: acpSessionId }
     }) + '\n'
-    console.log('[ACP] cancelSession:', acpSessionId)
     this.process.stdin.write(notification)
   }
 
@@ -641,7 +761,6 @@ export class AcpManager {
     if (!this.process || !this.currentSessionId) throw new Error('ACP not ready')
 
     return new Promise((resolve, reject) => {
-      const chunks: string[] = []
       const summaryRequestId = randomUUID()
       let settled = false
 
@@ -655,7 +774,7 @@ export class AcpManager {
           cleanup()
           reject(new Error('Context summary timeout'))
         }
-      }, 120_000)
+      }, REQUEST_TIMEOUT_MS)
 
       this.pending.set(summaryRequestId, {
         resolve: (value: unknown) => {
@@ -676,14 +795,16 @@ export class AcpManager {
         }
       })
 
-      this._pendingSummaryChunks = chunks
+      this._pendingSummaryChunks = []
       this._pendingSummaryId = summaryRequestId
 
       const formattedMessages = messages
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+        .map((m) => m.role.toUpperCase() + ': ' + m.content)
         .join('\n')
 
-      const summaryPrompt = `Please briefly summarize the following conversation for context. Focus on key topics, decisions, and current state. Be concise (2-3 sentences max).\n\n${formattedMessages}`
+      const summaryPrompt =
+        'Please briefly summarize the following conversation for context. Focus on key topics, decisions, and current state. Be concise (2-3 sentences max).\n\n' +
+        formattedMessages
 
       const msg = JSON.stringify({
         jsonrpc: '2.0',
@@ -701,15 +822,13 @@ export class AcpManager {
 
   async stop(): Promise<void> {
     if (this.process) {
-      // Remove all listeners so the exit event doesn't fire after we null the ref
       this.process.removeAllListeners()
       this.process.stdout?.removeAllListeners()
       this.process.stderr?.removeAllListeners()
       this.process.kill()
       this.process = null
       this.currentSessionId = null
-      this._resumeNotSupported = false
-      this._suppressedSessions.clear()
+      this._replaying.clear()
     }
     this.pending.forEach((p) => p.reject(new Error('ACP stopped')))
     this.pending.clear()
@@ -721,3 +840,4 @@ export class AcpManager {
 }
 
 export const acpManager = new AcpManager()
+

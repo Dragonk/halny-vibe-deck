@@ -1209,6 +1209,12 @@ function ToolCallBlock({
             }
             return (
               <>
+                {extractToolCallPath(toolCall) && (
+                  <ToolCallPathChip
+                    path={extractToolCallPath(toolCall) as string}
+                    acpSessionId={acpSessionId}
+                  />
+                )}
                 {toolCall.input && Object.keys(toolCall.input).length > 0 && (
                   <pre className="tool-call-input">
                     {JSON.stringify(toolCall.input, null, 2)}
@@ -1309,6 +1315,70 @@ function parseContent(content: string): MarkdownSegment[] {
   return segments;
 }
 
+// Extracts a primary file/directory path from a tool call input, if present.
+function extractToolCallPath(toolCall: ToolCall): string | null {
+  const inp = toolCall.input ?? {};
+  const candidates = [inp.path, inp.file_path, inp.filename, inp.file, inp.dir, inp.directory];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.length > 0) return c;
+  }
+  return null;
+}
+
+// Resolves a possibly relative path against the owning session working directory.
+function resolveSessionPath(rawPath: string, acpSessionId?: string): string {
+  const BS = String.fromCharCode(92);
+  let path = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  const st = useStore.getState();
+  const session = acpSessionId
+    ? st.sessions.find((s) => s.acpSessionId === acpSessionId)
+    : st.sessions.find((s) => s.id === st.currentSessionId);
+  const cwd = session?.workingDirectory || st.workingDirectory || "";
+  const isAbs = path.startsWith("/") || path.startsWith(BS) || /^[A-Za-z]:/.test(path);
+  if (!isAbs && cwd) {
+    const sep = cwd.includes(BS) ? BS : "/";
+    const base = cwd.endsWith("/") || cwd.endsWith(BS) ? cwd : cwd + sep;
+    path = base + path;
+  }
+  return path;
+}
+
+// Clickable path chip shown in expanded tool calls.
+function ToolCallPathChip({
+  path,
+  acpSessionId,
+}: {
+  path: string;
+  acpSessionId?: string;
+}): React.JSX.Element {
+  const openFilePreview = useStore((s) => s.openFilePreview);
+  return (
+    <button
+      className="tool-call-path"
+      title={path}
+      onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId))}
+    >
+      {path}
+    </button>
+  );
+}
+
+// Heuristic: does this inline code snippet look like a file path?
+function looksLikeInlinePath(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length > 512) return false;
+  if (t.includes(" ") || t.includes(String.fromCharCode(9)) || t.includes(String.fromCharCode(10))) {
+    return false;
+  }
+  const p = t.startsWith("@") ? t.slice(1) : t;
+  if (p.includes("://")) return false;
+  const BS = String.fromCharCode(92);
+  const abs = p.startsWith("/") || p.startsWith(BS) || /^[A-Za-z]:/.test(p);
+  const rel = p.includes("/") && /^[A-Za-z0-9._-]/.test(p.charAt(0));
+  return abs || rel;
+}
+
+
 const markdownComponents = {
   a: ({
     href,
@@ -1328,6 +1398,39 @@ const markdownComponents = {
       {children}
     </a>
   ),
+  code: ({
+    className,
+    children,
+    ...rest
+  }: {
+    className?: string;
+    children?: React.ReactNode;
+  } & React.HTMLAttributes<HTMLElement>) => {
+    const text = Array.isArray(children) ? children.join("") : String(children ?? "");
+    if (!className && looksLikeInlinePath(text)) {
+      const st = useStore.getState();
+      const open = (): void => st.openFilePreview(resolveSessionPath(text));
+      return (
+        <code
+          className="markdown-path-link"
+          role="button"
+          tabIndex={0}
+          title={text}
+          onClick={open}
+          onKeyDown={(e): void => {
+            if (e.key === "Enter" || e.key === " ") open();
+          }}
+        >
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code className={className} {...rest}>
+        {children}
+      </code>
+    );
+  },
 };
 
 function MarkdownContent({

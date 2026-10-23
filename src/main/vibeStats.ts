@@ -5,6 +5,7 @@ import * as os from 'os'
 export interface VibeSessionStats {
   steps: number
   sessionPromptTokens: number
+  sessionCachedTokens?: number
   sessionCompletionTokens: number
   toolCallsAgreed: number
   toolCallsRejected: number

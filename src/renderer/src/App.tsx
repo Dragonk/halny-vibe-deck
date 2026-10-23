@@ -1,17 +1,15 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
+import type { AcpHistoryMessage } from './store'
 import { useTranslation, t } from './i18n'
+import type { AppConfig, ConfigOption } from './types'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
 import SettingsView from './components/SettingsView'
 import StatsView from './components/StatsView'
 import SetupView from './components/SetupView'
-
-interface AcpEvent {
-  type: string
-  data: Record<string, unknown>
-}
+import Dock from './components/Dock'
 
 interface SetupStatus {
   vibAcpFound: boolean
@@ -25,127 +23,16 @@ interface SetupProgressEvent {
   type: 'info' | 'error' | 'success'
 }
 
-interface VibeAgentConfig {
-  name: string
-  active_model?: string
-  system_prompt_id?: string
-  disabled_tools?: string[]
-  enabled_tools?: string[]
+interface AcpEvent {
+  type: string
+  data: Record<string, unknown>
 }
 
-interface VibeMcpServerConfig {
-  name: string
-  transport: 'http' | 'streamable-http' | 'stdio'
-  url?: string
-  headers?: Record<string, string>
-  api_key_env?: string
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-}
-
-interface VibeProviderConfig {
-  name: string
-  api_key_env?: string
-  api_key?: string
-  base_url?: string
-}
-
-interface VibeModelConfig {
-  name: string
-  provider: string
-  enabled?: boolean
-}
-
-interface VibeConfig {
-  agents?: VibeAgentConfig[]
-  mcp_servers?: VibeMcpServerConfig[]
-  tools?: {
-    enabled_tools?: string[]
-    disabled_tools?: string[]
-  }
-  providers?: VibeProviderConfig[]
-  models?: VibeModelConfig[]
-  system_prompt_id?: string
-  enable_auto_update?: boolean
-  enable_notifications?: boolean
-}
-
-interface VibePrompt {
-  name: string
-  content: string
-}
-
-interface VibeSkill {
-  name: string
-  content: string
-}
-
-declare global {
-  interface Window {
-    api: {
-      window: {
-        minimize: () => Promise<void>
-        maximize: () => Promise<void>
-        close: () => Promise<void>
-      }
-      config: {
-        get: () => Promise<import('./types').AppConfig>
-        save: (config: import('./types').AppConfig) => Promise<void>
-      }
-      dialog: {
-        openFolder: () => Promise<string | null>
-        openFile: () => Promise<string | null>
-      }
-      acp: {
-        init: (acpPath: string) => Promise<void>
-        start: (acpPath: string, cwd: string, model: string) => Promise<void>
-        newSession: (cwd: string, model: string) => Promise<void>
-        resumeSession: (sessionId: string, cwd: string, model: string) => Promise<void>
-        loadSession: (sessionId: string, cwd: string, model: string) => Promise<void>
-        sendPrompt: (text: string, acpSessionId?: string) => Promise<void>
-        cancelSession: (acpSessionId: string) => Promise<void>
-        setMode: (mode: string, sessionId?: string) => Promise<void>
-        setModel: (model: string, sessionId?: string) => Promise<void>
-        approveTool: (requestId: string, optionId: string) => Promise<void>
-        answerQuestion: (requestId: string, answer: string) => Promise<void>
-        stop: () => Promise<void>
-        isRunning: () => Promise<boolean>
-        getContextSummary: (messages: Array<{ role: string; content: string }>) => Promise<string>
-        onEvent: (cb: (event: AcpEvent) => void) => () => void
-      }
-      stats: {
-        vibeSessions: () => Promise<import('./types').VibeSession[]>
-        vibeSessionMessages: (sessionId: string) => Promise<import('./types').VibeSessionMessage[]>
-        vibeSubagentSessions: (parentSessionId: string) => Promise<Array<{ sessionId: string; agentName: string; title: string | null; startTime: string; messages: import('./types').VibeSessionMessage[] }>>
-      }
-      setup: {
-        check: () => Promise<SetupStatus>
-        install: () => Promise<SetupStatus>
-        onProgress: (cb: (event: SetupProgressEvent) => void) => () => void
-      }
-      fs: {
-        listDir: (dir: string) => Promise<Array<{ name: string; isDir: boolean }>>
-        searchFiles: (rootDir: string, query: string) => Promise<Array<{ path: string; isDir: boolean }>>
-        readFile: (filePath: string) => Promise<{ type: 'file' | 'directory' | 'error'; content: string }>
-      }
-      shell: {
-        openPath: (path: string) => Promise<string>
-      }
-      vibe: {
-        getConfig: () => Promise<VibeConfig>
-        saveConfig: (config: VibeConfig) => Promise<void>
-        getAgents: () => Promise<VibeAgentConfig[]>
-        saveAgent: (name: string, config: VibeAgentConfig) => Promise<void>
-        deleteAgent: (name: string) => Promise<void>
-        getPrompts: () => Promise<VibePrompt[]>
-        savePrompt: (name: string, content: string) => Promise<void>
-        deletePrompt: (name: string) => Promise<void>
-        getSkills: () => Promise<VibeSkill[]>
-        getDir: () => Promise<string>
-      }
-    }
-  }
+interface StreamingState {
+  msgId: string
+  thinkingBlockId: string | null
+  /** ACP messageId of the currently streamed agent message */
+  acpMsgId: string | null
 }
 
 export default function App(): React.JSX.Element {
@@ -157,10 +44,10 @@ export default function App(): React.JSX.Element {
     setAcpStatus,
     setAcpError,
     setCurrentModel,
-    setAvailableModels,
     setCurrentMode,
     setAvailableModes,
     setAvailableCommands,
+    setConfigOptions,
     setWorkingDirectory,
     setSandboxEnabled,
     startAiMessage,
@@ -174,29 +61,25 @@ export default function App(): React.JSX.Element {
     linkAcpSession,
     getSessionByAcpId,
     importAcpSessions,
+    applySessionHistory,
     setPendingNewSession,
     setSessionStarting,
     currentSessionId,
-    messageQueue,
-    getNextQueuedMessage,
     removeFromMessageQueue,
     addUserMessage,
     updateSession,
-    sessions,
     markSessionBusy,
     markSessionIdle,
   } = useStore()
 
   const tr = useTranslation(config.language)
 
-  // Per-session streaming state: localSessionId → { msgId, thinkingBlockId }
-  const streamingState = useRef<Map<string, { msgId: string; thinkingBlockId: string | null }>>(new Map())
+  // Per-session streaming state: localSessionId → streaming info
+  const streamingState = useRef<Map<string, StreamingState>>(new Map())
   const [setupRequired, setSetupRequired] = useState(false)
-  const [pendingToolApprovals, setPendingToolApprovals] = useState<Array<{
-    requestId: string
-    method: string
-    params: Record<string, unknown>
-  }>>([])
+  const [pendingToolApprovals, setPendingToolApprovals] = useState<
+    Array<{ requestId: string; method: string; params: Record<string, unknown> }>
+  >([])
 
   const [pendingQuestion, setPendingQuestion] = useState<{
     requestId: string
@@ -208,53 +91,69 @@ export default function App(): React.JSX.Element {
     (event: AcpEvent) => {
       const d = event.data as Record<string, unknown>
       switch (event.type) {
-        case 'InitializationComplete':
+        case 'InitializationComplete': {
           setAcpStatus('connected')
-          // Create a session immediately to get available models and modes
-          // Use "." as current directory since we just need to initialize the session
-          window.api.acp.newSession(".", "").catch(console.error)
+          setAcpError(null)
+          const store = useStore.getState()
+          // Prime one session so configOptions (model/mode/thinking) are
+          // available before the first message. Guard against the flows where
+          // InputBar/loadAcpSession are already creating their own session.
+          if (!store.sessionStarting && !store.pendingLoadSessionId) {
+            const primeCwd = store.config.workingDirectory || '.'
+            window.api.acp.newSession(primeCwd).catch(console.error)
+          }
           break
+        }
 
         case 'SessionsList': {
-          const sessions = d.sessions as Array<{ sessionId: string; name: string; cwd: string; startTime: string }>
+          const sessions = d.sessions as Array<{
+            sessionId: string
+            title: string
+            cwd: string
+            updatedAt: string
+          }>
           importAcpSessions(sessions)
           break
         }
 
         case 'SessionInitialized': {
           const acpSessId = d.sessionId as string
-          const modes = d.modes as Array<{ id: string; name: string }>
-          const models = d.models as string[]
+          const store = useStore.getState()
+          const modes = (d.modes as Array<{ id: string; name: string }>) ?? []
+          const configOptions = (d.configOptions as ConfigOption[]) ?? []
           const sessionTitle = d.sessionTitle as string | undefined
-          console.log('[App] SessionInitialized:', acpSessId, 'local currentSessionId:', currentSessionId)
-          setAvailableModes(modes)
-          setAvailableModels(models)
-          if (modes.length > 0) setCurrentMode(modes[0].id)
-          if (models.length > 0) {
-            const store = useStore.getState()
-            if (!store.currentModel || !models.includes(store.currentModel)) {
-              setCurrentModel(models[0])
-            }
+          const currentModeId = d.currentModeId as string | undefined
+
+          if (configOptions.length > 0) store.setConfigOptions(configOptions)
+          store.setAvailableModes(modes)
+          if (currentModeId) store.setCurrentMode(currentModeId)
+
+          // While loading a specific historical session, ignore the priming
+          // session that acp:start() creates internally.
+          if (store.pendingLoadSessionId && acpSessId !== store.pendingLoadSessionId) {
+            break
           }
 
-          const store = useStore.getState()
-          // First check if this ACP session was already imported (from session/list)
           const existing = store.getSessionByAcpId(acpSessId)
-          console.log('[App] existing session found:', existing?.id, 'currentSessionId in store:', store.currentSessionId)
           if (existing) {
             // Session already in list — make it current, update name if available
             store.setCurrentSessionId(existing.id)
             if (sessionTitle) store.updateSession(existing.id, { name: sessionTitle })
           } else {
-            // Brand-new session — link to current local session or create one
             const localSessId = store.currentSessionId
-            console.log('[App] linking new ACP session to local:', localSessId)
-            if (localSessId) {
-              linkAcpSession(localSessId, acpSessId)
-              if (sessionTitle) store.updateSession(localSessId, { name: sessionTitle })
+            const localSess = localSessId
+              ? store.sessions.find((s) => s.id === localSessId)
+              : null
+            if (localSess && !localSess.acpSessionId) {
+              // Link the current draft to the new ACP session
+              linkAcpSession(localSess.id, acpSessId)
+              if (sessionTitle) store.updateSession(localSess.id, { name: sessionTitle })
+            } else if (localSess && localSess.messages.length === 0) {
+              // Empty draft bound to a stale priming session — re-bind it
+              linkAcpSession(localSess.id, acpSessId)
+              if (sessionTitle) store.updateSession(localSess.id, { name: sessionTitle })
             } else {
               const newSess = store.addSession()
-              console.log('[App] created new local session:', newSess.id)
               linkAcpSession(newSess.id, acpSessId)
               if (sessionTitle) store.updateSession(newSess.id, { name: sessionTitle })
             }
@@ -263,56 +162,112 @@ export default function App(): React.JSX.Element {
           break
         }
 
+        case 'SessionHistory': {
+          const store = useStore.getState()
+          const messages = d.messages as AcpHistoryMessage[]
+          const title = d.title as string | undefined
+          if (messages) {
+            store.applySessionHistory(d.sessionId as string, messages, title)
+          }
+          break
+        }
+
+        case 'SessionInfoUpdate': {
+          const store = useStore.getState()
+          const title = d.title as string | undefined
+          const local = store.getSessionByAcpId(d.sessionId as string)
+          if (local && title) {
+            store.updateSession(local.id, { name: title, updatedAt: Date.now() })
+          }
+          break
+        }
+
+        case 'UsageUpdate': {
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(d.sessionId as string)
+          if (!local) break
+          const cost = d.cost as { amount: number; currency: string } | undefined
+          store.setUsage(local.id, {
+            contextUsed: (d.contextUsed as number) ?? 0,
+            contextSize: (d.contextSize as number) ?? 0,
+            cost: cost?.amount,
+            currency: cost?.currency,
+            steps: d.steps as number | undefined,
+            promptTokens: d.promptTokens as number | undefined,
+            completionTokens: d.completionTokens as number | undefined,
+            cachedTokens: d.cachedTokens as number | undefined,
+            totalTokens: d.totalTokens as number | undefined,
+            tokensPerSecond: d.tokensPerSecond as number | undefined,
+            lastTurnDuration: d.lastTurnDuration as number | undefined,
+            lastTurnTotalTokens: d.lastTurnTotalTokens as number | undefined,
+          })
+          break
+        }
+
+        case 'ConfigOptionsUpdate': {
+          const store = useStore.getState()
+          const options = d.configOptions as ConfigOption[] | undefined
+          if (options && options.length > 0) store.setConfigOptions(options)
+          const modeChanged = d.modeChanged as string | undefined
+          if (modeChanged) store.setCurrentMode(modeChanged)
+          break
+        }
+
         case 'MessageChunk': {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
-          const localSess = store.getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
-          console.log('[App] MessageChunk:', acpSessId, '-> localId:', localId)
-          if (localId) {
-            markSessionBusy(localId)
-            const state = streamingState.current.get(localId)
-            if (!state) {
-              console.log('[App] Starting new AI message for localId:', localId)
-              const msgId = startAiMessage(localId)
-              streamingState.current.set(localId, { msgId, thinkingBlockId: null })
-              appendChunk(localId, msgId, d.text as string)
-            } else {
-              appendChunk(localId, state.msgId, d.text as string)
-            }
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
+          if (!localId) break
+          markSessionBusy(localId)
+          const text = d.text as string
+          const acpMsgId = d.messageId as string | undefined
+          let state = streamingState.current.get(localId)
+          // A new messageId from the agent means a new agent message
+          if (state && acpMsgId && state.acpMsgId && acpMsgId !== state.acpMsgId) {
+            store.finalizeAiMessage(localId, state.msgId)
+            state = undefined
           }
+          if (!state) {
+            const msgId = store.startAiMessage(localId)
+            state = { msgId, thinkingBlockId: null, acpMsgId: acpMsgId ?? null }
+            streamingState.current.set(localId, state)
+          }
+          store.appendChunk(localId, state.msgId, text)
           break
         }
 
         case 'ThinkingChunk': {
           const acpSessId = d.sessionId as string
-          const localSess = getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
           const blockId = (d.blockId as string) ?? 'thinking'
-          if (localId) {
-            let state = streamingState.current.get(localId)
-            if (!state) {
-              const msgId = startAiMessage(localId)
-              state = { msgId, thinkingBlockId: null }
-              streamingState.current.set(localId, state)
-            }
-            if (state.thinkingBlockId !== blockId) {
-              state.thinkingBlockId = blockId
-              startThinking(localId, state.msgId, blockId)
-            }
-            appendThinkingChunk(localId, state.msgId, blockId, d.text as string)
+          if (!localId) break
+          markSessionBusy(localId)
+          let state = streamingState.current.get(localId)
+          if (!state) {
+            const msgId = store.startAiMessage(localId)
+            state = { msgId, thinkingBlockId: null, acpMsgId: null }
+            streamingState.current.set(localId, state)
           }
+          if (state.thinkingBlockId !== blockId) {
+            state.thinkingBlockId = blockId
+            store.startThinking(localId, state.msgId, blockId)
+          }
+          store.appendThinkingChunk(localId, state.msgId, blockId, d.text as string)
           break
         }
 
         case 'ThinkingComplete': {
           const acpSessId = d.sessionId as string
-          const localSess = getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
           const blockId = (d.blockId as string) ?? 'thinking'
           const state = localId ? streamingState.current.get(localId) : null
           if (localId && state) {
-            finalizeThinking(localId, state.msgId, blockId)
+            store.finalizeThinking(localId, state.msgId, blockId)
             state.thinkingBlockId = null
           }
           break
@@ -320,30 +275,29 @@ export default function App(): React.JSX.Element {
 
         case 'PromptComplete': {
           const acpSessId = d.sessionId as string
-          const localSess = getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
           const state = localId ? streamingState.current.get(localId) : null
-          console.log('[App] PromptComplete:', acpSessId, '-> localId:', localId, 'msgId:', state?.msgId)
           if (localId && state) {
-            finalizeAiMessage(localId, state.msgId)
+            store.finalizeAiMessage(localId, state.msgId)
             streamingState.current.delete(localId)
           }
           if (localId) markSessionIdle(localId)
           setAcpStatus('connected')
 
-          // Process message queue - send next queued message
-          const store = useStore.getState()
+          // Process message queue — send the next queued message
           const queue = store.messageQueue
           if (queue.length > 0 && localId) {
             const nextMsg = queue[0]
-            removeFromMessageQueue(nextMsg.id)
-            addUserMessage(nextMsg.content)
+            store.removeFromMessageQueue(nextMsg.id)
+            store.addUserMessage(nextMsg.content)
             const sess = store.sessions.find((s) => s.id === localId)
             const promptText = sess?.contextSummary
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
-            window.api.acp.sendPrompt(promptText, acpSessId).catch((err) => {
-              setAcpError((err as Error).message)
+            window.api.acp.sendPrompt(promptText, acpSessId).catch((err: Error) => {
+              setAcpError(err.message)
             })
           }
           break
@@ -351,33 +305,36 @@ export default function App(): React.JSX.Element {
 
         case 'ToolCall': {
           const acpSessId = d.sessionId as string
-          const localSess = getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
-          if (localId) {
-            markSessionBusy(localId)
-            // Ensure there's an active AI message to attach tool calls to.
-            // If no streaming state exists yet, create a new (empty) AI message.
-            if (!streamingState.current.has(localId)) {
-              const msgId = startAiMessage(localId)
-              streamingState.current.set(localId, { msgId, thinkingBlockId: null })
-            }
-            updateToolCall(localId, {
-              id: d.toolCallId as string,
-              title: (d.title as string) ?? '',
-              kind: (d.kind as string) ?? '',
-              status: (d.status as 'running' | 'done' | 'error') ?? 'running',
-              input: d.input as Record<string, unknown> | undefined,
-              fileChanges: d.fileChanges as import('./types').FileChange[] | undefined,
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
+          if (!localId) break
+          markSessionBusy(localId)
+          // Ensure there's an active AI message to attach tool calls to
+          if (!streamingState.current.has(localId)) {
+            const msgId = store.startAiMessage(localId)
+            streamingState.current.set(localId, {
+              msgId,
+              thinkingBlockId: null,
+              acpMsgId: null,
             })
           }
+          updateToolCall(localId, {
+            id: d.toolCallId as string,
+            title: (d.title as string) ?? '',
+            kind: (d.kind as string) ?? '',
+            status: (d.status as 'running' | 'done' | 'error') ?? 'running',
+            input: d.input as Record<string, unknown> | undefined,
+          })
           break
         }
+
         case 'ToolCallUpdate': {
           const acpSessId = d.sessionId as string
-          const localSess = getSessionByAcpId(acpSessId)
-          const localId = localSess?.id ?? currentSessionId
+          const store = useStore.getState()
+          const local = store.getSessionByAcpId(acpSessId)
+          const localId = local?.id ?? store.currentSessionId
           if (localId) {
-            // Merge — only update status and output, preserve title/kind/input
             mergeToolCall(localId, d.toolCallId as string, {
               status: (d.status as 'running' | 'done' | 'error') ?? 'running',
               output: d.output as string | undefined,
@@ -405,7 +362,6 @@ export default function App(): React.JSX.Element {
         case 'Error':
           setAcpError(d.error as string)
           setAcpStatus('error')
-          // Finalize any in-flight streaming messages
           streamingState.current.forEach(({ msgId }, localId) => {
             finalizeAiMessage(localId, msgId)
           })
@@ -414,13 +370,20 @@ export default function App(): React.JSX.Element {
 
         case 'Disconnected':
           setAcpStatus('disconnected')
+          useStore.setState({ activeAcpSessionId: null })
+          streamingState.current.clear()
           break
 
         case 'DebugLog':
+        case 'Plan':
           break
 
         case 'AvailableCommandsUpdate': {
-          const commands = d.commands as Array<{ name: string; description: string; hint?: string }>
+          const commands = d.commands as Array<{
+            name: string
+            description: string
+            hint?: string
+          }>
           setAvailableCommands(commands)
           break
         }
@@ -430,10 +393,10 @@ export default function App(): React.JSX.Element {
       setAcpStatus,
       setAcpError,
       setCurrentModel,
-      setAvailableModels,
       setCurrentMode,
       setAvailableModes,
       setAvailableCommands,
+      setConfigOptions,
       startAiMessage,
       appendChunk,
       finalizeAiMessage,
@@ -445,19 +408,16 @@ export default function App(): React.JSX.Element {
       linkAcpSession,
       getSessionByAcpId,
       importAcpSessions,
+      applySessionHistory,
       setPendingNewSession,
       setSessionStarting,
       currentSessionId,
-      streamingState,
-      messageQueue,
-      getNextQueuedMessage,
       removeFromMessageQueue,
       addUserMessage,
-      sessions,
-      setAcpError,
+      updateSession,
       markSessionBusy,
       markSessionIdle,
-    ]
+    ],
   )
 
   const startAcp = useCallback(
@@ -465,39 +425,43 @@ export default function App(): React.JSX.Element {
       setAcpStatus('connecting')
       window.api.acp
         .init(acpPath)
-        .then(() => setPendingNewSession(true))
+        .then(() => {
+          setSessionStarting(false)
+        })
         .catch((err: Error) => {
           setAcpStatus('error')
           setAcpError(err.message)
         })
     },
-    [setAcpStatus, setAcpError, setPendingNewSession]
+    [setAcpStatus, setAcpError, setSessionStarting],
   )
 
   // Load config and bootstrap
   useEffect(() => {
-    Promise.all([window.api.config.get(), window.api.setup.check()]).then(([cfg, setupStatus]) => {
-      setConfig(cfg)
-      setWorkingDirectory(cfg.workingDirectory || '')
-      setSandboxEnabled(cfg.sandboxEnabled)
+    Promise.all([window.api.config.get(), window.api.setup.check()]).then(
+      ([cfgRaw, setupStatusRaw]) => {
+        const setupStatus = setupStatusRaw as SetupStatus
+        const cfg = cfgRaw as AppConfig
+        setConfig(cfg)
+        setWorkingDirectory(cfg.workingDirectory || '')
+        setSandboxEnabled(cfg.sandboxEnabled)
 
-      // Resolve acpPath: prefer config, fall back to auto-detected vibe-acp
-      const acpPath = cfg.acpPath || setupStatus.vibAcpPath || null
+        // Resolve acpPath: prefer config, fall back to auto-detected vibe-acp
+        const acpPath = cfg.acpPath || setupStatus.vibAcpPath || null
 
-      if (!setupStatus.vibAcpFound && !cfg.acpPath) {
-        // vibe-acp not found and not manually configured — show setup
-        setSetupRequired(true)
-        return
-      }
-
-      if (acpPath) {
-        // Auto-save discovered path if config didn't have one
-        if (!cfg.acpPath && setupStatus.vibAcpPath) {
-          window.api.config.save({ ...cfg, acpPath: setupStatus.vibAcpPath })
+        if (!setupStatus.vibAcpFound && !cfg.acpPath) {
+          setSetupRequired(true)
+          return
         }
-        startAcp(acpPath)
-      }
-    })
+
+        if (acpPath) {
+          if (!cfg.acpPath && setupStatus.vibAcpPath) {
+            window.api.config.save({ ...cfg, acpPath: setupStatus.vibAcpPath })
+          }
+          startAcp(acpPath)
+        }
+      },
+    )
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for ACP events
@@ -508,21 +472,21 @@ export default function App(): React.JSX.Element {
 
   // Apply theme
   useEffect(() => {
-    const isDark = theme === 'auto'
-      ? window.matchMedia('(prefers-color-scheme: dark)').matches
-      : theme === 'dark'
+    const isDark =
+      theme === 'auto'
+        ? window.matchMedia('(prefers-color-scheme: dark)').matches
+        : theme === 'dark'
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
   }, [theme])
 
   const handleSetupComplete = useCallback(
     async (vibAcpPath: string) => {
       setSetupRequired(false)
-      const cfg = await window.api.config.get()
-      // Persist path
+      const cfg = (await window.api.config.get()) as AppConfig
       await window.api.config.save({ ...cfg, acpPath: vibAcpPath })
       startAcp(vibAcpPath)
     },
-    [startAcp]
+    [startAcp],
   )
 
   const handleSetupSkip = useCallback(() => {
@@ -554,7 +518,15 @@ export default function App(): React.JSX.Element {
   }, [pendingToolApprovals])
 
   return (
-    <div className={`app-root ${theme === 'auto' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme}`}>
+    <div
+      className={`app-root ${
+        theme === 'auto'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light'
+          : theme
+      }`}
+    >
       <Header />
       <div className="app-body">
         <Sidebar />
@@ -563,16 +535,18 @@ export default function App(): React.JSX.Element {
           {currentView === 'settings' && <SettingsView />}
           {currentView === 'stats' && <StatsView />}
         </main>
+        <Dock />
       </div>
 
-      {setupRequired && (
-        <SetupView onComplete={handleSetupComplete} onSkip={handleSetupSkip} />
-      )}
+      {setupRequired && <SetupView onComplete={handleSetupComplete} onSkip={handleSetupSkip} />}
 
       {pendingQuestion && (
         <div className="tool-approval-bar">
           <div className="tool-approval-request agent-question">
-            <div className="tool-approval-info" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
+            <div
+              className="tool-approval-info"
+              style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}
+            >
               <span className="agent-question-text">{pendingQuestion.question}</span>
               <div className="tool-approval-actions" style={{ flexWrap: 'wrap' }}>
                 {pendingQuestion.choices.length > 0
@@ -581,7 +555,9 @@ export default function App(): React.JSX.Element {
                         key={choice}
                         className="tool-approval-btn tool-approval-allow-once"
                         onClick={() => {
-                          window.api.acp.answerQuestion(pendingQuestion.requestId, choice).catch(console.error)
+                          window.api.acp
+                            .answerQuestion(pendingQuestion.requestId, choice)
+                            .catch(console.error)
                           setPendingQuestion(null)
                         }}
                       >
@@ -592,14 +568,15 @@ export default function App(): React.JSX.Element {
                     <button
                       className="tool-approval-btn tool-approval-allow-once"
                       onClick={() => {
-                        window.api.acp.answerQuestion(pendingQuestion.requestId, 'ok').catch(console.error)
+                        window.api.acp
+                          .answerQuestion(pendingQuestion.requestId, 'ok')
+                          .catch(console.error)
                         setPendingQuestion(null)
                       }}
                     >
                       OK
                     </button>
-                  )
-                }
+                  )}
               </div>
             </div>
           </div>
@@ -623,16 +600,31 @@ export default function App(): React.JSX.Element {
               input?.tool ??
               req.method.replace('session/', '').replace('tool/', '')
             ) as string
-            const displayName = toolName.length > 40 ? toolName.slice(0, 40) + '…' : toolName
+            const displayName =
+              toolName.length > 40 ? toolName.slice(0, 40) + '…' : toolName
             return (
               <div key={req.requestId} className="tool-approval-request">
                 <div className="tool-approval-info">
                   <span className="tool-approval-icon">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
                     </svg>
                   </span>
-                  <span className="tool-approval-name">{t(tr, 'allowToolQuestion', { tool: displayName })}</span>
+                  <span className="tool-approval-name">
+                    {t(tr, 'allowToolQuestion', { tool: displayName })}
+                  </span>
                 </div>
                 <div className="tool-approval-actions">
                   <button
@@ -662,9 +654,13 @@ export default function App(): React.JSX.Element {
           })}
           {pendingToolApprovals.length > 1 && (
             <div className="tool-approval-queue-hint">
-              {tr.morePending.replace('{{count}}', String(pendingToolApprovals.length - 1))} &nbsp;
-              <button className="tool-approval-btn tool-approval-allow-once" onClick={handleApproveAllTools}>{tr.allowAll}</button>
-              <button className="tool-approval-btn tool-approval-deny" onClick={handleRejectAllTools}>{tr.denyAll}</button>
+              {tr.morePending.replace('{{count}}', String(pendingToolApprovals.length - 1))}{' '}
+              <button className="tool-approval-btn tool-approval-allow-once" onClick={handleApproveAllTools}>
+                {tr.allowAll}
+              </button>
+              <button className="tool-approval-btn tool-approval-deny" onClick={handleRejectAllTools}>
+                {tr.denyAll}
+              </button>
             </div>
           )}
         </div>

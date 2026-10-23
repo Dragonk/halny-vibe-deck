@@ -5,12 +5,12 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "outDir": "out/renderer",
-    "rootDir": "src/renderer/src",
+    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"]
+    "types": ["vite/client", "node"]
   },
-  "include": ["src/renderer/src/**/*"]
+  "include": ["src/renderer/src/**/*", "src/preload/index.ts"]
 }

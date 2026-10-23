@@ -1,6 +1,6 @@
 {
   "name": "mistral-vibe-nexus",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Mistral Vibe Nexus - AI Agent Desktop App",
   "main": "out/main/index.js",
   "author": "Mistral Vibe Nexus",
@@ -86,28 +86,33 @@
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.1",
-    "@iarna/toml": "^2.2.5",
-    "mermaid": "^11.14.0",
+    "fflate": "^0.8.3",
+    "mammoth": "^1.13.0",
+    "mermaid": "^12.2.0",
+    "pdfjs-dist": "^6.4.299",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "simple-git": "^4.0.2",
+    "smol-toml": "^1.9.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "6.0.1",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "archiver": "^7.0.1",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^41.1.1",
+    "electron": "^45.0.0",
     "electron-builder": "^26.8.1",
     "nodemon": "^3.1.9",
     "rcedit": "^5.0.2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "typescript": "^5.7.2",
-    "vite": "8.0.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
     "wait-on": "^8.0.3",
-    "zustand": "^5.0.3"
+    "zustand": "^5.0.16"
   }
 }

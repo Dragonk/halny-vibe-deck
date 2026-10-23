@@ -51,6 +51,8 @@ export interface Session {
   lastActive: number
   startTime?: number
   workingDirectory?: string
+  updatedAt?: number
+  loading?: boolean
 }
 
 export type AppView = 'chat' | 'settings' | 'stats'
@@ -58,6 +60,60 @@ export type AppView = 'chat' | 'settings' | 'stats'
 export type AcpStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
 export type ThemeMode = 'auto' | 'dark' | 'light'
+
+/** Dock main tabs (preview tabs are dynamic). */
+export type DockTabKind = 'files' | 'git'
+
+/** An open preview tab in the dock: a file or a git diff. */
+export interface PreviewTab {
+  id: string
+  kind: 'file' | 'diff'
+  name: string
+  path: string
+  diff?: string
+}
+
+/** One selectable choice of an ACP config option. */
+export interface ConfigOptionChoice {
+  value: string
+  name: string
+  description?: string
+}
+
+/** A config option reported by the ACP agent (model, mode, thinking, ...). */
+export interface ConfigOption {
+  id: string
+  name: string
+  description?: string
+  category?: string
+  type: 'select' | 'boolean'
+  currentValue: string | boolean
+  options: ConfigOptionChoice[]
+}
+
+/** Live usage/telemetry for one session (from usage_update). */
+export interface UsageStats {
+  contextUsed: number
+  contextSize: number
+  cost?: number
+  currency?: string
+  steps?: number
+  promptTokens?: number
+  completionTokens?: number
+  cachedTokens?: number
+  totalTokens?: number
+  tokensPerSecond?: number
+  lastTurnDuration?: number
+  lastTurnTotalTokens?: number
+}
+
+/** Cache hit ratio: cached input tokens / total prompt tokens. Null when unknown. */
+export function cacheHitRatio(u: UsageStats): number | null {
+  const prompt = u.promptTokens ?? 0
+  const cached = u.cachedTokens ?? 0
+  if (prompt <= 0 || cached <= 0) return null
+  return Math.min(1, cached / prompt)
+}
 
 export interface AppConfig {
   version: string
@@ -83,6 +139,9 @@ export interface AppConfig {
   sidebarSessionsLimit: number | null
   cachedModels: string[]
   cachedModes: Array<{ id: string; name: string }>
+  dockOpen: boolean
+  dockWidth: number
+  collapsedProjects: string[]
 }
 
 export interface AgentConfig {
@@ -135,6 +194,7 @@ export interface VibeSessionStats {
   toolCallsFailed: number
   toolCallsSucceeded: number
   sessionTotalLlmTokens: number
+  sessionCachedTokens?: number
   sessionCost: number
   tokensPerSecond: number
   lastTurnDuration: number
@@ -172,7 +232,7 @@ export interface VibeSessionMessage {
 }
 
 export const defaultConfig: AppConfig = {
-  version: '0.2.0',
+  version: '0.3.0',
   language: 'auto',
   theme: 'auto',
   sandboxEnabled: false,
@@ -194,5 +254,8 @@ export const defaultConfig: AppConfig = {
   skills: [],
   sidebarSessionsLimit: null,
   cachedModels: [],
-  cachedModes: []
+  cachedModes: [],
+  dockOpen: false,
+  dockWidth: 400,
+  collapsedProjects: []
 }

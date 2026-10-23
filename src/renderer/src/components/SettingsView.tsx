@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
 import type { Language } from '../i18n'
 
-type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models'
+type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw'
 
 interface VibeToolPermission {
   permission: string
@@ -77,7 +77,12 @@ interface VibeModelConfig {
   temperature?: number
   input_price?: number
   output_price?: number
-  thinking?: 'off' | 'low' | 'medium' | 'high'
+  thinking?: 'off' | 'low' | 'medium' | 'high' | 'max'
+  cached_input_price?: number
+  top_p?: number
+  max_output_tokens?: number
+  thinking_levels?: string[]
+  max_context_length?: number
   auto_compact_threshold?: number
   enabled?: boolean
 }
@@ -117,6 +122,9 @@ export default function SettingsView(): React.JSX.Element {
   const [vibeAgents, setVibeAgents] = useState<VibeAgentConfig[]>([])
   const [vibePrompts, setVibePrompts] = useState<VibePrompt[]>([])
   const [vibeSkills, setVibeSkills] = useState<VibeSkill[]>([])
+  const [rawToml, setRawToml] = useState<string | null>(null)
+  const [rawTomlError, setRawTomlError] = useState<string | null>(null)
+  const [rawTomlSaved, setRawTomlSaved] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [selectedAgentIdx, setSelectedAgentIdx] = useState<number | null>(null)
   const [selectedMcpIdx, setSelectedMcpIdx] = useState<number | null>(null)
@@ -136,10 +144,10 @@ export default function SettingsView(): React.JSX.Element {
       window.api.vibe.getPrompts(),
       window.api.vibe.getSkills()
     ])
-    setVibeConfig(cfg)
-    setVibeAgents(agents)
-    setVibePrompts(prompts)
-    setVibeSkills(skills)
+    setVibeConfig(cfg as VibeConfig)
+    setVibeAgents(agents as VibeAgentConfig[])
+    setVibePrompts(prompts as VibePrompt[])
+    setVibeSkills(skills as VibeSkill[])
     setLoaded(true)
   }, [])
 
@@ -158,7 +166,7 @@ export default function SettingsView(): React.JSX.Element {
       await window.api.acp.stop()
       await new Promise(resolve => setTimeout(resolve, 1000))
       if (local.acpPath) {
-        await window.api.acp.start(local.acpPath, '', '')
+        await window.api.acp.start(local.acpPath, local.workingDirectory || '')
       }
     }
     
@@ -172,14 +180,14 @@ export default function SettingsView(): React.JSX.Element {
   }
 
   const handleStartAcp = async (): Promise<void> => {
-    const { setAcpStatus, setAcpError, currentModel } = useStore.getState()
+    const { setAcpStatus, setAcpError } = useStore.getState()
     if (!local.acpPath) {
       setAcpError('ACP path is not set.')
       return
     }
     setAcpStatus('connecting')
     try {
-      await window.api.acp.start(local.acpPath, '', currentModel || '')
+      await window.api.acp.start(local.acpPath, local.workingDirectory || '')
       setCurrentView('chat')
     } catch (err) {
       setAcpStatus('error')
@@ -191,6 +199,26 @@ export default function SettingsView(): React.JSX.Element {
     const dir = await window.api.vibe.getDir()
     const skillsDir = `${dir}/skills`
     await window.api.shell.openPath(skillsDir)
+  }
+
+  const loadRawToml = useCallback(async (): Promise<void> => {
+    setRawTomlError(null)
+    const res = await window.api.vibe.getRawConfig()
+    if (res.error) setRawTomlError(res.error)
+    setRawToml(res.content)
+  }, [])
+
+  const handleSaveRawToml = async (): Promise<void> => {
+    if (rawToml === null) return
+    const err = await window.api.vibe.saveRawConfig(rawToml)
+    if (err) {
+      setRawTomlError(err)
+      return
+    }
+    setRawTomlError(null)
+    setRawTomlSaved(true)
+    setTimeout(() => setRawTomlSaved(false), 2000)
+    await loadVibeData()
   }
 
   const handleRenameAgent = async (oldName: string, newName: string, agentConfig: VibeAgentConfig): Promise<void> => {
@@ -548,6 +576,15 @@ export default function SettingsView(): React.JSX.Element {
             onClick={() => setTab('models')}
           >
             {tr.models}
+          </button>
+          <button
+            className={`settings-tab ${tab === 'raw' ? 'active' : ''}`}
+            onClick={() => {
+              setTab('raw')
+              if (rawToml === null) loadRawToml()
+            }}
+          >
+            {tr.rawConfig}
           </button>
         </div>
       </div>
@@ -1498,12 +1535,13 @@ export default function SettingsView(): React.JSX.Element {
                           <select
                             className="field-select"
                             value={model.thinking || 'off'}
-                            onChange={(e) => handleUpdateModel(idx, { thinking: e.target.value as 'off' | 'low' | 'medium' | 'high' })}
+                            onChange={(e) => handleUpdateModel(idx, { thinking: e.target.value as 'off' | 'low' | 'medium' | 'high' | 'max' })}
                           >
                             <option value="off">{tr.off || 'Off'}</option>
                             <option value="low">{tr.low || 'Low'}</option>
                             <option value="medium">{tr.medium || 'Medium'}</option>
                             <option value="high">{tr.high || 'High'}</option>
+                            <option value="max">{tr.max}</option>
                           </select>
                         </div>
                         <div className="field">
@@ -1529,6 +1567,58 @@ export default function SettingsView(): React.JSX.Element {
                           />
                         </div>
                         <div className="field">
+                          <label className="field-label">{tr.cachedInputPrice}</label>
+                          <input
+                            className="field-input"
+                            type="number"
+                            step="0.01"
+                            placeholder="0.0"
+                            value={model.cached_input_price ?? 0}
+                            onChange={(e) => handleUpdateModel(idx, { cached_input_price: Number(e.target.value) })}
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">{tr.topP}</label>
+                          <input
+                            className="field-input"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            max="1"
+                            value={model.top_p ?? 1}
+                            onChange={(e) => handleUpdateModel(idx, { top_p: Number(e.target.value) })}
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">{tr.maxOutputTokens}</label>
+                          <input
+                            className="field-input"
+                            type="number"
+                            placeholder="0"
+                            value={model.max_output_tokens ?? 0}
+                            onChange={(e) => handleUpdateModel(idx, { max_output_tokens: Number(e.target.value) })}
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">{tr.thinkingLevels}</label>
+                          <input
+                            className="field-input"
+                            value={(model.thinking_levels ?? []).join(', ')}
+                            onChange={(e) => handleUpdateModel(idx, { thinking_levels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
+                            placeholder="off, low, medium, high"
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="field-label">{tr.maxContextLength}</label>
+                          <input
+                            className="field-input"
+                            type="number"
+                            placeholder="0"
+                            value={model.max_context_length ?? 0}
+                            onChange={(e) => handleUpdateModel(idx, { max_context_length: Number(e.target.value) })}
+                          />
+                        </div>
+                        <div className="field">
                           <label className="field-label">{tr.autoCompactThreshold || 'Auto Compact Threshold'}</label>
                           <input
                             className="field-input"
@@ -1546,6 +1636,31 @@ export default function SettingsView(): React.JSX.Element {
                 </div>
               </div>
             )}
+          </div>
+        )}
+        {tab === 'raw' && (
+          <div className="settings-section">
+            <div className="field">
+              <label className="field-label">{tr.rawConfig}</label>
+              <p className="field-hint">{tr.rawTomlHint}</p>
+              <textarea
+                className="field-textarea raw-toml-editor"
+                value={rawToml ?? ''}
+                onChange={(e) => setRawToml(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+            {rawTomlError && (
+              <div className="raw-toml-error">{rawTomlError}</div>
+            )}
+            <div className="raw-toml-actions">
+              <button className="save-btn" onClick={handleSaveRawToml}>
+                {rawTomlSaved ? tr.rawTomlSaved : tr.rawTomlSave}
+              </button>
+              <button className="save-btn raw-reload-btn" onClick={loadRawToml}>
+                {tr.reload}
+              </button>
+            </div>
           </div>
         )}
       </div>

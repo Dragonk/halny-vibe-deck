@@ -2,6 +2,13 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 
+interface SetupStatus {
+  vibAcpFound: boolean
+  vibAcpPath: string | null
+  uvFound: boolean
+  uvPath: string | null
+}
+
 interface ProgressLine {
   message: string
   type: 'info' | 'error' | 'success'
@@ -30,20 +37,20 @@ export default function SetupView({ onComplete, onSkip }: Props): React.JSX.Elem
   // Subscribe to progress events
   useEffect(() => {
     const unsub = window.api.setup.onProgress((ev) => {
-      setLines((prev) => [...prev, { message: ev.message, type: ev.type }])
+      setLines((prev) => [...prev, { message: ev.message, type: ev.type as ProgressLine['type'] }])
     })
     return unsub
   }, [])
 
   // Check uv status for the confirmation screen
   useEffect(() => {
-    window.api.setup.check().then((s) => setUvFound(s.uvFound))
+    window.api.setup.check().then((raw) => setUvFound((raw as SetupStatus).uvFound))
   }, [])
 
   const handleInstall = async (): Promise<void> => {
     setPhase('installing')
     setLines([])
-    const status = await window.api.setup.install()
+    const status = (await window.api.setup.install()) as SetupStatus
     if (status.vibAcpFound && status.vibAcpPath) {
       setPhase('done')
     } else {
@@ -131,7 +138,7 @@ export default function SetupView({ onComplete, onSkip }: Props): React.JSX.Elem
                 <button
                   className="setup-btn-primary"
                   onClick={async () => {
-                    const s = await window.api.setup.check()
+                    const s = (await window.api.setup.check()) as SetupStatus
                     if (s.vibAcpPath) onComplete(s.vibAcpPath)
                   }}
                 >

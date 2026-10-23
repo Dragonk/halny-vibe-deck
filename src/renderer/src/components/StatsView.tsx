@@ -692,6 +692,14 @@ function SessionList({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType
                   <span className="tag primary">{project}</span>
                   <span className="tag accent">{model}</span>
                 </div>
+                {s.stats.sessionCachedTokens != null && s.stats.sessionPromptTokens > 0 && (
+                  <div
+                    className="session-row-cache"
+                    title={"cached " + formatTokens(s.stats.sessionCachedTokens) + " / prompt " + formatTokens(s.stats.sessionPromptTokens)}
+                  >
+                    {String.fromCharCode(9889)} {Math.round((s.stats.sessionCachedTokens / s.stats.sessionPromptTokens) * 100)}%
+                  </div>
+                )}
                 <div className="session-row-cost">${(s.stats.sessionCost ?? 0).toFixed(2)}</div>
               </div>
             )
@@ -726,7 +734,7 @@ export default function StatsView(): React.JSX.Element {
     window.api.stats
       .vibeSessions()
       .then((data) => {
-        setSessions(data)
+        setSessions(data as VibeSession[])
         setLoading(false)
       })
       .catch(() => setLoading(false))

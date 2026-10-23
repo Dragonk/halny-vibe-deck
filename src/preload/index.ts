@@ -1,141 +1,49 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-// Minimal type definitions (mirrored from main process)
-interface AcpEvent {
+export interface AcpConfigOptionChoice {
+  value: string
+  name: string
+  description?: string
+}
+
+export interface AcpConfigOption {
+  id: string
+  name: string
+  description?: string
+  category?: string
+  type: 'select' | 'boolean'
+  currentValue: string | boolean
+  options: AcpConfigOptionChoice[]
+}
+
+export interface AcpEvent {
   type: string
   data: Record<string, unknown>
 }
 
-interface AppConfig {
-  version: string
-  language: string
-  theme: 'auto' | 'dark' | 'light'
-  defaultModel: string
-  sandboxEnabled: boolean
-  sandbox: {
-    enabled: boolean
-    network: 'none' | 'whitelist' | 'unrestricted'
-    whitelistDomains: string[]
-    timeoutSeconds: number
-    memoryLimitMb: number
-  }
-  acpPath: string
-  systemPrompt: string
-  workingDirectory: string
-  recentFolders: string[]
-  lastSessionId: string | null
+export interface GitFileStatus {
+  path: string
+  index: string
+  working: string
+  staged: boolean
 }
 
-interface SetupStatus {
-  vibAcpFound: boolean
-  vibAcpPath: string | null
-  uvFound: boolean
-  uvPath: string | null
+export interface GitStatus {
+  repo: boolean
+  branch: string | null
+  ahead: number
+  behind: number
+  files: GitFileStatus[]
+  error?: string
 }
 
-interface SetupProgressEvent {
+export interface GitCommit {
+  hash: string
+  shortHash: string
   message: string
-  type: 'info' | 'error' | 'success'
-}
-
-interface VibeSession {
-  sessionId: string
-  startTime: string
-  endTime: string
-  title: string | null
-  totalMessages: number
-  gitBranch: string | null
-  environment: { workingDirectory: string }
-  stats: {
-    steps: number
-    sessionPromptTokens: number
-    sessionCompletionTokens: number
-    toolCallsAgreed: number
-    toolCallsRejected: number
-    toolCallsFailed: number
-    toolCallsSucceeded: number
-    sessionTotalLlmTokens: number
-    sessionCost: number
-    tokensPerSecond: number
-    lastTurnDuration: number
-  }
-  config: { activeModel: string } | null
-}
-
-interface VibeToolCall {
-  id: string
-  index: number
-  function: { name: string; arguments: string }
-  type: 'function'
-}
-
-interface VibeSessionMessage {
-  role: 'user' | 'assistant' | 'tool' | 'system'
-  content: string | null
-  injected: boolean
-  message_id: string
-  tool_calls?: VibeToolCall[]
-  name?: string
-  tool_call_id?: string
-  reasoning_content?: string | null
-  reasoning_message_id?: string
-}
-
-interface VibeAgentConfig {
-  name: string
-  active_model?: string
-  system_prompt_id?: string
-  disabled_tools?: string[]
-  enabled_tools?: string[]
-}
-
-interface VibeMcpServerConfig {
-  name: string
-  transport: 'http' | 'streamable-http' | 'stdio'
-  url?: string
-  headers?: Record<string, string>
-  api_key_env?: string
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-}
-
-interface VibeProviderConfig {
-  name: string
-  api_key_env?: string
-  api_key?: string
-  base_url?: string
-}
-
-interface VibeModelConfig {
-  name: string
-  provider: string
-  enabled?: boolean
-}
-
-interface VibeConfig {
-  agents?: VibeAgentConfig[]
-  mcp_servers?: VibeMcpServerConfig[]
-  tools?: {
-    enabled_tools?: string[]
-    disabled_tools?: string[]
-  }
-  providers?: VibeProviderConfig[]
-  models?: VibeModelConfig[]
-  system_prompt_id?: string
-  enable_auto_update?: boolean
-  enable_notifications?: boolean
-}
-
-interface VibePrompt {
-  name: string
-  content: string
-}
-
-interface VibeSkill {
-  name: string
-  content: string
+  author: string
+  date: string
 }
 
 const api = {
@@ -145,32 +53,29 @@ const api = {
     close: (): Promise<void> => ipcRenderer.invoke('window:close')
   },
   config: {
-    get: (): Promise<AppConfig> => ipcRenderer.invoke('config:get'),
-    save: (config: AppConfig): Promise<void> => ipcRenderer.invoke('config:save', config)
+    get: (): Promise<unknown> => ipcRenderer.invoke('config:get'),
+    save: (config: unknown): Promise<void> => ipcRenderer.invoke('config:save', config)
   },
   dialog: {
     openFolder: (): Promise<string | null> => ipcRenderer.invoke('dialog:open-folder'),
     openFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:open-file')
   },
   acp: {
-    init: (acpPath: string): Promise<void> =>
-      ipcRenderer.invoke('acp:init', acpPath),
-    start: (acpPath: string, cwd: string, model: string): Promise<void> =>
-      ipcRenderer.invoke('acp:start', acpPath, cwd, model),
-    newSession: (cwd: string, model: string): Promise<void> =>
-      ipcRenderer.invoke('acp:new-session', cwd, model),
-    resumeSession: (sessionId: string, cwd: string, model: string): Promise<void> =>
-      ipcRenderer.invoke('acp:resume-session', sessionId, cwd, model),
-    loadSession: (sessionId: string, cwd: string, model: string): Promise<void> =>
-      ipcRenderer.invoke('acp:load-session', sessionId, cwd, model),
+    init: (acpPath: string): Promise<void> => ipcRenderer.invoke('acp:init', acpPath),
+    start: (acpPath: string, cwd: string): Promise<void> => ipcRenderer.invoke('acp:start', acpPath, cwd),
+    newSession: (cwd: string): Promise<void> => ipcRenderer.invoke('acp:new-session', cwd),
+    loadSession: (sessionId: string, cwd: string): Promise<void> =>
+      ipcRenderer.invoke('acp:load-session', sessionId, cwd),
     sendPrompt: (text: string, acpSessionId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:send-prompt', text, acpSessionId),
     cancelSession: (acpSessionId: string): Promise<void> =>
       ipcRenderer.invoke('acp:cancel-session', acpSessionId),
-    setMode: (mode: string, sessionId?: string): Promise<void> => ipcRenderer.invoke('acp:set-mode', mode, sessionId),
-    setModel: (model: string, sessionId?: string): Promise<void> => ipcRenderer.invoke('acp:set-model', model, sessionId),
-    approveTool: (requestId: string, optionId: string): Promise<void> => ipcRenderer.invoke('acp:approve-tool', requestId, optionId),
-    answerQuestion: (requestId: string, answer: string): Promise<void> => ipcRenderer.invoke('acp:answer-question', requestId, answer),
+    setConfigOption: (key: string, value: string, sessionId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:set-config-option', key, value, sessionId),
+    approveTool: (requestId: string, optionId: string): Promise<void> =>
+      ipcRenderer.invoke('acp:approve-tool', requestId, optionId),
+    answerQuestion: (requestId: string, answer: string): Promise<void> =>
+      ipcRenderer.invoke('acp:answer-question', requestId, answer),
     stop: (): Promise<void> => ipcRenderer.invoke('acp:stop'),
     isRunning: (): Promise<boolean> => ipcRenderer.invoke('acp:is-running'),
     getContextSummary: (messages: Array<{ role: string; content: string }>): Promise<string> =>
@@ -182,19 +87,21 @@ const api = {
     }
   },
   stats: {
-    vibeSessions: (): Promise<VibeSession[]> => ipcRenderer.invoke('stats:vibe-sessions'),
-    vibeSessionMessages: (sessionId: string): Promise<VibeSessionMessage[]> =>
+    vibeSessions: (): Promise<unknown[]> => ipcRenderer.invoke('stats:vibe-sessions'),
+    vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('stats:vibe-session-messages', sessionId),
-    vibeSessionMetadata: (sessionId: string): Promise<{ activeModel: string | null; agentProfile: string | null }> =>
+    vibeSessionMetadata: (
+      sessionId: string
+    ): Promise<{ activeModel: string | null; agentProfile: string | null }> =>
       ipcRenderer.invoke('stats:vibe-session-metadata', sessionId),
-    vibeSubagentSessions: (parentSessionId: string): Promise<Array<{ sessionId: string; agentName: string; title: string | null; startTime: string; messages: VibeSessionMessage[] }>> =>
+    vibeSubagentSessions: (parentSessionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('stats:vibe-subagent-sessions', parentSessionId)
   },
   setup: {
-    check: (): Promise<SetupStatus> => ipcRenderer.invoke('setup:check'),
-    install: (): Promise<SetupStatus> => ipcRenderer.invoke('setup:install'),
-    onProgress: (cb: (event: SetupProgressEvent) => void): (() => void) => {
-      const listener = (_: Electron.IpcRendererEvent, event: SetupProgressEvent): void => cb(event)
+    check: (): Promise<unknown> => ipcRenderer.invoke('setup:check'),
+    install: (): Promise<unknown> => ipcRenderer.invoke('setup:install'),
+    onProgress: (cb: (event: { message: string; type: string }) => void): (() => void) => {
+      const listener = (_: Electron.IpcRendererEvent, event: { message: string; type: string }): void => cb(event)
       ipcRenderer.on('setup:progress', listener)
       return () => ipcRenderer.removeListener('setup:progress', listener)
     }
@@ -204,25 +111,52 @@ const api = {
       ipcRenderer.invoke('fs:list-dir', dir),
     searchFiles: (rootDir: string, query: string): Promise<Array<{ path: string; isDir: boolean }>> =>
       ipcRenderer.invoke('fs:search-files', rootDir, query),
-    readFile: (filePath: string): Promise<{ type: 'file' | 'directory' | 'error'; content: string }> =>
-      ipcRenderer.invoke('fs:read-file', filePath)
+    readFile: (
+      filePath: string
+    ): Promise<{ type: 'file' | 'directory' | 'error'; content: string }> =>
+      ipcRenderer.invoke('fs:read-file', filePath),
+    stat: (filePath: string): Promise<{ exists: boolean; isDir: boolean; size: number; ext: string }> =>
+      ipcRenderer.invoke('fs:stat', filePath),
+    readText: (
+      filePath: string
+    ): Promise<{ content: string; truncated: boolean; size: number; error: string | null }> =>
+      ipcRenderer.invoke('fs:read-text', filePath),
+    readBinary: (
+      filePath: string
+    ): Promise<{ base64: string; mime: string; size: number; error: string | null }> =>
+      ipcRenderer.invoke('fs:read-binary', filePath)
+  },
+  git: {
+    status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
+    log: (cwd: string, max: number): Promise<GitCommit[]> => ipcRenderer.invoke('git:log', cwd, max),
+    diffFile: (cwd: string, filePath: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:diff-file', cwd, filePath),
+    diffAll: (cwd: string): Promise<string | null> => ipcRenderer.invoke('git:diff-all', cwd)
   },
   shell: {
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:open-path', path)
   },
   vibe: {
-    getConfig: (): Promise<VibeConfig> => ipcRenderer.invoke('vibe:get-config'),
-    saveConfig: (config: VibeConfig): Promise<void> => ipcRenderer.invoke('vibe:save-config', config),
-    getAgents: (): Promise<VibeAgentConfig[]> => ipcRenderer.invoke('vibe:get-agents'),
-    saveAgent: (name: string, config: VibeAgentConfig): Promise<void> => ipcRenderer.invoke('vibe:save-agent', name, config),
+    getConfig: (): Promise<unknown> => ipcRenderer.invoke('vibe:get-config'),
+    saveConfig: (config: unknown): Promise<void> => ipcRenderer.invoke('vibe:save-config', config),
+    getRawConfig: (): Promise<{ content: string; error: string | null }> =>
+      ipcRenderer.invoke('vibe:get-raw-config'),
+    saveRawConfig: (content: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:save-raw-config', content),
+    getAgents: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-agents'),
+    saveAgent: (name: string, config: unknown): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-agent', name, config),
     deleteAgent: (name: string): Promise<void> => ipcRenderer.invoke('vibe:delete-agent', name),
-    getPrompts: (): Promise<VibePrompt[]> => ipcRenderer.invoke('vibe:get-prompts'),
-    savePrompt: (name: string, content: string): Promise<void> => ipcRenderer.invoke('vibe:save-prompt', name, content),
+    getPrompts: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-prompts'),
+    savePrompt: (name: string, content: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-prompt', name, content),
     deletePrompt: (name: string): Promise<void> => ipcRenderer.invoke('vibe:delete-prompt', name),
-    getSkills: (): Promise<VibeSkill[]> => ipcRenderer.invoke('vibe:get-skills'),
+    getSkills: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-skills'),
     getDir: (): Promise<string> => ipcRenderer.invoke('vibe:get-dir')
   }
 }
+
+export type AppAPI = typeof api
 
 if (process.contextIsolated) {
   try {
@@ -237,5 +171,3 @@ if (process.contextIsolated) {
   // @ts-ignore
   window.api = api
 }
-
-export type AppAPI = typeof api
