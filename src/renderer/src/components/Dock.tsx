@@ -28,9 +28,6 @@ export default function Dock(): React.JSX.Element | null {
   const startXRef = useRef(0)
   const startWRef = useRef(0)
 
-  // The dock only shows in chat view
-  if (!dockOpen || currentView !== 'chat') return null
-
   const cwd = currentSessionWorkingDirectory()
   const activePreview = previewTabs.find((t) => t.id === activePreviewId) ?? null
   const activeTabKind: 'files' | 'git' | 'preview' = activePreview ? 'preview' : dockTab
@@ -68,6 +65,10 @@ export default function Dock(): React.JSX.Element | null {
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizing, setDockWidth])
+
+  // The dock only shows in chat view. Keep this check AFTER all hooks so
+  // the hook count never changes between renders (React error #310).
+  if (!dockOpen || currentView !== 'chat') return null
 
   return (
     <aside
