@@ -259,7 +259,7 @@ fn tool_call(
         .and_then(|raw| serde_json::from_str(raw).ok());
     let kind = tool_kind(tc, input.as_ref());
 
-    let title = format!("{icon} {}", tc.title);
+    let title = format!("{icon} {}", short_title(&tc.title));
     let header = ui
         .collapsing(
             egui::RichText::new(title).color(color).small().strong(),
@@ -290,7 +290,24 @@ enum ToolKind {
     Grep,
     Subagent,
     Question,
+    Todos,
     Generic,
+}
+
+/// One-line, capped header label so multi-line/very long tool titles (full
+/// bash commands) never skew the chat layout — the full text stays in the
+/// body block.
+fn short_title(s: &str) -> String {
+    let first = s.lines().next().unwrap_or("");
+    let t = first.strip_prefix("bash: ").unwrap_or(first);
+    let mut out: String = t.chars().take(96).collect();
+    if t.chars().count() > 96 {
+        out.push('…');
+    }
+    if out.is_empty() {
+        out.push('…');
+    }
+    out
 }
 
 fn tool_kind(tc: &ToolCall, input: Option<&serde_json::Value>) -> ToolKind {
@@ -304,9 +321,11 @@ fn tool_kind(tc: &ToolCall, input: Option<&serde_json::Value>) -> ToolKind {
         ToolKind::Subagent
     } else if hay.contains("question") || hay.contains("ask_user") {
         ToolKind::Question
+    } else if has("todos") {
+        ToolKind::Todos
     } else if has("pattern") || hay.contains("grep") || hay.contains("search") {
         ToolKind::Grep
-    } else if has("path") || has("file_path") || hay.contains("read") {
+    } else if has("path") || has("file_path") || has("filePath") || hay.contains("read") {
         ToolKind::Read
     } else {
         ToolKind::Generic
@@ -361,6 +380,7 @@ fn tool_body(
         ToolKind::Read => {
             let path = str_field(&input.cloned(), "path")
                 .or_else(|| str_field(&input.cloned(), "file_path"))
+                .or_else(|| str_field(&input.cloned(), "filePath"))
                 .unwrap_or_else(|| tc.title.clone());
             chip(ui, p, &path);
             ui.add_space(4.0);
@@ -375,6 +395,7 @@ fn tool_body(
             } else {
                 let path = str_field(&input.cloned(), "path")
                     .or_else(|| str_field(&input.cloned(), "file_path"))
+                    .or_else(|| str_field(&input.cloned(), "filePath"))
                     .unwrap_or_else(|| tc.title.clone());
                 chip(ui, p, &path);
                 ui.add_space(4.0);
@@ -460,7 +481,7 @@ fn tool_body(
                                                 m.content.clone().unwrap_or_default();
                                             let preview: String = content
                                                 .chars()
-                                                .take(600)
+                                                .take(2000)
                                                 .collect();
                                             let (marker, color) = match m.role.as_str() {
                                                 "user" => ("🧑", p.accent),
@@ -468,7 +489,8 @@ fn tool_body(
                                                 "tool" => ("🔧", p.yellow),
                                                 _ => ("·", p.muted),
                                             };
-                                            ui.horizontal_wrapped(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.set_width(ui.available_width());
                                                 ui.label(
                                                     egui::RichText::new(marker)
                                                         .small()
@@ -486,6 +508,31 @@ fn tool_body(
                         );
                     }
                 }
+            }
+        }
+        ToolKind::Todos => {
+            let todos = input.and_then(|v| v.get("todos")).and_then(|t| t.as_array());
+            if let Some(todos) = todos {
+                for todo in todos {
+                    let content = todo.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    let status = todo.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                    let (mark, color) = match status {
+                        "completed" => ("✓", p.green),
+                        "in_progress" => ("◐", p.accent),
+                        _ => ("□", p.muted),
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(mark)
+                                .small()
+                                .strong()
+                                .color(color),
+                        );
+                        ui.label(egui::RichText::new(content).small().color(p.text));
+                    });
+                }
+            } else {
+                render_output(ui, tc, t, p);
             }
         }
         ToolKind::Generic => {

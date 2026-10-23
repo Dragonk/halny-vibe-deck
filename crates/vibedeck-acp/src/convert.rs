@@ -244,18 +244,48 @@ fn tool_call_started(session_id: &str, update: &Value) -> Option<AcpEvent> {
         .map(|input| extract_file_changes(&title, &input))
         .unwrap_or_default();
 
+    // session/load replay carries the final status and the output inside the
+    // same `tool_call` event — live calls get them via `tool_call_update`.
+    let status = ToolStatus::normalize(
+        update.get("status").and_then(Value::as_str).unwrap_or("in_progress"),
+    );
+    let output = update
+        .get("output")
+        .or_else(|| update.get("result"))
+        .map(|o| match o {
+            Value::String(s) => s.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_default(),
+        })
+        .or_else(|| output_from_content(update.get("content")));
+
     Some(AcpEvent::ToolCallStarted {
         session_id: session_id.to_string(),
         tool_call: ToolCall {
             id: tool_call_id,
             title,
             kind,
-            status: ToolStatus::Running,
+            status,
             input_json,
-            output: None,
+            output,
             file_changes,
         },
     })
+}
+
+/// The replay `tool_call` event carries its output as a content array:
+/// `content: [ { content: { text, type } } ]` — join the text parts.
+fn output_from_content(content: Option<&Value>) -> Option<String> {
+    let items = content?.as_array()?;
+    let mut text = String::new();
+    for item in items {
+        if let Some(t) = item.pointer("/content/text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(t);
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn extract_file_changes(tool_name: &str, input: &Value) -> Vec<FileChange> {
@@ -408,6 +438,34 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn replayed_tool_call_has_status_and_output() {
+        // session/load replay: status + output inside the tool_call event.
+        let params = serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tc9",
+                "title": "bash: ls",
+                "kind": "execute",
+                "status": "completed",
+                "rawInput": { "command": "ls" },
+                "content": [
+                    { "content": { "text": "file-a\nfile-b", "type": "text" } }
+                ]
+            }
+        });
+        let events = convert_update(&params);
+        match events.as_slice() {
+            [AcpEvent::ToolCallStarted { tool_call, .. }] => {
+                assert_eq!(tool_call.status, ToolStatus::Done);
+                assert!(tool_call.input_json.is_some());
+                assert_eq!(tool_call.output.as_deref(), Some("file-a\nfile-b"));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
     }
 
     #[test]

@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.8.0
+  VERSION: 0.8.1
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -95,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.8.0-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.8.0-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.8.1-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.8.1-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -118,14 +118,53 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.8.0-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.8.1-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
             The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
             library next to the binary — keep them together so PDF previews render.
 
-            ## What's new in v0.8.0
+            ## What's new in v0.8.1
+
+            This release fixes the two biggest complaints from 0.8.0 — how
+            replayed conversations look, and how the stats dashboard compares
+            to Mistral Vibe Nexus.
+
+            Chat & replay fixes:
+
+            - **Replayed tool calls now show their real status and output.**
+              Previously every tool call from a reloaded session rendered as
+              a forever-spinning one-line "bash: <command>" — the whole
+              conversation collapsed into a wall of log text. Tool calls now
+              replay as completed/failed with their output, rendered with the
+              same rich formatting as live ones (stdout/stderr/exit codes,
+              colorized diff blocks, todo lists, subagent transcripts).
+            - **Shorter, readable tool titles** — full commands are no longer
+              dumped into the header line; long ones are trimmed with an
+              ellipsis.
+            - **Markdown layout no longer breaks** on long unbroken tokens
+              (paths, URLs): code blocks and inline code wrap instead of
+              stretching the chat column, and code fences inside a message no
+              longer swallow the rest of the reply.
+
+            Stats, pixel-for-pixel with Nexus:
+
+            - Cards redesigned to the Nexus layout — subtitle, large value,
+              right-aligned meta.
+            - Cost and token charts now have real axes: a Y grid with labels
+              and date labels on X. Token bars stack input/output with
+              Both/Input/Output pills and a legend.
+            - Tool usage donut draws the total in the center; the activity
+              heatmap spans 13 weeks with the Nexus five-level green scale.
+            - Recent sessions list: rounded rows with project/model tags and
+              cost on the right, newest first, up to 20.
+            - Session drill-down now renders the transcript like the chat
+              view — markdown for assistant messages, right-aligned bubbles
+              for user messages, muted tool blocks — instead of raw JSON
+              soup.
+
+            ## Also in v0.8.0
 
             Previews & chat:
 

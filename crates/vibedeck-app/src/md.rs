@@ -37,7 +37,15 @@ pub fn markdown(ui: &mut Ui, src: &str) {
             let lang = t[3..].trim().to_string();
             let mut code = String::new();
             i += 1;
-            while i < lines.len() && !lines[i].trim_start().starts_with(&fence) {
+            // a closing fence is a line consisting only of fence characters,
+            // at least as long as the opening one — an inner ```bash or a
+            // language chip never closes the block prematurely
+            let fence_char = fence.chars().next().unwrap_or('`');
+            let is_close = |l: &str| {
+                let t = l.trim();
+                t.len() >= fence.len() && t.chars().all(|c| c == fence_char)
+            };
+            while i < lines.len() && !is_close(lines[i]) {
                 code.push_str(lines[i]);
                 code.push('\n');
                 i += 1;
@@ -202,7 +210,9 @@ fn code_block(ui: &mut Ui, lang: &str, code: &str) {
                 0.0,
                 TextFormat::simple(FontId::monospace(CODE), ui.visuals().text_color()),
             );
-            // wrap long code lines instead of breaking the layout
+            // break anywhere: long paths/commands wrap mid-token instead
+            // of overflowing the chat layout (Label::wrap sets max_width)
+            job.wrap.break_anywhere = true;
             ui.add(egui::Label::new(job).wrap().selectable(true));
         });
     ui.add_space(4.0);
@@ -567,6 +577,8 @@ pub fn inline_job(
     if !pending.is_empty() {
         job.append(&pending, 0.0, fmt_now(bold, italic, strike, false));
     }
+    // long unbroken tokens (paths, URLs) wrap mid-token instead of overflowing
+    job.wrap.break_anywhere = true;
     (job, links)
 }
 
