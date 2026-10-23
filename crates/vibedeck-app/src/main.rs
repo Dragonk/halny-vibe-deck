@@ -16,6 +16,7 @@ mod i18n;
 mod input;
 mod md;
 mod picker;
+mod preview;
 mod sessions;
 mod settings;
 mod setup;

@@ -59,6 +59,8 @@ impl ConfigOption {
 pub struct AvailableCommand {
     pub name: String,
     pub description: String,
+    /// Argument hint from the agent (`input.hint`), e.g. `status | login`.
+    pub hint: String,
 }
 
 /// Events emitted by the ACP worker towards the UI.

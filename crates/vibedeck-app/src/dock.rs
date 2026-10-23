@@ -1,11 +1,12 @@
 //! Right dock (the "workspace" panel, in the spirit of Claude Cowork):
-//! a lazy project file tree with a text preview and a Git tab with
-//! `git status` + per-file diffs, refreshed after every completed turn.
+//! a lazy project file tree and a Git tab with `git status` + per-file
+//! diffs, refreshed after every completed turn — plus one closable
+//! preview tab per opened file (markdown, tables, pdf, docx/pptx, images).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 
 use eframe::egui::{self, Ui};
 
@@ -18,14 +19,61 @@ const SKIP_DIRS: &[&str] = &[
     "target", ".next", ".cache", ".mypy_cache", ".pytest_cache", "vendor", "Pods",
 ];
 
-const PREVIEW_MAX_BYTES: u64 = 512 * 1024;
-const PREVIEW_MAX_LINES: usize = 4000;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DockTab {
-    #[default]
     Files,
     Git,
+    /// A preview tab for the file at this (absolute) path.
+    Preview(String),
+}
+
+impl Default for DockTab {
+    fn default() -> Self {
+        DockTab::Files
+    }
+}
+
+/// Why a preview is just a short note instead of content.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InfoKind {
+    Binary,
+    TooLarge,
+    Unsupported,
+}
+
+/// Parsed preview content, produced on a background thread.
+#[derive(Clone, Debug)]
+pub enum PreviewContent {
+    /// Plain / source text (also: extracted docx / pptx / pdf text).
+    Text(String),
+    /// Markdown → rendered friendly preview.
+    Markdown(String),
+    /// csv / tsv / spreadsheet first sheet.
+    Table {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        truncated: bool,
+        /// sheet note (spreadsheet name / "N sheets: …").
+        note: String,
+    },
+    /// Raw image bytes, decoded at render time.
+    Image { name: String, bytes: Vec<u8> },
+    /// A short "no preview" note.
+    Info(InfoKind),
+}
+
+#[derive(Clone, Debug)]
+pub enum PreviewState {
+    Loading,
+    Ready(PreviewContent),
+    Failed(String),
+}
+
+/// One open preview tab.
+#[derive(Clone, Debug)]
+pub struct PreviewTab {
+    pub path: String,
+    pub state: PreviewState,
 }
 
 /// One `git status --porcelain` line.
@@ -71,9 +119,11 @@ pub struct Dock {
     pub tab: DockTab,
     /// Expanded directory paths (absolute).
     pub expanded: HashSet<String>,
-    /// Absolute path of the previewed file + its content.
-    pub preview: Option<(String, String)>,
+    /// Open preview tabs, oldest first.
+    pub previews: Vec<PreviewTab>,
     pub git: GitState,
+    preview_tx: Option<Sender<(String, Result<PreviewContent, String>)>>,
+    preview_rx: Option<Receiver<(String, Result<PreviewContent, String>)>>,
 }
 
 /// Run `git` in `cwd` without flashing a console window on Windows.
@@ -163,6 +213,65 @@ impl Dock {
             .expect("failed to spawn git diff thread");
     }
 
+    /// Open (or reveal) a preview tab for `path` and load it in the
+    /// background.
+    pub fn open_preview(&mut self, path: &str) {
+        if self.preview_tx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.preview_tx = Some(tx);
+            self.preview_rx = Some(rx);
+        }
+        if !self.previews.iter().any(|t| t.path == path) {
+            self.previews.push(PreviewTab {
+                path: path.to_string(),
+                state: PreviewState::Loading,
+            });
+        }
+        if let Some(tx) = self.preview_tx.clone() {
+            let path_owned = path.to_string();
+            std::thread::Builder::new()
+                .name("vibedeck-preview".into())
+                .spawn(move || {
+                    let result = crate::preview::load(Path::new(&path_owned));
+                    let _ = tx.send((path_owned, result));
+                })
+                .expect("failed to spawn preview thread");
+        }
+        self.tab = DockTab::Preview(path.to_string());
+    }
+
+    /// Close the preview tab for `path` (and fall back to the Files tab
+    /// when it was active).
+    pub fn close_preview(&mut self, path: &str) {
+        self.previews.retain(|t| t.path != path);
+        if self.tab == DockTab::Preview(path.to_string()) {
+            self.tab = DockTab::Files;
+        }
+    }
+
+    /// Poll background preview loads; returns true when new data arrived.
+    pub fn poll_preview(&mut self) -> bool {
+        let Some(rx) = &self.preview_rx else {
+            return false;
+        };
+        let mut fresh = false;
+        loop {
+            match rx.try_recv() {
+                Ok((path, result)) => {
+                    if let Some(tab) = self.previews.iter_mut().find(|t| t.path == path) {
+                        tab.state = match result {
+                            Ok(content) => PreviewState::Ready(content),
+                            Err(e) => PreviewState::Failed(e),
+                        };
+                        fresh = true;
+                    }
+                }
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        fresh
+    }
+
     /// Poll background git results; returns true when new data arrived.
     pub fn poll_git(&mut self) -> bool {
         let mut fresh = false;
@@ -177,10 +286,10 @@ impl Dock {
                     self.git.branch.clear();
                     self.git.entries.clear();
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                Err(TryRecvError::Empty) => {
                     self.git.status_rx = Some(rx);
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Disconnected) => {}
             }
         }
         if let Some(rx) = self.git.diff_rx.take() {
@@ -192,10 +301,10 @@ impl Dock {
                 Ok(Err(e)) => {
                     self.git.diff_text = format!("git: {e}");
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                Err(TryRecvError::Empty) => {
                     self.git.diff_rx = Some(rx);
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                Err(TryRecvError::Disconnected) => {}
             }
         }
         fresh
@@ -210,6 +319,7 @@ pub fn panel(app: &mut VibedeckApp, ctx: &eframe::egui::Context) {
     let p = app.palette();
     let t = app.tr();
     let mut close = false;
+    let mut close_preview: Option<String> = None;
     egui::SidePanel::right("dock")
         .resizable(true)
         .default_width(320.0)
@@ -223,21 +333,56 @@ pub fn panel(app: &mut VibedeckApp, ctx: &eframe::egui::Context) {
         .show(ctx, |ui| {
             // -- header: tabs + close ------------------------------------
             ui.horizontal(|ui| {
-                let tab = app.dock.tab;
-                if ui
-                    .selectable_label(tab == DockTab::Files, egui::RichText::new(t.dock_files).small())
-                    .clicked()
-                {
-                    app.dock.tab = DockTab::Files;
-                }
-                if ui
-                    .selectable_label(tab == DockTab::Git, egui::RichText::new(t.dock_git).small())
-                    .clicked()
-                {
-                    app.dock.tab = DockTab::Git;
-                    let cwd = app.current_workdir();
-                    app.dock.refresh_status(&cwd);
-                }
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                egui::ScrollArea::horizontal()
+                    .id_salt("dock-tabs")
+                    .max_height(20.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let tab = app.dock.tab.clone();
+                            if ui
+                                .selectable_label(
+                                    tab == DockTab::Files,
+                                    egui::RichText::new(t.dock_files).small(),
+                                )
+                                .clicked()
+                            {
+                                app.dock.tab = DockTab::Files;
+                            }
+                            if ui
+                                .selectable_label(
+                                    tab == DockTab::Git,
+                                    egui::RichText::new(t.dock_git).small(),
+                                )
+                                .clicked()
+                            {
+                                app.dock.tab = DockTab::Git;
+                                let cwd = app.current_workdir();
+                                app.dock.refresh_status(&cwd);
+                            }
+                            for preview in app.dock.previews.clone() {
+                                let is_active =
+                                    tab == DockTab::Preview(preview.path.clone());
+                                ui.selectable_label(
+                                    is_active,
+                                    egui::RichText::new(short(&preview.path)).small(),
+                                )
+                                .on_hover_text(&preview.path);
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new("✕").small(),
+                                        )
+                                        .fill(egui::Color32::TRANSPARENT),
+                                    )
+                                    .on_hover_text(t.close)
+                                    .clicked()
+                                {
+                                    close_preview = Some(preview.path.clone());
+                                }
+                            }
+                        });
+                    });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
@@ -268,11 +413,16 @@ pub fn panel(app: &mut VibedeckApp, ctx: &eframe::egui::Context) {
             ui.separator();
             ui.add_space(4.0);
 
-            match app.dock.tab {
+            let tab = app.dock.tab.clone();
+            match tab {
                 DockTab::Files => files_tree(app, ui, t),
                 DockTab::Git => git_view(app, ui, t),
+                DockTab::Preview(path) => preview_view(app, ui, t, &path),
             }
         });
+    if let Some(path) = close_preview {
+        app.dock.close_preview(&path);
+    }
     if close {
         app.dock.open = false;
     }
@@ -291,35 +441,6 @@ fn files_tree(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
             // Root always expanded.
             dir_children(ui, app, &p, &root, 0);
         });
-
-    // Preview under the tree.
-    if let Some((path, content)) = app.dock.preview.clone() {
-        ui.add_space(6.0);
-        egui::CollapsingHeader::new(
-            egui::RichText::new(format!("📄 {}", short(&path)))
-                .small()
-                .strong()
-                .color(p.text),
-        )
-        .default_open(true)
-        .id_salt(format!("preview-{}", path))
-        .show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(260.0)
-                .auto_shrink([false, true])
-                .id_salt(format!("preview-scroll-{}", path))
-                .show(ui, |ui| {
-                    ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
-                    ui.label(egui::RichText::new(content.as_str()).small().color(p.text));
-                });
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new(format!("{} — {}", t.preview_lines, content.lines().count()))
-                    .small()
-                    .color(p.dim),
-            );
-        });
-    }
     let _ = t;
 }
 
@@ -358,10 +479,9 @@ fn dir_children(ui: &mut Ui, app: &mut VibedeckApp, p: &crate::theme::Palette, d
         };
         let selected = app
             .dock
-            .preview
-            .as_ref()
-            .map(|(sel, _)| sel == &path_str)
-            .unwrap_or(false);
+            .previews
+            .iter()
+            .any(|t| t.path == path_str);
         let label = egui::RichText::new(format!("{glyph} {name}"))
             .small()
             .color(if selected {
@@ -386,7 +506,8 @@ fn dir_children(ui: &mut Ui, app: &mut VibedeckApp, p: &crate::theme::Palette, d
                     app.dock.expanded.insert(path_str.clone());
                 }
             } else {
-                app.dock.preview = read_preview(&path);
+                // Open the file as a preview tab next to Files / Git.
+                app.dock.open_preview(&path_str);
             }
         }
         if is_dir && expanded {
@@ -397,28 +518,136 @@ fn dir_children(ui: &mut Ui, app: &mut VibedeckApp, p: &crate::theme::Palette, d
     }
 }
 
-fn read_preview(path: &Path) -> Option<(String, String)> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.len() > PREVIEW_MAX_BYTES {
-        return Some((path.to_string_lossy().to_string(), "(file too large)".into()));
-    }
-    let raw = std::fs::read(path).ok()?;
-    // Skip binary-looking files.
-    if raw.iter().take(2048).any(|b| *b == 0) {
-        return Some((path.to_string_lossy().to_string(), "(binary file)".into()));
-    }
-    let text = String::from_utf8_lossy(&raw).to_string();
-    let mut lines = text.lines();
-    let mut out = String::new();
-    for (i, line) in lines.by_ref().enumerate() {
-        if i >= PREVIEW_MAX_LINES {
-            out.push_str("… (truncated)");
-            break;
+// -- Preview tabs ----------------------------------------------------------------
+
+fn preview_view(app: &VibedeckApp, ui: &mut Ui, t: &Str, path: &str) {
+    let p = app.palette();
+    let Some(tab) = app.dock.previews.iter().find(|t| t.path == path) else {
+        return;
+    };
+    ui.label(
+        egui::RichText::new(&tab.path)
+            .small()
+            .color(p.muted),
+    );
+    ui.add_space(4.0);
+    match &tab.state {
+        PreviewState::Loading => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(14.0));
+                ui.label(egui::RichText::new(t.preview_loading).small().color(p.muted));
+            });
         }
-        out.push_str(line);
-        out.push('\n');
+        PreviewState::Failed(err) => {
+            ui.label(
+                egui::RichText::new(format!("⚠ {}: {err}", t.preview_failed))
+                    .small()
+                    .color(p.red),
+            );
+        }
+        PreviewState::Ready(content) => match content {
+            PreviewContent::Text(text) => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .id_salt(format!("preview-scroll-{path}"))
+                    .show(ui, |ui| {
+                        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                        ui.label(
+                            egui::RichText::new(text.as_str())
+                                .small()
+                                .color(p.text),
+                        );
+                    });
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("{} — {}", t.preview_lines, text.lines().count()))
+                        .small()
+                        .color(p.dim),
+                );
+            }
+            PreviewContent::Markdown(md) => {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, true])
+                    .id_salt(format!("preview-md-{path}"))
+                    .show(ui, |ui| {
+                        crate::md::markdown(ui, md);
+                    });
+            }
+            PreviewContent::Table {
+                columns,
+                rows,
+                truncated,
+                note,
+            } => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} × {}", rows.len(), columns.len()))
+                            .small()
+                            .color(p.dim),
+                    );
+                    if !note.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("· {note}"))
+                                .small()
+                                .color(p.dim),
+                        );
+                    }
+                    if *truncated {
+                        ui.label(
+                            egui::RichText::new(format!("· {}", t.preview_truncated))
+                                .small()
+                                .color(p.dim),
+                        );
+                    }
+                });
+                ui.add_space(4.0);
+                egui::ScrollArea::both()
+                    .auto_shrink([false, true])
+                    .id_salt(format!("preview-table-{path}"))
+                    .show(ui, |ui| {
+                        egui::Grid::new(format!("preview-grid-{path}"))
+                            .striped(true)
+                            .min_col_width(60.0)
+                            .show(ui, |ui| {
+                                for col in columns {
+                                    ui.label(
+                                        egui::RichText::new(col.as_str())
+                                            .small()
+                                            .strong()
+                                            .color(p.text),
+                                    );
+                                }
+                                ui.end_row();
+                                for row in rows.iter().take(300) {
+                                    for cell in row {
+                                        ui.label(
+                                            egui::RichText::new(cell.as_str())
+                                                .small()
+                                                .color(p.text),
+                                        );
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            }
+            PreviewContent::Image { name, bytes } => {
+                let max_w = ui.available_width();
+                let image =
+                    egui::Image::from_bytes(format!("bytes://{name}"), bytes.clone())
+                        .max_width(max_w);
+                ui.add(image);
+            }
+            PreviewContent::Info(kind) => {
+                let msg = match kind {
+                    InfoKind::Binary => t.preview_binary,
+                    InfoKind::TooLarge => t.preview_too_large,
+                    InfoKind::Unsupported => t.preview_unsupported,
+                };
+                ui.label(egui::RichText::new(msg).small().color(p.muted));
+            }
+        },
     }
-    Some((path.to_string_lossy().to_string(), out))
 }
 
 // -- Git tab -------------------------------------------------------------------

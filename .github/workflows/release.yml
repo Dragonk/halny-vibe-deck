@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.5.1
+  VERSION: 0.5.2
 
 jobs:
   build:
@@ -80,8 +80,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.5.1-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.5.1-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.5.2-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.5.2-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -103,11 +103,28 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.5.1-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.5.2-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
-            ## What's new in v0.5.1
+            ## What's new in v0.5.2
+
+            - 🎛 **Model / mode / thinking dropdowns work** — clicking a chip
+              now opens the choice list (the v0.5.1 popup never survived the
+              frame), with the current value highlighted and real values
+              loaded as soon as the app connects.
+            - ⚡ **Slash commands are back and richer** — `/` now lists the
+              agent's commands (with hints), plus your skills and prompts
+              from `~/.vibe`, exactly like the Nexus picker.
+            - 🖇 **File previews are tabs now** — clicking a file in the
+              workspace dock opens it as a tab next to Files / Git (closeable,
+              scrollable tab strip).
+            - 📊 **Friendly previews for many formats** — Markdown renders
+              nicely, CSV/TSV/Excel show as a table (first sheet), docx/pptx
+              and PDF show extracted text, images (png/jpg/gif/bmp/webp/tiff)
+              render inline, source/config files show as text.
+
+            ## Also in v0.5.1
 
             - 🛠 **Window resize & drag fixed** — edge/corner resize zones
               hand the resize to the OS the way PhotoCraft does; a stuck press

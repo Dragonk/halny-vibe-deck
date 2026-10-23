@@ -19,7 +19,18 @@ vibedeck-setup = { workspace = true }
 
 eframe = { version = "0.29", features = ["wgpu"] }
 egui = { version = "0.29" }
+# image loaders for the dock file previews (Image::from_bytes)
+egui_extras = { version = "0.29", default-features = false, features = ["image"] }
+# same `image` crate as the egui_extras loader — feature-united so previews
+# decode gif/bmp/webp/tiff/ico in addition to png+jpeg
+image = { version = "0.25", default-features = false, features = [
+    "png", "jpeg", "gif", "bmp", "webp", "tiff", "ico",
+] }
 png = "0.17"
+# file preview formats (workspace dock)
+calamine = "0.37"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+pdf-extract = "0.7"
 toml = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

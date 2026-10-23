@@ -123,6 +123,7 @@ non-blocking each frame.
 - Original project: [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus) (Apache-2.0)
 - Window move/resize behaviour follows [storytold/photocraft](https://github.com/storytold/photocraft)'s approach to frameless egui windows.
 - Bundled [Noto Sans Symbols 2](https://fonts.google.com/noto/specimen/Noto+Sans+Symbols+2) for interface glyphs — SIL OFL 1.1, see `crates/vibedeck-app/assets/NotoSansSymbols2-OFL.txt`.
+- File previews use the open-source crates [calamine](https://crates.io/crates/calamine) (Excel), [pdf-extract](https://crates.io/crates/pdf-extract) (PDF) and [zip](https://crates.io/crates/zip) (docx/pptx text).
 - VibeDeck is licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 
 ---

@@ -62,6 +62,17 @@ pub struct VibedeckApp {
     pub config_options: Vec<ConfigOption>,
     pub modes: Vec<ModeInfo>,
     pub commands: Vec<AvailableCommand>,
+    /// A background ACP session created right after connecting, so the
+    /// chips (model / mode / thinking) and the `/` command list have real
+    /// values before the first message is sent. The first prompt attaches
+    /// to this session instead of creating another one.
+    pub primed_session: Option<String>,
+    /// `session/new` for the primed session is in flight.
+    pub priming: bool,
+    /// Slash-list extras, exactly like the Nexus picker: skills and
+    /// prompts discovered under `~/.vibe/` — (name, content).
+    pub slash_skills: Vec<(String, String)>,
+    pub slash_prompts: Vec<(String, String)>,
 
     /// Live usage counters for the active session (`usage_update` events).
     pub usage: UsageStats,
@@ -98,6 +109,9 @@ impl VibedeckApp {
         // Windows shows tofu squares. Registered as a fallback so text keeps
         // using the Nexus-style Ubuntu everywhere else.
         install_symbols_font(&cc.egui_ctx);
+        // File-preview image loading (egui::Image::from_bytes decodes via
+        // these loaders — png/jpg/gif/bmp/webp/tiff/ico).
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         // Apply the saved theme (Nexus dark by default).
         theme::apply(&cc.egui_ctx, &settings.theme);
 
@@ -113,6 +127,16 @@ impl VibedeckApp {
             config_options: Vec::new(),
             modes: Vec::new(),
             commands: Vec::new(),
+            primed_session: None,
+            priming: false,
+            slash_skills: vibedeck_vibe::SkillFile::load_all()
+                .into_iter()
+                .map(|s| (s.name, s.content))
+                .collect(),
+            slash_prompts: vibedeck_vibe::PromptFile::load_all()
+                .into_iter()
+                .map(|p| (p.name, p.content))
+                .collect(),
             usage: UsageStats::default(),
             dock: crate::dock::Dock::default(),
             pending_prompt: None,
@@ -180,7 +204,8 @@ impl VibedeckApp {
     /// Reset the workspace dock when the working directory changes.
     pub fn reset_dock(&mut self) {
         self.dock.expanded.clear();
-        self.dock.preview = None;
+        self.dock.previews.clear();
+        self.dock.tab = crate::dock::DockTab::Files;
         self.dock.git.branch.clear();
         self.dock.git.entries.clear();
         self.dock.git.diff_file = None;
@@ -219,14 +244,37 @@ impl VibedeckApp {
             self.settings.preferred_model = Some(value.clone());
             self.settings.save();
         }
-        if let Some(session) = self.current_session() {
-            if let Some(acp_session_id) = session.acp_session_id.clone() {
-                self.acp.send(AcpCommand::SetConfigOption {
-                    session_id: acp_session_id,
-                    key: id.to_string(),
-                    value,
-                });
-            }
+        let acp_session_id = self
+            .current_session()
+            .and_then(|s| s.acp_session_id.clone())
+            .or_else(|| self.primed_session.clone());
+        if let Some(acp_session_id) = acp_session_id {
+            self.acp.send(AcpCommand::SetConfigOption {
+                session_id: acp_session_id,
+                key: id.to_string(),
+                value,
+            });
+        }
+    }
+
+    /// Create a background ACP session right after connecting so the
+    /// toolbar chips and the `/` list have real values from the start.
+    /// The first prompt attaches to it (see `send_message`).
+    fn prime_session_if_needed(&mut self) {
+        let active = self
+            .current_session()
+            .and_then(|s| s.acp_session_id.clone());
+        if self.status == AcpStatus::Connected
+            && active.is_none()
+            && self.primed_session.is_none()
+            && !self.priming
+        {
+            self.priming = true;
+            let cwd = self.current_workdir().to_string_lossy().to_string();
+            self.acp.send(AcpCommand::NewSession {
+                cwd,
+                model: self.settings.preferred_model.clone(),
+            });
         }
     }
 
@@ -298,10 +346,27 @@ impl VibedeckApp {
                 });
             }
             None => {
-                // Session handshake still in flight — queue the prompt.
-                self.busy = true;
-                self.pending_prompt = Some(text);
-                self.start_backend_session();
+                if let Some(primed) = self.primed_session.take() {
+                    // Attach the session primed at connect time.
+                    if let Some(session) = self.current_session_mut() {
+                        session.acp_session_id = Some(primed.clone());
+                    }
+                    self.busy = true;
+                    self.acp.send(AcpCommand::Prompt {
+                        session_id: primed,
+                        text,
+                    });
+                } else if self.priming {
+                    // The primed session is still being created — its
+                    // `SessionReady` will attach and flush this prompt.
+                    self.busy = true;
+                    self.pending_prompt = Some(text);
+                } else {
+                    // Session handshake still in flight — queue the prompt.
+                    self.busy = true;
+                    self.pending_prompt = Some(text);
+                    self.start_backend_session();
+                }
             }
         }
     }
@@ -318,7 +383,7 @@ impl VibedeckApp {
             repaint = true;
             self.apply_event(event);
         }
-        if self.dock.poll_git() {
+        if self.dock.poll_git() || self.dock.poll_preview() {
             repaint = true;
         }
         if repaint {
@@ -345,10 +410,15 @@ impl VibedeckApp {
                 self.protocol_version = Some(protocol_version);
                 self.status = AcpStatus::Connected;
                 self.acp_error.clear();
+                // Prime a background session so the chips + `/` list have
+                // real values before the first message.
+                self.prime_session_if_needed();
             }
             AcpEvent::Disconnected { .. } => {
                 self.status = AcpStatus::Disconnected;
                 self.busy = false;
+                self.primed_session = None;
+                self.priming = false;
                 self.finalize_open_messages();
             }
             AcpEvent::SessionsList(sessions) => self.backend_sessions = sessions,
@@ -360,6 +430,7 @@ impl VibedeckApp {
             } => {
                 self.status = AcpStatus::Connected;
                 self.busy = false;
+                self.priming = false;
                 self.modes = modes;
                 self.config_options = config_options;
                 if let Some(session) = self.current_session_mut() {
@@ -369,6 +440,10 @@ impl VibedeckApp {
                             session.name = title;
                         }
                     }
+                } else {
+                    // No local session yet — this is the primed background
+                    // session; the first prompt will attach to it.
+                    self.primed_session = Some(session_id);
                 }
                 if let Some(text) = self.pending_prompt.take() {
                     self.send_message(text);
@@ -377,6 +452,7 @@ impl VibedeckApp {
             AcpEvent::UsageUpdate { .. } => { /* handled above */ }
             AcpEvent::SessionError { context, message } => {
                 self.busy = false;
+                self.priming = false;
                 self.status = AcpStatus::Error;
                 self.acp_error = format!("{context}: {message}");
                 self.finalize_open_messages();

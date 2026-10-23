@@ -5,11 +5,21 @@
 //! mode / thinking chips (`.ic-model-select` / `.ic-mode-btn`: 11px text,
 //! panel bg, subtle border, radius 6, popup opens **upward**) and the
 //! 30×30 send/stop button (radius 7, accent while enabled).
+//!
+//! Popup management: egui 0.29 keeps a SINGLE popup slot in memory
+//! (`opened_popup: Option<Id>`), and `close_popup()` takes no argument —
+//! it closes whatever popup is open. The `@`/`/` suggestion popup must
+//! therefore only close the token popup when the token popup itself is
+//! open, otherwise it would instantly kill a chip dropdown clicked in the
+//! same frame (the v0.5.1 bug: chip clicks "did nothing").
 
 use eframe::egui::{self, AboveOrBelow, Align, Layout, Sense, Ui};
 
 use crate::app::VibedeckApp;
 use crate::theme::Palette;
+
+/// The three option-chip popup ids (model / mode / thinking).
+const CHIP_IDS: [&str; 3] = ["model", "mode", "thinking"];
 
 pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     let p = app.palette();
@@ -83,14 +93,40 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
         }
     }
 
-    // popup: @file mentions & /slash commands (open while a token trails)
+    // -- popup arbitration (single memory slot — see module docs) ---------
+    // Editing the text closes any open chip dropdown: the user moved on
+    // from the pickers to typing.
+    if text_response.as_ref().map(|r| r.changed()).unwrap_or(false) {
+        for id in CHIP_IDS {
+            let pid = egui::Id::new(format!("chip-{id}"));
+            if ui.memory(|m| m.is_popup_open(pid)) {
+                ui.memory_mut(|m| m.close_popup());
+            }
+        }
+    }
+    // A trailing `@`/`/` token re-opens the suggestion popup — but only
+    // when no chip dropdown is currently open (a click on a chip in this
+    // or a previous frame wins). When the token disappears, close the
+    // suggestion popup — but only if it is the one open.
     let token = trailing_token(&app.input);
     let popup_id = egui::Id::new("input-popup");
-    if token.is_some() {
-        ui.memory_mut(|m| m.open_popup(popup_id));
-    } else {
-        ui.memory_mut(|m| m.close_popup());
+    let chip_open = CHIP_IDS.iter().any(|id| {
+        ui.memory(|m| m.is_popup_open(egui::Id::new(format!("chip-{id}"))))
+    });
+    match token {
+        Some(_) => {
+            if !chip_open {
+                ui.memory_mut(|m| m.open_popup(popup_id));
+            }
+        }
+        None => {
+            if ui.memory(|m| m.is_popup_open(popup_id)) {
+                ui.memory_mut(|m| m.close_popup());
+            }
+        }
     }
+
+    // popup: @file mentions & /slash commands (open while a token trails)
     if let Some(response) = text_response.as_ref() {
         match token {
             Some(InputToken::File(query)) => {
@@ -121,6 +157,7 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                 );
             }
             Some(InputToken::Command(query)) => {
+                let rows = slash_rows(app, &query, 14);
                 egui::popup_above_or_below_widget(
                     ui,
                     popup_id,
@@ -130,22 +167,21 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                     |ui: &mut egui::Ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                         ui.set_min_width(320.0);
-                        let commands = app.commands.clone();
-                        let hits: Vec<_> = commands
-                            .iter()
-                            .filter(|c| c.name.contains(query.as_str()))
-                            .take(12)
-                            .collect();
-                        if hits.is_empty() {
+                        if rows.is_empty() {
                             ui.label(egui::RichText::new(t.commands).weak());
                         }
-                        for cmd in hits {
-                            if ui
-                                .add(egui::Button::new(format!("/{}", cmd.name)).small())
-                                .on_hover_text(&cmd.description)
-                                .clicked()
-                            {
-                                insert_token(&mut app.input, &cmd.name);
+                        for row in &rows {
+                            let resp = menu_row(ui, &p, &row.label, false)
+                                .on_hover_text(&row.hover);
+                            if resp.clicked() {
+                                match &row.action {
+                                    SlashAction::Command(name) => {
+                                        insert_token(&mut app.input, name);
+                                    }
+                                    SlashAction::Insert(content) => {
+                                        insert_slash_content(&mut app.input, content);
+                                    }
+                                }
                             }
                         }
                     },
@@ -154,6 +190,66 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
             None => {}
         }
     }
+}
+
+/// One row of the `/` suggestion list (commands from the agent, skills and
+/// prompts from `~/.vibe`, exactly like the Nexus slash picker).
+struct SlashRow {
+    label: String,
+    hover: String,
+    action: SlashAction,
+}
+
+enum SlashAction {
+    /// Insert `/<name> ` into the input.
+    Command(String),
+    /// Replace the `/token` with raw content (skills / prompts).
+    Insert(String),
+}
+
+fn slash_rows(app: &VibedeckApp, query: &str, limit: usize) -> Vec<SlashRow> {
+    let query = query.to_lowercase();
+    let mut rows: Vec<SlashRow> = Vec::new();
+    for cmd in &app.commands {
+        if !cmd.name.to_lowercase().contains(&query) {
+            continue;
+        }
+        let mut hover = if cmd.description.is_empty() {
+            format!("/{}", cmd.name)
+        } else {
+            cmd.description.clone()
+        };
+        if !cmd.hint.is_empty() {
+            hover = format!("{hover} — {}", cmd.hint);
+        }
+        rows.push(SlashRow {
+            label: format!("/{}", cmd.name),
+            hover,
+            action: SlashAction::Command(cmd.name.clone()),
+        });
+    }
+    for skill in &app.slash_skills {
+        if !skill.0.to_lowercase().contains(&query) {
+            continue;
+        }
+        rows.push(SlashRow {
+            label: format!("{} · {}", skill.0, app.tr().skill_label),
+            hover: skill.1.chars().take(160).collect(),
+            action: SlashAction::Insert(skill.1.clone()),
+        });
+    }
+    for prompt in &app.slash_prompts {
+        if !prompt.0.to_lowercase().contains(&query) {
+            continue;
+        }
+        rows.push(SlashRow {
+            label: format!("{} · {}", prompt.0, app.tr().prompt_label),
+            hover: prompt.1.chars().take(160).collect(),
+            action: SlashAction::Insert(prompt.1.clone()),
+        });
+    }
+    rows.truncate(limit);
+    rows
 }
 
 /// The working-directory folder button (Nexus `.ic-btn`, 28×28, radius 6,
@@ -221,10 +317,11 @@ fn send_button(app: &mut VibedeckApp, ui: &mut Ui, p: &Palette) {
 
 /// A Nexus `.ic-model-select` / `.ic-mode-btn` chip: 11px text, panel
 /// background, 1px subtle border, radius 6; a click opens the choices
-/// **above** the input card (`.ic-mode-dropdown`).
+/// **above** the input card (`.ic-mode-dropdown`). Clicking again closes.
 ///
 /// Always visible: without a session the chip shows the fallback label and
-/// an empty menu, exactly like the v0.4.0 pickers.
+/// an empty menu — the config options arrive with the first ACP session
+/// (which the app now primes right after connecting).
 fn option_chip(app: &mut VibedeckApp, ui: &mut Ui, p: &Palette, id: &str, fallback: &str) {
     let opt = app.option_value(id).cloned();
     let label = match &opt {
@@ -252,8 +349,14 @@ fn option_chip(app: &mut VibedeckApp, ui: &mut Ui, p: &Palette, id: &str, fallba
     painter.rect_stroke(rect, egui::Rounding::same(6.0), egui::Stroke::new(1.0_f32, border));
     painter.galley(rect.left_top() + pad, galley, text_color);
     let _ = painter;
+    let is_open = ui.memory(|m| m.is_popup_open(popup_id));
     if response.clicked() {
-        ui.memory_mut(|m| m.open_popup(popup_id));
+        // Toggle: open the dropdown, or close it when already open.
+        if is_open {
+            ui.memory_mut(|m| m.close_popup());
+        } else {
+            ui.memory_mut(|m| m.open_popup(popup_id));
+        }
     }
     let hover_label = label.clone();
     response.clone().on_hover_text(hover_label);
@@ -374,4 +477,42 @@ fn insert_token(input: &mut String, completion: &str) {
     input.push(tok_char);
     input.push_str(completion);
     input.push(' ');
+}
+
+/// Replace the trailing `/token` with raw content (skills / prompts),
+/// followed by a newline — the Nexus `insertSlashItem` behaviour.
+fn insert_slash_content(input: &mut String, content: &str) {
+    let line_start = input.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line = &input[line_start..];
+    if !line.starts_with('/') {
+        return;
+    }
+    input.truncate(line_start);
+    input.push_str(content);
+    if !input.ends_with('\n') {
+        input.push('\n');
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_trailing_tokens() {
+        assert!(matches!(trailing_token("hello @sr"), Some(InputToken::File(_))));
+        assert!(matches!(trailing_token("/comp"), Some(InputToken::Command(_))));
+        assert!(matches!(trailing_token("no /cmd mid line"), None));
+        assert!(matches!(trailing_token("@done "), None));
+    }
+
+    #[test]
+    fn inserts_slash_content() {
+        let mut input = "/ski".to_string();
+        insert_slash_content(&mut input, "be excellent");
+        assert_eq!(input, "be excellent\n");
+        let mut input = "prompt:\n/pro".to_string();
+        insert_slash_content(&mut input, "answer");
+        assert_eq!(input, "prompt:\nanswer\n");
+    }
 }

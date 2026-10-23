@@ -61,6 +61,11 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string(),
+                    hint: c
+                        .pointer("/input/hint")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 })
             })
             .collect();
