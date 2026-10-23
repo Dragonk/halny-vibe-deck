@@ -266,4 +266,5 @@ export const de = {
   rawTomlSaved: '✓ Gespeichert',
   rawTomlError: 'TOML-Fehler: {{error}}',
   reload: 'Neu laden',
+  binaryPreviewHint: 'Binärvorschau nicht unterstützt — Datei mit ↗ extern öffnen',
 }

@@ -266,4 +266,5 @@ export const es = {
   rawTomlSaved: '✓ Guardado',
   rawTomlError: 'Error TOML: {{error}}',
   reload: 'Recargar',
+  binaryPreviewHint: 'Vista previa binaria no compatible — usa ↗ para abrir el archivo externamente',
 }

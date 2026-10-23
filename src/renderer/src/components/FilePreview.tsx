@@ -513,6 +513,13 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
               {text.length > 200_000 ? text.slice(0, 200_000) + '\n\n[...truncated...]' : text}
             </pre>
           )}
+        {tab.kind === 'file' &&
+          text !== null &&
+          !isMd &&
+          !isMermaid &&
+          text.includes('\u0000') && (
+          <div className="dock-empty">{tr.binaryPreviewHint}</div>
+        )}
       </div>
     </div>
   )

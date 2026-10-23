@@ -266,4 +266,5 @@ export const fr = {
   rawTomlSaved: '✓ Enregistré',
   rawTomlError: 'Erreur TOML : {{error}}',
   reload: 'Recharger',
+  binaryPreviewHint: 'Aperçu binaire non pris en charge — utilisez ↗ pour ouvrir le fichier en externe',
 }

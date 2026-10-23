@@ -268,4 +268,5 @@ export const it = {
   rawTomlSaved: '✓ Salvato',
   rawTomlError: 'Errore TOML: {{error}}',
   reload: 'Ricarica',
+  binaryPreviewHint: 'Anteprima binaria non supportata — usa ↗ per aprire il file esternamente',
 }

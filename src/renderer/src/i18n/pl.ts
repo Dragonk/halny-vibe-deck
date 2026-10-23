@@ -266,4 +266,5 @@ export const pl = {
   rawTomlSaved: '✓ Zapisano',
   rawTomlError: 'Błąd TOML: {{error}}',
   reload: 'Wczytaj ponownie',
+  binaryPreviewHint: 'Brak podglądu pliku binarnego — użyj przycisku ↗, aby otworzyć plik zewnętrznie',
 }
