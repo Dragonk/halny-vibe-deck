@@ -178,6 +178,8 @@ pub struct SettingsPane {
 
     // working copies of config.toml
     pub active_model: String,
+    pub default_agent: String,
+    pub cli_theme: String,
     pub providers: Vec<ProviderWorking>,
     pub models: Vec<ModelConfig>,
     pub mcp: Vec<McpWorking>,
@@ -218,6 +220,8 @@ impl SettingsPane {
         let cfg = VibeConfigFile::load();
 
         self.active_model = cfg.active_model().unwrap_or_default();
+        self.default_agent = cfg.default_agent();
+        self.cli_theme = cfg.theme();
         self.providers = cfg
             .providers()
             .into_iter()
@@ -294,6 +298,17 @@ impl SettingsPane {
             cfg.set_active_model(self.active_model.trim());
         }
 
+        if self.default_agent.trim().is_empty() {
+            cfg.remove_key("default_agent");
+        } else {
+            cfg.set_default_agent(self.default_agent.trim());
+        }
+        if self.cli_theme.trim().is_empty() {
+            cfg.remove_key("theme");
+        } else {
+            cfg.set_theme(self.cli_theme.trim());
+        }
+
         cfg.remove_key("providers");
         for pw in &self.providers {
             let p = pw.synced();
@@ -367,6 +382,7 @@ fn set_list_or_remove(cfg: &mut VibeConfigFile, key: &str, buf: &str) {
 
 pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     let t = app.tr();
+    let p = app.palette();
     app.settings_pane.ensure_loaded();
 
     let tabs = [
@@ -384,11 +400,22 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.horizontal_wrapped(|ui| {
             for (tab, label) in tabs {
+                let selected = app.settings_pane.tab == tab;
                 if ui
-                    .selectable_label(
-                        app.settings_pane.tab == tab,
-                        egui::RichText::new(label).small(),
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(label)
+                                .small()
+                                .color(if selected { p.text } else { p.muted }),
+                        )
+                        .fill(if selected {
+                            p.panel_hover
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        })
+                        .rounding(egui::Rounding::same(5.0)),
                     )
+                    .on_hover_text(label)
                     .clicked()
                 {
                     app.settings_pane.tab = tab;
@@ -427,85 +454,92 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
 // -- General ---------------------------------------------------------------------
 
 fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
-    egui::Grid::new("settings-general")
-        .num_columns(2)
-        .spacing([20.0, 10.0])
-        .show(ui, |ui| {
-            // Language
-            ui.label(t.settings_language);
-            let lang = app.lang;
-            let mut lang_clicked = None;
-            ui.horizontal(|ui| {
-                if ui.selectable_label(lang == Lang::En, "English").clicked() {
-                    lang_clicked = Some(Lang::En);
-                }
-                if ui.selectable_label(lang == Lang::Pl, "Polski").clicked() {
-                    lang_clicked = Some(Lang::Pl);
+    let p = app.palette();
+
+    // -- Application -----------------------------------------------------------
+    section(ui, &p, t.settings_section_app);
+
+    // Language: System / English / Polski
+    let lang_label = |code: &str| -> String {
+        match code {
+            "en" => "English".to_string(),
+            "pl" => "Polski".to_string(),
+            _ => t.settings_system.to_string(),
+        }
+    };
+    ui.horizontal(|ui| {
+        ui.label(t.settings_language);
+        let mut picked: Option<String> = None;
+        egui::ComboBox::from_id_salt("settings-language")
+            .selected_text(lang_label(&app.settings.language))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for code in ["system", "en", "pl"] {
+                    ui.selectable_value(
+                        &mut picked,
+                        Some(code.to_string()),
+                        lang_label(code),
+                    );
                 }
             });
-            if let Some(l) = lang_clicked {
-                app.lang = l;
-                app.settings.language = l.code().into();
-                app.settings.save();
-            }
-            ui.end_row();
+        if let Some(code) = picked {
+            app.lang = Lang::resolve(&code);
+            app.settings.language = code;
+            app.settings.save();
+        }
+    });
 
-            // Theme
-            ui.label(t.settings_theme);
-            let current_theme = app.settings.theme.clone();
-            let mut theme_clicked: Option<&'static str> = None;
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(current_theme != "light", t.settings_dark)
-                    .clicked()
-                {
-                    theme_clicked = Some("dark");
-                }
-                if ui
-                    .selectable_label(current_theme == "light", t.settings_light)
-                    .clicked()
-                {
-                    theme_clicked = Some("light");
-                }
+    // Theme: System / Dark / Light
+    ui.horizontal(|ui| {
+        ui.label(t.settings_theme);
+        let theme_label = |code: &str| -> String {
+            match code {
+                "dark" => t.settings_dark.to_string(),
+                "light" => t.settings_light.to_string(),
+                _ => t.settings_system.to_string(),
+            }
+        };
+        let mut picked: Option<&'static str> = None;
+        egui::ComboBox::from_id_salt("settings-theme")
+            .selected_text(theme_label(&app.settings.theme))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut picked, Some("system"), theme_label("system"));
+                ui.selectable_value(&mut picked, Some("dark"), theme_label("dark"));
+                ui.selectable_value(&mut picked, Some("light"), theme_label("light"));
             });
-            if let Some(th) = theme_clicked {
-                app.set_theme(ui.ctx(), th); // saves + applies the Nexus palette
-            }
-            ui.end_row();
+        if let Some(th) = picked {
+            // saves + applies (resolving "system" against the OS theme)
+            app.set_theme(ui.ctx(), th);
+        }
+    });
 
-            // vibe-acp path
-            ui.label(t.settings_acp_path);
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut app.settings.acp_path)
-                        .desired_width(340.0)
-                        .font(egui::TextStyle::Monospace),
-                )
-                .changed()
-            {
-                app.settings.save();
-            }
-            ui.end_row();
+    // Sessions shown in the sidebar
+    ui.horizontal(|ui| {
+        ui.label(t.settings_sessions_limit);
+        let mut limit = app.settings.sidebar_sessions_limit.unwrap_or(30) as f64;
+        if ui.add(egui::DragValue::new(&mut limit)).changed() {
+            app.settings.sidebar_sessions_limit = Some(limit.clamp(5.0, 100.0) as usize);
+            app.settings.save();
+        }
+    });
 
-            // Working directory
-            ui.label(t.working_dir);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(app.current_workdir().to_string_lossy().to_string())
-                        .monospace()
-                        .weak(),
-                );
-                if ui.button(t.browse).clicked() {
-                    app.folder_picker.dir = app.current_workdir();
-                    app.folder_picker.entry = app.settings.working_directory.clone();
-                    app.folder_picker.open = true;
-                }
-            });
-            ui.end_row();
-        });
+    // -- Agent (vibe-acp) --------------------------------------------------------
+    section(ui, &p, t.settings_section_agent);
 
-    // Persist the acp path edit (kept outside the grid for borrow reasons).
-    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(t.settings_acp_path);
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut app.settings.acp_path)
+                    .desired_width(340.0)
+                    .font(egui::TextStyle::Monospace),
+            )
+            .changed()
+        {
+            app.settings.save();
+        }
+    });
     ui.horizontal(|ui| {
         if ui.button(t.settings_acp_autodetect).clicked() {
             app.setup_pane.autodetect = true;
@@ -523,6 +557,131 @@ fn general(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
             open_path(&vibedeck_vibe::vibe_home());
         }
     });
+
+    // -- Working directory -------------------------------------------------------
+    section(ui, &p, t.settings_section_workdir);
+    ui.horizontal(|ui| {
+        ui.label(t.working_dir);
+        ui.label(
+            egui::RichText::new(app.current_workdir().to_string_lossy().to_string())
+                .monospace()
+                .weak(),
+        );
+        if ui.button(t.browse).clicked() {
+            app.folder_picker.dir = app.current_workdir();
+            app.folder_picker.entry = app.settings.working_directory.clone();
+            app.folder_picker.open = true;
+        }
+    });
+
+    // -- Mistral Vibe CLI (~/.vibe/config.toml) ----------------------------------
+    section(ui, &p, t.settings_section_cli);
+    let pane = &mut app.settings_pane;
+
+    // Active model
+    ui.horizontal(|ui| {
+        ui.label(t.settings_active_model);
+        let mut choices: Vec<String> = pane
+            .models
+            .iter()
+            .filter_map(|m| {
+                m.alias
+                    .as_deref()
+                    .filter(|a| !a.is_empty())
+                    .or_else(|| (!m.name.is_empty()).then_some(m.name.as_str()))
+                    .map(str::to_string)
+            })
+            .collect();
+        if !pane.active_model.is_empty() && !choices.contains(&pane.active_model) {
+            choices.push(pane.active_model.clone());
+        }
+        let mut picked: Option<String> = None;
+        egui::ComboBox::from_id_salt("settings-cli-model")
+            .selected_text(if pane.active_model.is_empty() {
+                "—".to_string()
+            } else {
+                pane.active_model.clone()
+            })
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for v in &choices {
+                    ui.selectable_value(&mut picked, Some(v.clone()), v);
+                }
+            });
+        if let Some(v) = picked {
+            pane.active_model = v;
+        }
+    });
+
+    // Default agent
+    ui.horizontal(|ui| {
+        ui.label(t.settings_default_agent);
+        let mut choices: Vec<String> = vec!["accept-edits".into(), "ask".into()];
+        for a in &pane.agents {
+            if a.a.agent_type.as_deref() != Some("subagent")
+                && !a.a.name.is_empty()
+                && !choices.contains(&a.a.name)
+            {
+                choices.push(a.a.name.clone());
+            }
+        }
+        if !pane.default_agent.is_empty() && !choices.contains(&pane.default_agent) {
+            choices.push(pane.default_agent.clone());
+        }
+        let mut picked: Option<String> = None;
+        egui::ComboBox::from_id_salt("settings-cli-agent")
+            .selected_text(if pane.default_agent.is_empty() {
+                "—".to_string()
+            } else {
+                pane.default_agent.clone()
+            })
+            .width(220.0)
+            .show_ui(ui, |ui| {
+                for v in &choices {
+                    ui.selectable_value(&mut picked, Some(v.clone()), v);
+                }
+            });
+        if let Some(v) = picked {
+            pane.default_agent = v;
+        }
+    });
+
+    // CLI theme
+    ui.horizontal(|ui| {
+        ui.label(t.settings_cli_theme);
+        let theme_label = |code: &str| -> &str {
+            match code {
+                "light" => t.settings_light,
+                _ => t.settings_dark,
+            }
+        };
+        let mut picked: Option<String> = None;
+        egui::ComboBox::from_id_salt("settings-cli-theme")
+            .selected_text(if pane.cli_theme.is_empty() {
+                t.settings_dark.to_string()
+            } else {
+                theme_label(&pane.cli_theme).to_string()
+            })
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                for v in ["dark", "light"] {
+                    ui.selectable_value(&mut picked, Some(v.to_string()), theme_label(v));
+                }
+            });
+        if let Some(v) = picked {
+            pane.cli_theme = v;
+        }
+    });
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(t.settings_cli_note).small().weak());
+}
+
+/// A settings section header.
+fn section(ui: &mut Ui, p: &crate::theme::Palette, text: &str) {
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new(text).strong().color(p.accent));
+    ui.add_space(2.0);
 }
 
 fn open_path(path: &std::path::Path) {

@@ -38,6 +38,11 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                 session_id: session_id.clone(),
                 text: text.to_string(),
             }),
+            // session/load history replay: the user's own messages
+            Some("user_message_chunk") => events.push(AcpEvent::UserMessageChunk {
+                session_id: session_id.clone(),
+                text: text.to_string(),
+            }),
             _ => {}
         }
     }
@@ -123,6 +128,14 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
 
     // --- older/alternative shape (type-tagged) ----------------------------
     match type_tag {
+        Some("user_message_chunk") => {
+            if let Some(text) = update.pointer("/chunk/text").and_then(Value::as_str) {
+                events.push(AcpEvent::UserMessageChunk {
+                    session_id: session_id.clone(),
+                    text: text.to_string(),
+                });
+            }
+        }
         Some("agent_message_chunk") => {
             if session_update != Some("agent_message_chunk") {
                 if let Some(text) = update.pointer("/chunk/text").and_then(Value::as_str) {

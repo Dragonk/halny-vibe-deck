@@ -49,6 +49,9 @@ pub struct VibedeckApp {
     pub settings: AppSettings,
     pub lang: Lang,
     pub view: View,
+    /// The theme actually applied ("dark"/"light") — `settings.theme` may
+    /// be "system", resolved here from the OS preference each frame.
+    pub theme_effective: String,
     pub acp: AcpHandle,
     pub status: AcpStatus,
     pub protocol_version: Option<u32>,
@@ -57,6 +60,10 @@ pub struct VibedeckApp {
     pub sessions: Vec<ChatSession>,
     pub current: Option<usize>,
     pub backend_sessions: Vec<AcpSessionInfo>,
+    /// A `session/load` for this backend session id is in flight; the
+    /// replayed history (`SessionHistory`) will be attached to the
+    /// current local mirror.
+    pub loading_session: Option<String>,
     /// Session config options (model / mode / thinking / …) advertised by
     /// `session/new` → `configOptions` (vibe-acp ≥ 3.0).
     pub config_options: Vec<ConfigOption>,
@@ -104,7 +111,7 @@ pub struct VibedeckApp {
 impl VibedeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = AppSettings::load();
-        let lang = Lang::from_code(&settings.language);
+        let lang = Lang::resolve(&settings.language);
         // Symbols font (─ □ ✕ ➤ ⏹ ✔ …) — egui's Ubuntu font lacks them and
         // Windows shows tofu squares. Registered as a fallback so text keeps
         // using the Nexus-style Ubuntu everywhere else.
@@ -124,6 +131,7 @@ impl VibedeckApp {
             sessions: Vec::new(),
             current: None,
             backend_sessions: Vec::new(),
+            loading_session: None,
             config_options: Vec::new(),
             modes: Vec::new(),
             commands: Vec::new(),
@@ -154,9 +162,15 @@ impl VibedeckApp {
             show_about: false,
             toast: None,
             lang,
+            theme_effective: settings.theme.clone(),
             acp,
             settings,
         };
+
+        // Resolve a "system" theme preference against the OS theme for the
+        // very first frame (`refresh_theme` keeps it in sync afterwards).
+        app.theme_effective = app.resolved_theme(&cc.egui_ctx).to_string();
+        theme::apply(&cc.egui_ctx, &app.theme_effective);
 
         // Fast start: if we already know the vibe-acp path from the settings,
         // connect immediately without any blocking dependency scan. The UI
@@ -176,15 +190,39 @@ impl VibedeckApp {
         t(self.lang)
     }
 
+    /// Resolve the effective theme ("dark" | "light") from the preference
+    /// ("system" | "dark" | "light"), reading the OS theme when needed.
+    fn resolved_theme(&self, ctx: &Context) -> &'static str {
+        match self.settings.theme.as_str() {
+            "light" => "light",
+            "dark" => "dark",
+            _ => match ctx.input(|i| i.raw.system_theme) {
+                Some(egui::Theme::Light) => "light",
+                _ => "dark",
+            },
+        }
+    }
+
+    /// Re-apply the theme when the preference or the OS theme changed.
+    /// Runs every frame — cheap (one string compare) unless it changes.
+    fn refresh_theme(&mut self, ctx: &Context) {
+        let effective = self.resolved_theme(ctx);
+        if effective != self.theme_effective {
+            self.theme_effective = effective.to_string();
+            theme::apply(ctx, effective);
+        }
+    }
+
     pub fn palette(&self) -> theme::Palette {
-        theme::Palette::for_theme(&self.settings.theme)
+        theme::Palette::for_theme(&self.theme_effective)
     }
 
     /// Re-apply the theme after a settings change.
     pub fn set_theme(&mut self, ctx: &Context, theme: &str) {
         self.settings.theme = theme.to_string();
         self.settings.save();
-        theme::apply(ctx, theme);
+        theme::apply(ctx, self.resolved_theme(ctx));
+        self.theme_effective = self.resolved_theme(ctx).to_string();
     }
 
     pub fn start_agent(&mut self, acp_path: &str) {
@@ -434,6 +472,7 @@ impl VibedeckApp {
                 self.status = AcpStatus::Connected;
                 self.busy = false;
                 self.priming = false;
+                self.loading_session = None;
                 self.modes = modes;
                 self.config_options = config_options;
                 if let Some(session) = self.current_session_mut() {
@@ -453,9 +492,27 @@ impl VibedeckApp {
                 }
             }
             AcpEvent::UsageUpdate { .. } => { /* handled above */ }
+            // Replayed history of a `session/load` — replaces the empty
+            // local mirror with the real conversation transcript.
+            AcpEvent::SessionHistory {
+                session_id,
+                messages,
+            } => {
+                if self.loading_session.as_deref() == Some(session_id.as_str()) {
+                    if let Some(session) = self.current_session_mut() {
+                        session.messages = messages;
+                        session.last_active_ms = vibedeck_core::types::now_ms();
+                    }
+                }
+            }
+            // Live user chunks never occur (the user types locally); the
+            // variant exists for the session/load replay path, which the
+            // worker folds into `SessionHistory` instead.
+            AcpEvent::UserMessageChunk { .. } => {}
             AcpEvent::SessionError { context, message } => {
                 self.busy = false;
                 self.priming = false;
+                self.loading_session = None;
                 self.status = AcpStatus::Error;
                 self.acp_error = format!("{context}: {message}");
                 self.finalize_open_messages();
@@ -593,6 +650,7 @@ impl VibedeckApp {
     pub fn ui(&mut self, ctx: &Context) {
         self.drain_events(ctx);
         self.poll_setup();
+        self.refresh_theme(ctx);
 
         let p = self.palette();
         let t = self.tr();
@@ -659,7 +717,7 @@ impl VibedeckApp {
                         }
                         if ui
                             .add(
-                                egui::Button::new(egui::RichText::new(if self.settings.theme == "light" {
+                                egui::Button::new(egui::RichText::new(if self.theme_effective == "light" {
                                     "🌙"
                                 } else {
                                     "☀"
@@ -670,7 +728,10 @@ impl VibedeckApp {
                             .on_hover_text(t.settings_theme)
                             .clicked()
                         {
-                            let next = if self.settings.theme == "light" { "dark" } else { "light" };
+                            // Explicit toggle (System users can pick the
+                            // other extreme here; the combo in Settings
+                            // offers the System option).
+                            let next = if self.theme_effective == "light" { "dark" } else { "light" };
                             self.set_theme(ctx, next);
                         }
                         // workspace dock toggle (chat only)

@@ -3436,6 +3436,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3861,7 +3870,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vibedeck-acp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3871,7 +3880,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-app"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "calamine",
@@ -3886,6 +3895,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
+ "sys-locale",
  "toml 0.8.23",
  "ureq",
  "vibedeck-acp",
@@ -3898,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3906,7 +3916,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-setup"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3915,7 +3925,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-vibe"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "dirs",

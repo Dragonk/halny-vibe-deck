@@ -44,6 +44,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
+# OS locale sniffing for the "System" language preference
+sys-locale = "0.3"
 
 # Windows-only: embed the window icon into the executable resource section.
 [target.'cfg(windows)'.build-dependencies]

@@ -98,6 +98,14 @@ pub enum AcpEvent {
     SessionError { context: String, message: String },
     /// Streaming assistant text.
     MessageChunk { session_id: String, text: String },
+    /// Replayed user text (`session/load` history, `user_message_chunk`).
+    UserMessageChunk { session_id: String, text: String },
+    /// Full conversation history replayed by `session/load` — the UI
+    /// replaces the local mirror's messages with these.
+    SessionHistory {
+        session_id: String,
+        messages: Vec<crate::types::Message>,
+    },
     /// Streaming assistant reasoning text.
     ThinkingChunk { session_id: String, text: String },
     /// Reasoning stream ended.

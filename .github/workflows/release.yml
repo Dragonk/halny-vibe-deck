@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.6.0
+  VERSION: 0.7.0
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -95,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.6.0-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.6.0-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.7.0-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.7.0-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -118,14 +118,38 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.6.0-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.7.0-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
             The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
             library next to the binary — keep them together so PDF previews render.
 
-            ## What's new in v0.6.0
+            ## What's new in v0.7.0
+
+            Sessions & settings:
+
+            - 💬 **CLI session history is fully restored** — clicking a session
+              in *History from CLI* now replays the real conversation
+              (user/assistant messages, thinking blocks, tool calls) into the
+              UI instead of showing an empty mirror. Already-loaded sessions
+              switch instantly, and a load in progress is indicated.
+            - ⚙️ **Settings redesigned** — the General tab is organized into
+              clear sections: Application, Agent (vibe-acp), Working
+              directory, and Mistral Vibe CLI (config.toml), with a modern
+              tab bar.
+            - 🌐 **Language is a dropdown** — System / English / Polski
+              (System follows your OS locale).
+            - 🌓 **Theme follows the OS** — a new *System* option beside
+              Dark/Light; VibeDeck switches automatically when your OS
+              switches.
+            - 🤖 **Active model, default agent & CLI theme as dropdowns** —
+              model aliases come from your config, the agent list includes
+              your `~/.vibe/agents` (top-level), written back to
+              `~/.vibe/config.toml` via 💾 Save.
+            - 🗂 **Configurable sidebar session limit** (5–100).
+
+            ## Also in v0.6.0
 
             Real file previews — no more plain text dumps:
 

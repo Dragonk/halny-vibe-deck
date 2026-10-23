@@ -8,6 +8,8 @@ pub enum Lang {
 }
 
 impl Lang {
+    /// Legacy helper — kept for config files that store a plain code.
+    #[allow(dead_code)]
     pub fn from_code(code: &str) -> Self {
         match code {
             "pl" => Lang::Pl,
@@ -15,6 +17,26 @@ impl Lang {
         }
     }
 
+    /// Resolve a preference ("system" | "en" | "pl") into a UI language.
+    /// "system" sniffs the OS locale (Polish → Pl, everything else → En).
+    pub fn resolve(code: &str) -> Self {
+        match code {
+            "en" => Lang::En,
+            "pl" => Lang::Pl,
+            _ => {
+                let locale = sys_locale::get_locale()
+                    .unwrap_or_default()
+                    .to_lowercase();
+                if locale.starts_with("pl") {
+                    Lang::Pl
+                } else {
+                    Lang::En
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "en",
@@ -77,10 +99,20 @@ pub struct Str {
     pub settings_general: &'static str,
     pub settings_language: &'static str,
     pub settings_theme: &'static str,
+    pub settings_system: &'static str,
     pub settings_dark: &'static str,
     pub settings_light: &'static str,
     pub settings_acp_path: &'static str,
     pub settings_acp_autodetect: &'static str,
+    pub settings_section_app: &'static str,
+    pub settings_section_agent: &'static str,
+    pub settings_section_cli: &'static str,
+    pub settings_section_workdir: &'static str,
+    pub settings_sessions_limit: &'static str,
+    pub settings_default_agent: &'static str,
+    pub settings_cli_theme: &'static str,
+    pub settings_active_model: &'static str,
+    pub settings_cli_note: &'static str,
     pub settings_models_providers: &'static str,
     pub settings_mcp: &'static str,
     pub settings_tools: &'static str,
@@ -231,10 +263,20 @@ pub const EN: Str = Str {
     settings_general: "General",
     settings_language: "Language",
     settings_theme: "Theme",
+    settings_system: "System",
     settings_dark: "Dark",
     settings_light: "Light",
     settings_acp_path: "vibe-acp path",
     settings_acp_autodetect: "Auto-detect",
+    settings_section_app: "Application",
+    settings_section_agent: "Agent (vibe-acp)",
+    settings_section_cli: "Mistral Vibe CLI — ~/.vibe/config.toml",
+    settings_section_workdir: "Working directory",
+    settings_sessions_limit: "Sessions shown in sidebar",
+    settings_default_agent: "Default agent",
+    settings_cli_theme: "CLI theme",
+    settings_active_model: "Active model",
+    settings_cli_note: "Changes here are written by the 💾 Save button above.",
     settings_models_providers: "Models & providers",
     settings_mcp: "MCP servers",
     settings_tools: "Tools & telemetry",
@@ -380,10 +422,20 @@ pub const PL: Str = Str {
     settings_general: "Ogólne",
     settings_language: "Język",
     settings_theme: "Motyw",
+    settings_system: "Systemowy",
     settings_dark: "Ciemny",
     settings_light: "Jasny",
     settings_acp_path: "Ścieżka vibe-acp",
     settings_acp_autodetect: "Wykryj automatycznie",
+    settings_section_app: "Aplikacja",
+    settings_section_agent: "Agent (vibe-acp)",
+    settings_section_cli: "Mistral Vibe CLI — ~/.vibe/config.toml",
+    settings_section_workdir: "Katalog roboczy",
+    settings_sessions_limit: "Sesje widoczne na panelu bocznym",
+    settings_default_agent: "Domyślny agent",
+    settings_cli_theme: "Motyw CLI",
+    settings_active_model: "Aktywny model",
+    settings_cli_note: "Zmiany tutaj zapisuje przycisk 💾 Zapisz u góry.",
     settings_models_providers: "Modele i dostawcy",
     settings_mcp: "Serwery MCP",
     settings_tools: "Narzędzia i telemetria",

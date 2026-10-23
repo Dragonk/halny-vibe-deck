@@ -2,7 +2,7 @@
 //! from the UI, and streams events back. Mirrors the architecture of
 //! the old Electron main process (`acp.ts`) with none of the Electron.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use vibedeck_core::proto::{
     AcpCommand, AcpEvent, AcpSessionInfo, ConfigOption, ConfigOptionChoice, ModeInfo,
 };
+use vibedeck_core::types::{Message, MessageSender, ThinkingBlock};
 
 pub const CLIENT_INFO_NAME: &str = "VibeDeck";
 
@@ -80,8 +81,10 @@ struct Client {
     pending: PendingMap,
     raw_rx: Receiver<RawMsg>,
     event_tx: Sender<AcpEvent>,
-    /// Sessions being loaded from disk — replay notifications suppressed.
-    suppressed: HashSet<String>,
+    /// Sessions being loaded from disk — their `session/update` replay is
+    /// collected here instead of being forwarded live, then emitted once
+    /// as a structured [`AcpEvent::SessionHistory`].
+    replaying: HashMap<String, Vec<Value>>,
     stdout_closed: bool,
     next_id: u64,
 }
@@ -220,7 +223,7 @@ impl Client {
             pending,
             raw_rx,
             event_tx,
-            suppressed: HashSet::new(),
+            replaying: HashMap::new(),
             stdout_closed: false,
             next_id: 0,
         })
@@ -301,8 +304,11 @@ impl Client {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_string();
-                    if self.suppressed.contains(&session_id) {
-                        continue; // session/load replay — skip duplicates
+                    if let Some(replay) = self.replaying.get_mut(&session_id) {
+                        // session/load replay — collected, emitted as
+                        // SessionHistory once the request finishes.
+                        replay.push(params);
+                        continue;
                     }
                     events.extend(crate::convert::convert_update(&params));
                 }
@@ -576,15 +582,23 @@ impl Worker {
             });
             return;
         };
-        client.suppressed.insert(session_id.to_string());
+        client.replaying.insert(session_id.to_string(), Vec::new());
         let params = json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] });
         let outcome = client.request("session/load", &params, REQUEST_TIMEOUT);
-        if let Some(client) = self.client.as_mut() {
-            client.suppressed.remove(session_id);
-        }
+        let replay = client
+            .replaying
+            .remove(session_id)
+            .unwrap_or_default();
         match outcome {
             Ok(result) => {
                 let (sid, modes, config_options) = parse_new_session(&result);
+                let history = replay_to_messages(&replay);
+                if !history.is_empty() {
+                    self.emit(AcpEvent::SessionHistory {
+                        session_id: session_id.to_string(),
+                        messages: history,
+                    });
+                }
                 self.finish_session_ready(
                     if sid.is_empty() {
                         session_id.to_string()
@@ -894,6 +908,89 @@ fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption
     (session_id, modes, config_options)
 }
 
+/// Fold collected `session/load` replay updates into a message list the
+/// UI can show as conversation history.
+///
+/// The replay arrives as `user_message_chunk` / `agent_message_chunk` /
+/// `agent_thought_chunk` / `tool_call` notifications; user chunks start a
+/// new turn, everything else appends to the currently open assistant
+/// message. Everything is marked complete — the replay is a finished
+/// transcript, not a live stream.
+fn replay_to_messages(updates: &[Value]) -> Vec<Message> {
+    let mut messages: Vec<Message> = Vec::new();
+    for params in updates {
+        for ev in crate::convert::convert_update(params) {
+            match ev {
+                AcpEvent::UserMessageChunk { text, .. } => {
+                    messages.push(Message::new_user(&text));
+                }
+                AcpEvent::MessageChunk { text, .. } => {
+                    ensure_replay_ai_message(&mut messages).content.push_str(&text);
+                }
+                AcpEvent::ThinkingChunk { text, .. } => {
+                    let msg = ensure_replay_ai_message(&mut messages);
+                    match msg.thinking.last_mut() {
+                        Some(block) if !block.is_complete => block.content.push_str(&text),
+                        _ => msg.thinking.push(ThinkingBlock {
+                            id: "thinking".into(),
+                            content: text,
+                            is_complete: false,
+                        }),
+                    }
+                }
+                AcpEvent::ThinkingComplete { .. } => {
+                    if let Some(msg) = messages.last_mut() {
+                        for block in &mut msg.thinking {
+                            block.is_complete = true;
+                        }
+                    }
+                }
+                AcpEvent::ToolCallStarted { tool_call, .. } => {
+                    let msg = ensure_replay_ai_message(&mut messages);
+                    msg.tool_calls.push(tool_call);
+                }
+                AcpEvent::ToolCallUpdated {
+                    tool_call_id,
+                    status,
+                    output,
+                    ..
+                } => {
+                    for msg in messages.iter_mut().rev() {
+                        for tc in &mut msg.tool_calls {
+                            if tc.id == tool_call_id {
+                                tc.status = status;
+                                if output.is_some() {
+                                    tc.output = output.clone();
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {} // usage / plan / commands are not part of the transcript
+            }
+        }
+    }
+    for msg in &mut messages {
+        msg.is_complete = true;
+        for block in &mut msg.thinking {
+            block.is_complete = true;
+        }
+    }
+    messages
+}
+
+/// Find or open the assistant message replay events append to.
+fn ensure_replay_ai_message(messages: &mut Vec<Message>) -> &mut Message {
+    let needs_new = !matches!(
+        messages.last(),
+        Some(msg) if msg.sender == MessageSender::Ai && !msg.is_complete
+    );
+    if needs_new {
+        messages.push(Message::new_ai());
+    }
+    messages.last_mut().expect("just pushed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,6 +1008,57 @@ mod tests {
         let model_opt = config_options.iter().find(|o| o.id == "model").unwrap();
         assert_eq!(model_opt.current_value, "mistral-medium-3.5");
         assert_eq!(model_opt.choices.len(), 1);
+    }
+
+    #[test]
+    fn replay_builds_conversation_history() {
+        // session/load replays the transcript as session/update chunks:
+        // user_message_chunk → agent_message_chunk (×2, one message)
+        // → user_message_chunk → agent_message_chunk + tool_call.
+        let updates = vec![
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "hello" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "hi " } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "there" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "list files" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "t1",
+                    "title": "read_file",
+                    "kind": "read",
+                    "rawInput": { "path": "a.txt" }
+                }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "done" } }
+            }),
+        ];
+        let messages = replay_to_messages(&updates);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].sender, MessageSender::User);
+        assert_eq!(messages[0].content, "hello");
+        assert_eq!(messages[1].sender, MessageSender::Ai);
+        assert_eq!(messages[1].content, "hi there");
+        assert!(messages[1].is_complete);
+        assert_eq!(messages[3].sender, MessageSender::Ai);
+        assert_eq!(messages[3].content, "done");
+        assert_eq!(messages[3].tool_calls.len(), 1);
+        assert_eq!(messages[3].tool_calls[0].title, "read_file");
+        assert!(messages.iter().all(|m| m.is_complete));
     }
 
     #[test]

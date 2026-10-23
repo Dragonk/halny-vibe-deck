@@ -21,11 +21,11 @@ instant startup and a tiny memory footprint, in the spirit of the
 | Renderer | React / DOM | egui / wgpu (GPU-first) |
 | Language | TypeScript | Rust |
 | RAM | hundreds of MB | tens of MB |
-| UI language | English | English + Polski |
+| UI language | English | System / English + Polski |
 
 ## Features
 
-- **1:1 Nexus look** — the original Mistral Vibe Nexus palette (dark & light),
+- **1:1 Nexus look** — the original Mistral Vibe Nexus palette (dark & light, or follow the OS theme),
   frameless window with a custom titlebar (drag / ─ □ ✕, edge resize), header
   with agent status, a permanent collapsible sidebar (icon rail when collapsed),
   AI messages with the accent flame avatar and user bubbles with the original
@@ -33,7 +33,8 @@ instant startup and a tiny memory footprint, in the spirit of the
 - **Projects** — recent folders list in the sidebar; add or switch the working
   directory of a session in one click.
 - **Session history** — sessions recorded by the CLI (`session/list`) with
-  name, date and folder, resumable with one click.
+  name, date and folder, resumable with one click — the full conversation
+  (messages, thinking, tool calls) is replayed into the UI.
 - **Fast startup** — dependency probing and file indexing happen lazily, never
   blocking the first frame. The original window icon is embedded (Linux &
   Windows), and no stray console window opens on Windows.

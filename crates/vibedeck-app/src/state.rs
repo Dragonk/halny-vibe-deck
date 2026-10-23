@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
-    pub language: String, // "en" | "pl"
-    pub theme: String,    // "dark" | "light"
+    pub language: String, // "system" | "en" | "pl"
+    pub theme: String,    // "system" | "dark" | "light"
     pub acp_path: String,
     pub working_directory: String,
     pub recent_folders: Vec<String>,
@@ -25,8 +25,8 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            language: "en".into(),
-            theme: "dark".into(),
+            language: "system".into(),
+            theme: "system".into(),
             acp_path: String::new(),
             working_directory: String::new(),
             recent_folders: Vec::new(),

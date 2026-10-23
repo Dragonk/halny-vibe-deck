@@ -193,32 +193,57 @@ pub fn show(app: &mut VibedeckApp, ui: &mut Ui) {
                             } else {
                                 format!("{} · {}", short_time(&info.start_time), short_path(&info.cwd))
                             };
-                            if session_item(ui, &p, &label, &sub, false, false) {
-                                let cwd = if info.cwd.is_empty() {
-                                    app.current_workdir().to_string_lossy().to_string()
+                            let loading_this =
+                                app.loading_session.as_deref() == Some(info.session_id.as_str());
+                            if session_item(ui, &p, &label, &sub, false, loading_this) {
+                                // Already mirroring this backend session locally
+                                // → just switch to it, no reload needed.
+                                if let Some(i) = app
+                                    .sessions
+                                    .iter()
+                                    .position(|s| s.acp_session_id.as_deref()
+                                        == Some(info.session_id.as_str()))
+                                {
+                                    app.current = Some(i);
+                                    app.view = View::Chat;
+                                } else if app
+                                    .loading_session
+                                    .as_deref()
+                                    == Some(info.session_id.as_str())
+                                {
+                                    // `session/load` already in flight — ignore.
                                 } else {
-                                    info.cwd.clone()
-                                };
-                                // create a local mirror of the backend session
-                                let mut session = vibedeck_core::types::ChatSession::new(
-                                    if info.name.is_empty() { "CLI session" } else { &info.name },
-                                    &cwd,
-                                );
-                                session.working_directory = cwd.clone();
-                                app.sessions.insert(0, session);
-                                app.current = Some(0);
-                                app.settings.working_directory = cwd.clone();
-                                app.settings.remember_folder(&cwd);
-                                app.settings.save();
-                                app.mark_file_index_stale();
-                                app.reset_dock();
-                                app.view = View::Chat;
-                                app.busy = true;
-                                app.acp.send(AcpCommand::LoadSession {
-                                    session_id: info.session_id.clone(),
-                                    cwd,
-                                    model: app.settings.preferred_model.clone(),
-                                });
+                                    let cwd = if info.cwd.is_empty() {
+                                        app.current_workdir().to_string_lossy().to_string()
+                                    } else {
+                                        info.cwd.clone()
+                                    };
+                                    // create a local mirror of the backend session
+                                    let mut session = vibedeck_core::types::ChatSession::new(
+                                        if info.name.is_empty() { "CLI session" } else { &info.name },
+                                        &cwd,
+                                    );
+                                    session.working_directory = cwd.clone();
+                                    app.sessions.insert(0, session);
+                                    app.current = Some(0);
+                                    app.settings.working_directory = cwd.clone();
+                                    app.settings.remember_folder(&cwd);
+                                    app.settings.save();
+                                    app.mark_file_index_stale();
+                                    app.reset_dock();
+                                    app.view = View::Chat;
+                                    app.busy = true;
+                                    // The replayed history (`session/update`
+                                    // replays) arrives before `SessionReady` —
+                                    // mark the load so `SessionHistory` can be
+                                    // attached to this mirror.
+                                    app.loading_session = Some(info.session_id.clone());
+                                    app.acp.send(AcpCommand::LoadSession {
+                                        session_id: info.session_id.clone(),
+                                        cwd,
+                                        model: app.settings.preferred_model.clone(),
+                                    });
+                                }
                             }
                         }
                     }
