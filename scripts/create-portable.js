@@ -4,7 +4,7 @@ const fs = require('fs');
 const archiver = require('archiver');
 
 const distPath = path.join(__dirname, '..', 'dist');
-const zipPath = path.join(distPath, 'Mistral-Vibe-Nexus-0.2.0-portable.zip');
+const zipPath = path.join(distPath, 'Mistral-Vibe-Nexus-0.3.0-portable.zip');
 const unpackedPath = path.join(distPath, 'win-unpacked');
 
 console.log('Creating portable zip...');

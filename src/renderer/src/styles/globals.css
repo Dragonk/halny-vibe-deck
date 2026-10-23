@@ -5118,3 +5118,9 @@ code {
 .raw-reload-btn {
     background: var(--panel);
 }
+
+/* Sheet header cells (first row rendered as header) */
+.sheet-table td.sheet-header-cell {
+    font-weight: 600;
+    background: var(--panel);
+}
