@@ -1,5 +1,5 @@
 //! Chat view: empty state with the pixel flame, message list with user
-//! bubbles / AI rows (thinking, tool calls, markdown-lite), the agent
+//! bubbles / AI rows (thinking, tool calls, markdown), the agent
 //! busy indicator. Ported from Nexus ChatView + MessageBubble (same
 //! CSS classes).
 
@@ -20,6 +20,19 @@ pub fn ChatView() -> Element {
     let acp_error = s.snapshot.acp_error.clone();
     let queue_len = s.queue.len();
     drop(s);
+
+    // one-shot: install the mermaid MutationObserver renderer (client only;
+    // the server SSR build never evaluates JS)
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        let mut mermaid_init = use_signal(|| false);
+        if !*mermaid_init.read() {
+            mermaid_init.set(true);
+            spawn(async move {
+                dioxus::document::eval(MERMAID_JS);
+            });
+        }
+    }
 
     let subtitle = match status.as_str() {
         "connected" => tr(&lang, "agentReady").to_string(),
@@ -129,7 +142,13 @@ pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
 
 #[component]
 fn ThinkingSection(block: vibedeck_core::types::ThinkingBlock) -> Element {
-    let label = if block.is_complete { "Myślę" } else { "Myślę…" };
+    let state = use_context::<Signal<ClientState>>();
+    let lang = lang(&state);
+    let label = if block.is_complete {
+        tr(&lang, "thinking").to_string()
+    } else {
+        tr(&lang, "thinkingThinking").to_string()
+    };
     let paragraphs: Vec<&str> = block.content.split("\n\n").collect();
     rsx! {
         details { class: "thinking-section",
@@ -191,42 +210,72 @@ fn ToolCallBlock(tc: vibedeck_core::types::ToolCall) -> Element {
     }
 }
 
-/// Minimal markdown renderer: fenced code blocks + paragraphs
-/// (full GFM port arrives with the dock/editor iteration).
+/// Full markdown renderer (see `crate::md`): blocks are rendered to HTML and
+/// mounted through `dangerous_inner_html`. The HTML is fully escaped by the
+/// renderer, so model output can never inject raw markup. Mermaid fences are
+/// emitted as `.mermaid-container[data-src]` divs and rendered to SVG by
+/// MERMAID_JS below (mermaid@10 from CDN, loaded lazily once per page).
 #[component]
 fn MarkdownLite(text: String) -> Element {
     if text.is_empty() {
         return VNode::empty();
     }
-    let mut blocks: Vec<Element> = Vec::new();
-    let mut code = false;
-    let mut current = String::new();
-    let mut key = 0usize;
-    let flush = |blocks: &mut Vec<Element>, current: &mut String, key: &mut usize, code: bool| {
-        if current.is_empty() {
-            return;
-        }
-        let k = *key;
-        *key += 1;
-        let chunk = std::mem::take(current);
-        let node: Element = if code {
-            rsx! { pre { key: "{k}", code { "{chunk}" } } }
-        } else {
-            rsx! { p { key: "{k}", "{chunk}" } }
-        };
-        blocks.push(node);
-    };
-
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            flush(&mut blocks, &mut current, &mut key, code);
-            code = !code;
-            continue;
-        }
-        current.push_str(line);
-        current.push('\n');
-    }
-    flush(&mut blocks, &mut current, &mut key, code);
-
-    rsx! { div { class: "markdown-content", {blocks.iter().cloned()} } }
+    let html = crate::md::to_html(&text);
+    rsx! { div { class: "markdown-content", dangerous_inner_html: html } }
 }
+
+/// Client-side mermaid bootstrap. Runs once per page load: lazily injects the
+/// mermaid script, then a MutationObserver renders every new
+/// `.mermaid-container` (attribute `data-src` holds the escaped diagram
+/// source). Dioxus never manages children of these divs, so hydration and
+/// re-renders stay safe.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const MERMAID_JS: &str = r#"
+(function(){
+  if (window.__vdMermaid) return; window.__vdMermaid = true;
+  function load(cb){
+    if (window.mermaid) return cb();
+    if (window.__vdMermaidLoading) return window.__vdMermaidLoading.then(cb);
+    window.__vdMermaidLoading = new Promise(function(res){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+      s.onload = res; s.onerror = res;
+      document.head.appendChild(s);
+    });
+    window.__vdMermaidLoading.then(cb);
+  }
+  function renderEl(el){
+    load(function(){
+      if (!window.mermaid) {
+        el.classList.add('mermaid-error');
+        el.innerHTML = '<div class="mermaid-error-title">mermaid.js unavailable</div>';
+        return;
+      }
+      try {
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'dark' });
+        var id = 'vdGraph' + (el.__vdId || (el.__vdId = Math.random().toString(36).slice(2)));
+        window.mermaid.render(id, el.getAttribute('data-src') || '', function(svg){
+          el.innerHTML = svg; el.classList.add('mermaid-ready');
+        }, function(err){
+          el.classList.add('mermaid-error');
+          el.innerHTML = '<div class="mermaid-error-title">Mermaid error</div><pre></pre>';
+          el.querySelector('pre').textContent = String(err && err.message ? err.message : err);
+        });
+      } catch (e) {
+        el.classList.add('mermaid-error');
+        el.innerHTML = '<div class="mermaid-error-title">Mermaid error</div><pre></pre>';
+        el.querySelector('pre').textContent = String(e);
+      }
+    });
+  }
+  function scan(){
+    document.querySelectorAll('.mermaid-container:not([data-vd-done])').forEach(function(el){
+      el.setAttribute('data-vd-done', '1');
+      renderEl(el);
+    });
+  }
+  var mo = new MutationObserver(function(){ scan(); });
+  mo.observe(document.body, { childList: true, subtree: true });
+  scan();
+})();
+"#;

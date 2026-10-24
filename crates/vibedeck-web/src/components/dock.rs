@@ -388,12 +388,8 @@ fn preview_panel(
         },
         "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
         "markdown" => {
-            let paras: Vec<Element> = data
-                .text
-                .split("\n\n")
-                .map(|p| rsx! { p { style: "margin:0 0 10px 0;white-space:pre-wrap;", "{p}" } })
-                .collect();
-            rsx! { div { class: "preview-markdown", {paras.iter().cloned()} } }
+            let html = crate::md::to_html(&data.text);
+            rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
         }
         "csv" => sheet_table(&parse_csv(&data.text), None),
         "xlsx" => sheet_table(&data.rows, Some(data.sheet_name.clone())),
