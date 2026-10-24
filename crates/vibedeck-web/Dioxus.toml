@@ -1,0 +1,11 @@
+[application]
+name = "vibedeck"
+default_platform = "web"
+out_dir = "dist"
+asset_dir = "assets"
+
+[web.app]
+title = "VibeDeck"
+
+[web.watcher]
+reload_html = true

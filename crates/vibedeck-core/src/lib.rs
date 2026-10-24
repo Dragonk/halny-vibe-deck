@@ -6,6 +6,7 @@
 //! layer and the ACP worker layer.
 
 pub mod proto;
+pub mod snapshot;
 pub mod types;
 
 pub use proto::{AcpCommand, AcpEvent};

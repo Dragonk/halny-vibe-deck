@@ -38,7 +38,7 @@ pub struct FileChange {
 }
 
 /// One agent tool call (execute / read / edit / …).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub title: String,
@@ -53,7 +53,7 @@ pub struct ToolCall {
 }
 
 /// A reasoning/thinking stream block.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ThinkingBlock {
     pub id: String,
     pub content: String,
@@ -61,7 +61,7 @@ pub struct ThinkingBlock {
 }
 
 /// A file or folder attached to a prompt via `@` mention.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Attachment {
     pub path: String,
     pub is_dir: bool,
@@ -78,7 +78,7 @@ pub enum MessageSender {
 }
 
 /// One chat message (user, assistant or system).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
     pub sender: MessageSender,

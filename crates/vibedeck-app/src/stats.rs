@@ -116,12 +116,6 @@ fn now_days() -> i64 {
         .unwrap_or(0)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-fn ymd(days: i64) -> String {
-    let (y, m, d) = civil_from_days(days);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
 fn parse_ymd(s: &str) -> Option<i64> {
     let mut it = s.split('-');
     let y = it.next()?.trim().parse::<i64>().ok()?;

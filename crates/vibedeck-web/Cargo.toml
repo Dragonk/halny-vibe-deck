@@ -1,0 +1,21 @@
+[package]
+name = "vibedeck-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "VibeDeck web UI (Dioxus fullstack) - same app for desktop webview and remote browser"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["launch", "fullstack"] }
+dioxus-fullstack = "0.7"
+vibedeck-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+vibedeck-engine = { workspace = true, optional = true }
+tokio = { version = "1", features = ["time"] }
+
+[features]
+default = []
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros"]

@@ -6,8 +6,10 @@
 
 use crate::types::{ToolCall, ToolStatus};
 
+use serde::{Deserialize, Serialize};
+
 /// A session previously created with the `vibe` CLI, reported by `session/list`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AcpSessionInfo {
     pub session_id: String,
     pub name: String,
@@ -15,7 +17,7 @@ pub struct AcpSessionInfo {
     pub start_time: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModeInfo {
     pub id: String,
     pub name: String,
@@ -23,7 +25,7 @@ pub struct ModeInfo {
 
 /// One selectable value of a session config option
 /// (`session/new` → `configOptions[].options[]`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigOptionChoice {
     pub value: String,
     pub name: String,
@@ -32,7 +34,7 @@ pub struct ConfigOptionChoice {
 
 /// A session config option advertised by vibe-acp
 /// (model / mode / thinking / …) with its current value and choices.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigOption {
     pub id: String,
     pub name: String,
@@ -55,7 +57,7 @@ impl ConfigOption {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvailableCommand {
     pub name: String,
     pub description: String,
@@ -64,7 +66,7 @@ pub struct AvailableCommand {
 }
 
 /// Events emitted by the ACP worker towards the UI.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AcpEvent {
     /// `initialize` handshake finished.
     Initialized { protocol_version: u32 },
@@ -155,7 +157,7 @@ pub enum AcpEvent {
 }
 
 /// Commands from the UI to the ACP worker.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AcpCommand {
     /// Spawn vibe-acp at `acp_path` and run the `initialize` handshake.
     Start {

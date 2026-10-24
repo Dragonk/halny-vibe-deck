@@ -443,7 +443,14 @@ impl VibedeckApp {
 
     pub fn drain_events(&mut self, ctx: &Context) {
         let mut repaint = false;
-        while let Ok(event) = self.acp.events().try_recv() {
+        let mut pending = Vec::new();
+        {
+            let rx = self.acp.events();
+            while let Ok(event) = rx.try_recv() {
+                pending.push(event);
+            }
+        }
+        for event in pending {
             repaint = true;
             self.apply_event(event);
         }

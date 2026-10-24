@@ -23,7 +23,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 /// Handle held by the UI. Clone the sender at will; keep the receiver unique.
 pub struct AcpHandle {
     cmd_tx: Sender<AcpCommand>,
-    event_rx: Receiver<AcpEvent>,
+    // Mutex so the handle is Sync (shared statics, server threads).
+    event_rx: std::sync::Mutex<Receiver<AcpEvent>>,
 }
 
 impl AcpHandle {
@@ -36,7 +37,10 @@ impl AcpHandle {
             .name("vibedeck-acp".into())
             .spawn(move || Worker::new(event_tx, cmd_rx).run())
             .expect("failed to spawn ACP worker thread");
-        Self { cmd_tx, event_rx }
+        Self {
+            cmd_tx,
+            event_rx: std::sync::Mutex::new(event_rx),
+        }
     }
 
     pub fn send(&self, cmd: AcpCommand) {
@@ -45,8 +49,9 @@ impl AcpHandle {
         let _ = self.cmd_tx.send(cmd);
     }
 
-    pub fn events(&self) -> &Receiver<AcpEvent> {
-        &self.event_rx
+    /// Lock the event receiver (single consumer).
+    pub fn events(&self) -> std::sync::MutexGuard<'_, Receiver<AcpEvent>> {
+        self.event_rx.lock().expect("ACP event receiver poisoned")
     }
 }
 
