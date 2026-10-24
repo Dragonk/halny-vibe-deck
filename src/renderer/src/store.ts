@@ -120,6 +120,7 @@ interface AppStore {
   // Dock (right panel)
   dockOpen: boolean;
   setDockOpen: (v: boolean) => void;
+  ensureDockOpen: () => void;
   dockWidth: number;
   setDockWidth: (w: number) => void;
   dockTab: DockTabKind;
@@ -365,6 +366,12 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ dockOpen, config: { ...cfg, dockOpen } });
     window.api.config.save({ ...cfg, dockOpen }).catch(console.error);
   },
+  ensureDockOpen: () => {
+    if (get().dockOpen) return;
+    const cfg = get().config;
+    set({ dockOpen: true, config: { ...cfg, dockOpen: true } });
+    window.api.config.save({ ...cfg, dockOpen: true }).catch(console.error);
+  },
   dockWidth: defaultConfig.dockWidth,
   setDockWidth: (dockWidth) => set({ dockWidth }),
   dockTab: "files",
@@ -393,6 +400,7 @@ export const useStore = create<AppStore>((set, get) => ({
       .catch(() => get().openFilePreviewTab(path, name));
   },
   openFilePreviewTab: (path, name) => {
+    get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
         (t) => t.kind === "file" && t.path === path,
@@ -410,6 +418,7 @@ export const useStore = create<AppStore>((set, get) => ({
     });
   },
   openDiffPreview: (name, path, diff) => {
+    get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
         (t) => t.kind === "diff" && t.path === path,
