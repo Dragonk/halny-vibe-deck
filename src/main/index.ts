@@ -23,6 +23,7 @@ import {
   deletePromptFile,
   loadSkillFiles,
   getVibeDirPath,
+  resolveVibeDir,
   VibeConfig,
   VibeAgentFileConfig,
 } from "./vibeConfig";
@@ -206,6 +207,16 @@ app.whenReady().then(() => {
   );
 
 
+  // Write text files (file editor in the preview dock)
+  ipcMain.handle("fs:write-text", async (_e, filePath: string, content: string) => {
+    try {
+      await fs.promises.writeFile(filePath, content, "utf-8");
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
   // Filesystem helpers
   ipcMain.handle("fs:list-dir", (_e, dir: string) => {
     try {
@@ -346,32 +357,35 @@ app.whenReady().then(() => {
     return checkSetup();
   });
 
-  // Vibe config (config.toml)
-  ipcMain.handle("vibe:get-config", () => loadVibeConfig());
-  ipcMain.handle("vibe:save-config", (_e, config: VibeConfig) => {
-    saveVibeConfig(config);
-  });
-  ipcMain.handle("vibe:get-raw-config", () => loadVibeConfigRaw());
-  ipcMain.handle("vibe:save-raw-config", (_e, content: string) => saveVibeConfigRaw(content));
+  // Vibe config (config.toml) — global (~/.vibe) or project (<cwd>/.vibe) scope
+  const resolveScopeDir = (scope: string, cwd: string): string =>
+    resolveVibeDir(scope === "project" ? "project" : "global", cwd || undefined);
 
-  ipcMain.handle("vibe:get-agents", () => loadAgentFiles());
-  ipcMain.handle("vibe:save-agent", (_e, name: string, config: VibeAgentFileConfig) => {
-    saveAgentFile(name, config);
+  ipcMain.handle("vibe:get-config", (_e, scope: string, cwd: string) => loadVibeConfig(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:save-config", (_e, config: VibeConfig, scope: string, cwd: string) => {
+    saveVibeConfig(config, resolveScopeDir(scope, cwd));
   });
-  ipcMain.handle("vibe:delete-agent", (_e, name: string) => {
-    deleteAgentFile(name);
-  });
+  ipcMain.handle("vibe:get-raw-config", (_e, scope: string, cwd: string) => loadVibeConfigRaw(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:save-raw-config", (_e, content: string, scope: string, cwd: string) => saveVibeConfigRaw(content, resolveScopeDir(scope, cwd)));
 
-  ipcMain.handle("vibe:get-prompts", () => loadPromptFiles());
-  ipcMain.handle("vibe:save-prompt", (_e, name: string, content: string) => {
-    savePromptFile(name, content);
+  ipcMain.handle("vibe:get-agents", (_e, scope: string, cwd: string) => loadAgentFiles(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:save-agent", (_e, name: string, config: VibeAgentFileConfig, scope: string, cwd: string) => {
+    saveAgentFile(name, config, resolveScopeDir(scope, cwd));
   });
-  ipcMain.handle("vibe:delete-prompt", (_e, name: string) => {
-    deletePromptFile(name);
+  ipcMain.handle("vibe:delete-agent", (_e, name: string, scope: string, cwd: string) => {
+    deleteAgentFile(name, resolveScopeDir(scope, cwd));
   });
 
-  ipcMain.handle("vibe:get-skills", () => loadSkillFiles());
-  ipcMain.handle("vibe:get-dir", () => getVibeDirPath());
+  ipcMain.handle("vibe:get-prompts", (_e, scope: string, cwd: string) => loadPromptFiles(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:save-prompt", (_e, name: string, content: string, scope: string, cwd: string) => {
+    savePromptFile(name, content, resolveScopeDir(scope, cwd));
+  });
+  ipcMain.handle("vibe:delete-prompt", (_e, name: string, scope: string, cwd: string) => {
+    deletePromptFile(name, resolveScopeDir(scope, cwd));
+  });
+
+  ipcMain.handle("vibe:get-skills", (_e, scope: string, cwd: string) => loadSkillFiles(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:get-dir", (_e, scope: string, cwd: string) => resolveScopeDir(scope, cwd));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

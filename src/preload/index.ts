@@ -46,6 +46,9 @@ export interface GitCommit {
   date: string
 }
 
+/** Config scope for vibe settings: global (~/.vibe) or project (<cwd>/.vibe). */
+export type VibeScope = 'global' | 'project'
+
 const api = {
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
@@ -124,7 +127,9 @@ const api = {
     readBinary: (
       filePath: string
     ): Promise<{ base64: string; mime: string; size: number; error: string | null }> =>
-      ipcRenderer.invoke('fs:read-binary', filePath)
+      ipcRenderer.invoke('fs:read-binary', filePath),
+    writeText: (filePath: string, content: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:write-text', filePath, content)
   },
   git: {
     status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
@@ -137,22 +142,32 @@ const api = {
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:open-path', path)
   },
   vibe: {
-    getConfig: (): Promise<unknown> => ipcRenderer.invoke('vibe:get-config'),
-    saveConfig: (config: unknown): Promise<void> => ipcRenderer.invoke('vibe:save-config', config),
-    getRawConfig: (): Promise<{ content: string; error: string | null }> =>
-      ipcRenderer.invoke('vibe:get-raw-config'),
-    saveRawConfig: (content: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:save-raw-config', content),
-    getAgents: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-agents'),
-    saveAgent: (name: string, config: unknown): Promise<void> =>
-      ipcRenderer.invoke('vibe:save-agent', name, config),
-    deleteAgent: (name: string): Promise<void> => ipcRenderer.invoke('vibe:delete-agent', name),
-    getPrompts: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-prompts'),
-    savePrompt: (name: string, content: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:save-prompt', name, content),
-    deletePrompt: (name: string): Promise<void> => ipcRenderer.invoke('vibe:delete-prompt', name),
-    getSkills: (): Promise<unknown[]> => ipcRenderer.invoke('vibe:get-skills'),
-    getDir: (): Promise<string> => ipcRenderer.invoke('vibe:get-dir')
+    // scope/cwd select the global (~/.vibe) or the project (<cwd>/.vibe) config;
+    // they default to the global scope so legacy no-argument calls keep working
+    getConfig: (scope?: VibeScope, cwd?: string): Promise<unknown> =>
+      ipcRenderer.invoke('vibe:get-config', scope ?? 'global', cwd ?? ''),
+    saveConfig: (config: unknown, scope?: VibeScope, cwd?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-config', config, scope ?? 'global', cwd ?? ''),
+    getRawConfig: (scope?: VibeScope, cwd?: string): Promise<{ content: string; error: string | null }> =>
+      ipcRenderer.invoke('vibe:get-raw-config', scope ?? 'global', cwd ?? ''),
+    saveRawConfig: (content: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:save-raw-config', content, scope ?? 'global', cwd ?? ''),
+    getAgents: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-agents', scope ?? 'global', cwd ?? ''),
+    saveAgent: (name: string, config: unknown, scope?: VibeScope, cwd?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-agent', name, config, scope ?? 'global', cwd ?? ''),
+    deleteAgent: (name: string, scope?: VibeScope, cwd?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:delete-agent', name, scope ?? 'global', cwd ?? ''),
+    getPrompts: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-prompts', scope ?? 'global', cwd ?? ''),
+    savePrompt: (name: string, content: string, scope?: VibeScope, cwd?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-prompt', name, content, scope ?? 'global', cwd ?? ''),
+    deletePrompt: (name: string, scope?: VibeScope, cwd?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:delete-prompt', name, scope ?? 'global', cwd ?? ''),
+    getSkills: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-skills', scope ?? 'global', cwd ?? ''),
+    getDir: (scope?: VibeScope, cwd?: string): Promise<string> =>
+      ipcRenderer.invoke('vibe:get-dir', scope ?? 'global', cwd ?? '')
   }
 }
 

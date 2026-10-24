@@ -5171,3 +5171,58 @@ code {
   color: var(--color-warning);
   font-weight: 600;
 }
+
+
+/* ── Slash command picker descriptions (v0.4.0) ── */
+.picker-item-body { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
+.picker-item-label { font-size: 13px; }
+.picker-item-desc { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+
+/* ── Narrow-window toolbar wrapping (v0.4.0) ── */
+.input-card-toolbar { flex-wrap: wrap; row-gap: 4px; }
+.input-card-left { flex-shrink: 1; min-width: 0; }
+.ic-folder-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.input-card-right { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; flex-shrink: 0; }
+.settings-header { flex-wrap: wrap; gap: 8px; }
+.settings-tabs { flex-wrap: wrap; }
+
+/* ── Sidebar context menu (v0.4.0) ── */
+.ctx-menu { position: fixed; z-index: 1000; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px var(--shadow); padding: 4px; min-width: 180px; }
+.ctx-menu-item { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 7px 12px; font-size: 13px; border-radius: 6px; cursor: pointer; }
+.ctx-menu-item:hover { background: var(--panel-hover); }
+.ctx-menu-item.danger { color: #e5534b; }
+
+/* ── Modal confirm dialog (v0.4.0) ── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1100; }
+.modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px var(--shadow); padding: 20px; width: min(440px, 90vw); }
+.modal-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 0 0 10px; }
+.modal-message { font-size: 13px; color: var(--text-muted); line-height: 1.5; margin: 0 0 18px; white-space: pre-line; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 16px; font-size: 13px; cursor: pointer; }
+.modal-btn:hover { background: var(--panel-hover); }
+.modal-btn-danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.modal-btn-danger:hover { background: #a93226; }
+
+/* ── Settings scope switch global/project (v0.4.0) ── */
+.settings-title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.settings-title-row .settings-title { margin: 0; }
+.scope-switch { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
+.scope-pill { background: none; border: none; color: var(--text-muted); font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.scope-pill.active { background: var(--accent); color: #fff; }
+.scope-pill:disabled { opacity: 0.4; cursor: not-allowed; }
+.scope-path { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', Consolas, monospace; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Session detail expansion in stats (v0.4.0) ── */
+.session-row-clickable { cursor: pointer; flex-wrap: wrap; }
+.session-row-clickable:hover { background: var(--panel-hover); }
+.session-row-clickable.expanded { background: var(--surface); }
+.session-detail { flex-basis: 100%; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.session-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 16px; }
+.session-detail-item.wide { grid-column: 1 / -1; }
+.session-detail-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 2px; }
+.session-detail-value { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── CodeMirror editor host (v0.4.0) ── */
+.cm-host { position: absolute; inset: 0; }
+.cm-host .cm-editor { height: 100%; background: transparent; }
+.cm-host .cm-scroller { font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; overflow: auto; }

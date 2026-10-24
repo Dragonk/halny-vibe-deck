@@ -671,6 +671,7 @@ function ToolUsageCard({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnTy
 // ───── Session list ─────
 function SessionList({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType<typeof useTranslation> }): React.JSX.Element {
   const [visibleCount, setVisibleCount] = useState(20)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
   const loadMore = useCallback(() => {
@@ -714,7 +715,12 @@ function SessionList({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType
             const model = s.config?.activeModel ?? 'unknown'
             const project = s.environment?.workingDirectory?.split(/[/\\]/).pop() ?? '—'
             return (
-              <div key={s.sessionId} className="session-row">
+              <div
+                key={s.sessionId}
+                className={`session-row session-row-clickable ${expandedId === s.sessionId ? 'expanded' : ''}`}
+                onClick={() => setExpandedId(expandedId === s.sessionId ? null : s.sessionId)}
+                title={tr.sessionDetailsHint}
+              >
                 <div className="session-row-main">
                   <span className="session-row-title">{s.title ?? tr.untitledSession}</span>
                   <div className="session-row-meta">
@@ -743,6 +749,60 @@ function SessionList({ sessions, tr }: { sessions: VibeSession[]; tr: ReturnType
                   </div>
                 )}
                 <div className="session-row-cost">${(s.stats.sessionCost ?? 0).toFixed(2)}</div>
+                {expandedId === s.sessionId && (
+                  <div className="session-detail">
+                    <div className="session-detail-grid">
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.modelsUsedLabel}</div>
+                        <div className="session-detail-value">{(s.models && s.models.length > 0 ? s.models : [model]).join(', ')}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.inputLabel}</div>
+                        <div className="session-detail-value">{formatTokens(s.stats.sessionPromptTokens ?? 0)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.inputCachedLabel}</div>
+                        <div className="session-detail-value">{formatTokens(s.stats.sessionCachedTokens ?? 0)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.cacheHitLabel}</div>
+                        <div className="session-detail-value">{s.stats.sessionCachedTokens && s.stats.sessionPromptTokens > 0 ? Math.round((s.stats.sessionCachedTokens / s.stats.sessionPromptTokens) * 100) + '%' : '—'}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.outputLabel}</div>
+                        <div className="session-detail-value">{formatTokens(s.stats.sessionCompletionTokens ?? 0)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.totalTokensLabel}</div>
+                        <div className="session-detail-value">{formatTokens(s.stats.sessionTotalLlmTokens ?? 0)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.toolCallsLabel}</div>
+                        <div className="session-detail-value">{s.stats.steps}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.messagesLabel}</div>
+                        <div className="session-detail-value">{s.totalMessages}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.costLabel}</div>
+                        <div className="session-detail-value">${(s.stats.sessionCost ?? 0).toFixed(4)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.durationLabel}</div>
+                        <div className="session-detail-value">{formatDuration(durationSecs)}</div>
+                      </div>
+                      <div className="session-detail-item">
+                        <div className="session-detail-label">{tr.startedLabel}</div>
+                        <div className="session-detail-value">{start.toLocaleString()}</div>
+                      </div>
+                      <div className="session-detail-item wide">
+                        <div className="session-detail-label">{tr.projectLabel}</div>
+                        <div className="session-detail-value" title={s.environment?.workingDirectory ?? ''}>{s.environment?.workingDirectory ?? '—'}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}

@@ -125,8 +125,10 @@ interface VibeSkill {
   content: string
 }
 
+const CLI_SCOPED_TABS = new Set(['agents', 'mcp', 'tools', 'prompts', 'skills', 'providers', 'models', 'raw'])
+
 export default function SettingsView(): React.JSX.Element {
-  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus } = useStore()
+  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory } = useStore()
   const tr = useTranslation(config.language)
   const [tab, setTab] = useState<Tab>('general')
   const [local, setLocal] = useState({ ...config })
@@ -147,24 +149,26 @@ export default function SettingsView(): React.JSX.Element {
   const [selectedProviderIdx, setSelectedProviderIdx] = useState<number | null>(null)
   const [selectedModelIdx, setSelectedModelIdx] = useState<number | null>(null)
   const [globalToolsCollapsed, setGlobalToolsCollapsed] = useState(false)
+  const [scope, setScope] = useState<'global' | 'project'>('global')
+  const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
 
   useEffect(() => {
     setLocal({ ...config })
   }, [config])
 
-  const loadVibeData = useCallback(async (): Promise<void> => {
+  const loadVibeData = useCallback(async (targetScope: 'global' | 'project' = scope, targetCwd: string = projectCwd): Promise<void> => {
     const [cfg, agents, prompts, skills] = await Promise.all([
-      window.api.vibe.getConfig(),
-      window.api.vibe.getAgents(),
-      window.api.vibe.getPrompts(),
-      window.api.vibe.getSkills()
+      window.api.vibe.getConfig(targetScope, targetCwd),
+      window.api.vibe.getAgents(targetScope, targetCwd),
+      window.api.vibe.getPrompts(targetScope, targetCwd),
+      window.api.vibe.getSkills(targetScope, targetCwd)
     ])
     setVibeConfig(cfg as VibeConfig)
     setVibeAgents(agents as VibeAgentConfig[])
     setVibePrompts(prompts as VibePrompt[])
     setVibeSkills(skills as VibeSkill[])
     setLoaded(true)
-  }, [])
+  }, [scope, projectCwd])
 
   useEffect(() => {
     loadVibeData()
@@ -175,7 +179,7 @@ export default function SettingsView(): React.JSX.Element {
     setConfig(local)
     setWorkingDirectory(local.workingDirectory)
     setSandboxEnabled(local.sandboxEnabled)
-    await window.api.vibe.saveConfig(vibeConfig)
+    await window.api.vibe.saveConfig(vibeConfig, scope, projectCwd)
     
     if (tab !== 'general' && tab !== 'acp' && acpStatus === 'connected') {
       await window.api.acp.stop()
@@ -211,21 +215,21 @@ export default function SettingsView(): React.JSX.Element {
   }
 
   const handleOpenSkillsFolder = async (): Promise<void> => {
-    const dir = await window.api.vibe.getDir()
+    const dir = await window.api.vibe.getDir(scope, projectCwd)
     const skillsDir = `${dir}/skills`
     await window.api.shell.openPath(skillsDir)
   }
 
   const loadRawToml = useCallback(async (): Promise<void> => {
     setRawTomlError(null)
-    const res = await window.api.vibe.getRawConfig()
+    const res = await window.api.vibe.getRawConfig(scope, projectCwd)
     if (res.error) setRawTomlError(res.error)
     setRawToml(res.content)
-  }, [])
+  }, [scope, projectCwd])
 
   const handleSaveRawToml = async (): Promise<void> => {
     if (rawToml === null) return
-    const err = await window.api.vibe.saveRawConfig(rawToml)
+    const err = await window.api.vibe.saveRawConfig(rawToml, scope, projectCwd)
     if (err) {
       setRawTomlError(err)
       return
@@ -238,20 +242,20 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleRenameAgent = async (oldName: string, newName: string, agentConfig: VibeAgentConfig): Promise<void> => {
     if (newName && newName !== oldName) {
-      await window.api.vibe.deleteAgent(oldName)
+      await window.api.vibe.deleteAgent(oldName, scope, projectCwd)
       const { name: _, ...configWithoutName } = agentConfig
-      await window.api.vibe.saveAgent(newName, { ...configWithoutName, name: newName })
+      await window.api.vibe.saveAgent(newName, { ...configWithoutName, name: newName }, scope, projectCwd)
       await loadVibeData()
     }
   }
 
   const handleSaveAgent = async (name: string, agentConfig: VibeAgentConfig): Promise<void> => {
-    await window.api.vibe.saveAgent(name, agentConfig)
+    await window.api.vibe.saveAgent(name, agentConfig, scope, projectCwd)
     await loadVibeData()
   }
 
   const handleDeleteAgent = async (name: string): Promise<void> => {
-    await window.api.vibe.deleteAgent(name)
+    await window.api.vibe.deleteAgent(name, scope, projectCwd)
     await loadVibeData()
   }
 
@@ -265,7 +269,7 @@ export default function SettingsView(): React.JSX.Element {
       disabled_tools: [],
       enabled_tools: []
     }
-    await window.api.vibe.saveAgent(name, newAgent)
+    await window.api.vibe.saveAgent(name, newAgent, scope, projectCwd)
     await loadVibeData()
   }
 
@@ -318,20 +322,20 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleSavePrompt = async (oldName: string, newName: string, content: string): Promise<void> => {
     if (newName !== oldName) {
-      await window.api.vibe.deletePrompt(oldName)
+      await window.api.vibe.deletePrompt(oldName, scope, projectCwd)
     }
-    await window.api.vibe.savePrompt(newName, content)
+    await window.api.vibe.savePrompt(newName, content, scope, projectCwd)
     await loadVibeData()
   }
 
   const handleDeletePrompt = async (name: string): Promise<void> => {
-    await window.api.vibe.deletePrompt(name)
+    await window.api.vibe.deletePrompt(name, scope, projectCwd)
     await loadVibeData()
   }
 
   const handleAddPrompt = async (): Promise<void> => {
     const name = `prompt-${Date.now()}`
-    await window.api.vibe.savePrompt(name, '# New Prompt\n\nWrite your prompt here with {{variables}}.')
+    await window.api.vibe.savePrompt(name, '# New Prompt\n\nWrite your prompt here with {{variables}}.', scope, projectCwd)
     await loadVibeData()
   }
 
@@ -541,7 +545,30 @@ export default function SettingsView(): React.JSX.Element {
   return (
     <div className="settings-view">
       <div className="settings-header">
-        <h2 className="settings-title">{tr.settings}</h2>
+        <div className="settings-title-row">
+          <h2 className="settings-title">{tr.settings}</h2>
+          {CLI_SCOPED_TABS.has(tab) && (
+            <div className="scope-switch">
+              <button
+                className={`scope-pill ${scope === 'global' ? 'active' : ''}`}
+                onClick={() => { setScope('global'); setRawToml(null) }}
+              >
+                {tr.settingsScopeGlobal}
+              </button>
+              <button
+                className={`scope-pill ${scope === 'project' ? 'active' : ''}`}
+                disabled={!projectCwd}
+                title={projectCwd ? projectCwd + '/.vibe' : ''}
+                onClick={() => { setScope('project'); setRawToml(null) }}
+              >
+                {tr.settingsScopeProject}
+              </button>
+            </div>
+          )}
+          {CLI_SCOPED_TABS.has(tab) && (
+            <span className="scope-path">{scope === 'project' ? projectCwd + '/.vibe' : '~/.vibe'}</span>
+          )}
+        </div>
         <div className="settings-tabs">
           <button
             className={`settings-tab ${tab === 'general' ? 'active' : ''}`}
@@ -694,7 +721,7 @@ export default function SettingsView(): React.JSX.Element {
           <div className="settings-section">
             <div className="field">
               <label className="field-label">{tr.vibeAcpPath}</label>
-              <p className="field-hint" dangerouslySetInnerHTML={{ __html: tr.vibeAcpHint.replace('pip install mistral-vibe', '<code>pip install mistral-vibe</code>') }} />
+              <p className="field-hint" dangerouslySetInnerHTML={{ __html: tr.vibeAcpHint.replace('uv tool install mistral-vibe', '<code>uv tool install mistral-vibe</code>') }} />
               <div className="field-row">
                 <input
                   className="field-input"

@@ -843,7 +843,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
                   }}
                 >
                   <span className="picker-item-icon">/</span>
-                  <span>{item.label}</span>
+                  <span className="picker-item-body">
+                    <span className="picker-item-label">{item.label}</span>
+                    {item.description && <span className="picker-item-desc">{item.description}</span>}
+                  </span>
                   <span className={`picker-item-kind picker-item-kind-${item.kind}`}>{item.kind}</span>
                 </button>
               ))}

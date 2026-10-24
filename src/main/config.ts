@@ -67,6 +67,8 @@ export interface AppConfig {
   prompts: PromptConfig[]
   skills: SkillConfig[]
   sidebarSessionsLimit: number | null
+  hiddenSessions: string[]
+  hiddenProjects: string[]
 }
 
 const defaultConfig: AppConfig = {
@@ -90,7 +92,9 @@ const defaultConfig: AppConfig = {
   tools: [],
   prompts: [],
   skills: [],
-  sidebarSessionsLimit: null
+  sidebarSessionsLimit: null,
+  hiddenSessions: [],
+  hiddenProjects: []
 }
 
 function getConfigPath(): string {

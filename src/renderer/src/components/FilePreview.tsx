@@ -21,6 +21,121 @@ function base64ToDataUrl(b64: string, mime: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// CodeMirror — syntax-highlighted read-only preview + file editor
+// (modules are loaded lazily so the app start stays fast)
+// ---------------------------------------------------------------------------
+
+interface CmCache {
+  EditorView: typeof import('@codemirror/view').EditorView
+  EditorState: typeof import('@codemirror/state').EditorState
+  keymap: typeof import('@codemirror/view').keymap
+  basicSetup: import('@codemirror/state').Extension
+  theme: import('@codemirror/state').Extension
+  languages: Array<{ matchFilename?: (filename: string) => boolean; load: () => Promise<unknown> }>
+}
+let cmCache: CmCache | null = null
+
+async function ensureCm(): Promise<CmCache> {
+  if (!cmCache) {
+    const [viewMod, stateMod, cmMod, langDataMod] = await Promise.all([
+      import('@codemirror/view'),
+      import('@codemirror/state'),
+      import('codemirror'),
+      import('@codemirror/language-data'),
+    ])
+    cmCache = {
+      EditorView: viewMod.EditorView,
+      EditorState: stateMod.EditorState,
+      keymap: viewMod.keymap,
+      basicSetup: cmMod.basicSetup,
+      theme: viewMod.EditorView.theme({
+        '&': { backgroundColor: 'transparent', color: 'var(--text)', height: '100%' },
+        '.cm-content': {
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          caretColor: 'var(--accent)',
+        },
+        '.cm-gutters': { backgroundColor: 'var(--panel)', color: 'var(--text-dim)', border: 'none' },
+        '.cm-editor.cm-focused': { outline: 'none' },
+      }),
+      languages: langDataMod.languages as unknown as CmCache['languages'],
+    }
+  }
+  return cmCache
+}
+
+function CodeMirrorPane({
+  path,
+  content,
+  editable,
+  registerDoc,
+  onSave,
+}: {
+  path: string
+  content: string
+  editable: boolean
+  registerDoc?: (getDoc: (() => string) | null) => void
+  onSave?: () => void
+}): React.JSX.Element {
+  const hostRef = React.useRef<HTMLDivElement>(null)
+  const contentRef = React.useRef(content)
+  contentRef.current = content
+  const onSaveRef = React.useRef(onSave)
+  onSaveRef.current = onSave
+
+  useEffect(() => {
+    let alive = true
+    let view: { destroy: () => void; state: { doc: { toString: () => string } } } | null = null
+    ;(async () => {
+      try {
+        const cm = await ensureCm()
+        if (!alive || !hostRef.current) return
+        let langExt: unknown[] = []
+        try {
+          const desc = cm.languages.find((l) => l.matchFilename?.(path))
+          if (desc) langExt = [await desc.load()]
+        } catch {
+          /* language support unavailable — fall back to plain text */
+        }
+        const extensions: unknown[] = [cm.basicSetup, cm.theme, cm.EditorView.lineWrapping, ...langExt]
+        if (editable) {
+          if (onSaveRef.current) {
+            extensions.push(
+              cm.keymap.of([
+                {
+                  key: 'Mod-s',
+                  run: () => {
+                    onSaveRef.current?.()
+                    return true
+                  },
+                },
+              ]),
+            )
+          }
+        } else {
+          extensions.push(cm.EditorView.editable.of(false), cm.EditorState.readOnly.of(true))
+        }
+        view = new cm.EditorView({
+          doc: contentRef.current,
+          parent: hostRef.current,
+          extensions: extensions as never,
+        })
+        registerDoc?.(() => view?.state.doc.toString() ?? '')
+      } catch (err) {
+        console.error('CodeMirror init failed:', err)
+      }
+    })()
+    return () => {
+      alive = false
+      registerDoc?.(null)
+      view?.destroy()
+      view = null
+    }
+  }, [path, editable, registerDoc])
+
+  return <div ref={hostRef} className="cm-host" />
+}
+
+// ---------------------------------------------------------------------------
 // Markdown + Mermaid
 // ---------------------------------------------------------------------------
 
@@ -381,15 +496,26 @@ function DiffView({ diff }: { diff: string }): React.JSX.Element {
 // ---------------------------------------------------------------------------
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff'])
+// Files up to this size are viewed (and can be edited) with CodeMirror;
+// larger text files fall back to the plain <pre> preview.
+const CM_CAP = 2 * 1024 * 1024
 
 export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Element {
   const { config, currentSessionWorkingDirectory } = useStore()
   const tr = useTranslation(config.language)
   const [text, setText] = useState<string | null>(null)
   const [textError, setTextError] = useState<string | null>(null)
+  const [truncated, setTruncated] = useState(false)
+  const [editMode, setEditMode] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState(0)
   const [binary, setBinary] = useState<{ base64: string; mime: string } | null>(null)
   const [stat, setStat] = useState<{ exists: boolean; isDir: boolean; size: number } | null>(null)
   const [dirEntries, setDirEntries] = useState<Array<{ name: string; isDir: boolean }>>([])
+  const docRef = React.useRef<(() => string) | null>(null)
+  const registerDoc = React.useCallback((fn: (() => string) | null) => {
+    docRef.current = fn
+  }, [])
 
   const ext = useMemo(() => {
     const e = tab.path.split('.').pop()?.toLowerCase() ?? ''
@@ -409,6 +535,9 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
     let alive = true
     setText(null)
     setTextError(null)
+    setTruncated(false)
+    setEditMode(false)
+    setSavedAt(0)
     setBinary(null)
     setStat(null)
     setDirEntries([])
@@ -433,7 +562,10 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
         const t = await window.api.fs.readText(tab.path)
         if (alive) {
           if (t.error) setTextError(t.error)
-          else setText(t.content)
+          else {
+            setText(t.content)
+            setTruncated(t.truncated)
+          }
         }
       }
     })()
@@ -442,6 +574,29 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
       alive = false
     }
   }, [tab.path, isImage, isPdf, isSheet, isDocx, isZip])
+
+  const canEdit =
+    tab.kind === 'file' &&
+    text !== null &&
+    !truncated &&
+    !text.includes('\u0000') &&
+    (stat?.size ?? 0) <= CM_CAP
+
+  const handleSave = async (): Promise<void> => {
+    const newText = docRef.current?.() ?? text
+    if (newText === null) return
+    setSaving(true)
+    const res = await window.api.fs.writeText(tab.path, newText)
+    setSaving(false)
+    if (res.error) {
+      setTextError(res.error)
+      return
+    }
+    setText(newText)
+    const now = Date.now()
+    setSavedAt(now)
+    window.setTimeout(() => setSavedAt((v) => (v === now ? 0 : v)), 2000)
+  }
 
   const formatSize = (n: number): string => {
     if (n < 1024) return `${n} B`
@@ -462,6 +617,35 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
           {tab.path}
         </span>
         <div className="file-preview-actions">
+          {editMode ? (
+            <>
+              <button
+                className="file-preview-btn"
+                onClick={handleSave}
+                disabled={saving}
+                title="Ctrl+S"
+              >
+                {saving ? '…' : savedAt ? '✓' : tr.saveLabel}
+              </button>
+              <button
+                className="file-preview-btn"
+                onClick={() => setEditMode(false)}
+                title={tr.cancelLabel}
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            canEdit && (
+              <button
+                className="file-preview-btn"
+                onClick={() => setEditMode(true)}
+                title={tr.editLabel}
+              >
+                ✏️
+              </button>
+            )
+          )}
           <button
             className="file-preview-btn"
             title={tr.previewOpenExternally}
@@ -502,19 +686,44 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
         {tab.kind === 'file' && binary && isDocx && <DocxView base64={binary.base64} />}
         {tab.kind === 'file' && binary && isZip && <ZipView base64={binary.base64} />}
 
-        {tab.kind === 'file' && text !== null && isMd && <MarkdownView content={text} />}
-        {tab.kind === 'file' && text !== null && isMermaid && <MermaidView code={text} />}
+        {/* Edit mode: CodeMirror editor for text / md / code files */}
+        {tab.kind === 'file' && text !== null && editMode && (
+          <CodeMirrorPane
+            key={tab.path + '|edit'}
+            path={tab.path}
+            content={text}
+            editable
+            registerDoc={registerDoc}
+            onSave={handleSave}
+          />
+        )}
+
+        {/* View mode: syntax-highlighted CodeMirror for code files */}
         {tab.kind === 'file' &&
           text !== null &&
+          !editMode &&
           !isMd &&
           !isMermaid &&
-          !text.includes('\u0000') && (
+          !text.includes('\u0000') &&
+          (stat?.size ?? 0) <= CM_CAP && (
+            <CodeMirrorPane key={tab.path + '|view'} path={tab.path} content={text} editable={false} />
+          )}
+        {tab.kind === 'file' &&
+          text !== null &&
+          !editMode &&
+          !isMd &&
+          !isMermaid &&
+          !text.includes('\u0000') &&
+          (stat?.size ?? 0) > CM_CAP && (
             <pre className="preview-text">
               {text.length > 200_000 ? text.slice(0, 200_000) + '\n\n[...truncated...]' : text}
             </pre>
           )}
+        {tab.kind === 'file' && text !== null && !editMode && isMd && <MarkdownView content={text} />}
+        {tab.kind === 'file' && text !== null && !editMode && isMermaid && <MermaidView code={text} />}
         {tab.kind === 'file' &&
           text !== null &&
+          !editMode &&
           !isMd &&
           !isMermaid &&
           text.includes('\u0000') && (

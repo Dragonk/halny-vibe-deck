@@ -38,6 +38,13 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
+const BS = String.fromCharCode(92);
+
+/** Normalize a path to forward slashes (Windows paths arrive with backslashes). */
+function normPath(p: string): string {
+  return p.split(BS).join("/");
+}
+
 interface AppStore {
   // Config
   config: AppConfig;
@@ -116,6 +123,15 @@ interface AppStore {
   openDiffPreview: (name: string, path: string, diff: string) => void;
   closePreviewTab: (id: string) => void;
   setActivePreview: (id: string) => void;
+  openFilePreviewTab: (path: string, name?: string) => void;
+  // File-tree state lives in the store so expansion survives dock tab switches
+  fileTreeExpanded: Set<string>;
+  fileTreeEntries: Record<string, Array<{ name: string; isDir: boolean }>>;
+  loadFileTreeDir: (dir: string) => void;
+  toggleFileTreeDir: (dir: string) => void;
+  revealInFileTree: (dir: string) => void;
+  hideSession: (key: string) => void;
+  hideProject: (workingDirectory: string) => void;
 
   // Projects (sidebar grouping)
   collapsedProjects: string[];
@@ -295,6 +311,16 @@ export const useStore = create<AppStore>((set, get) => ({
   previewTabs: [],
   activePreviewId: null,
   openFilePreview: (path, name) => {
+    // Directories reveal in the Files tab instead of opening a preview tab
+    window.api.fs
+      .stat(path)
+      .then((s) => {
+        if (s.exists && s.isDir) get().revealInFileTree(path);
+        else get().openFilePreviewTab(path, name);
+      })
+      .catch(() => get().openFilePreviewTab(path, name));
+  },
+  openFilePreviewTab: (path, name) => {
     set((s) => {
       const existing = s.previewTabs.find(
         (t) => t.kind === "file" && t.path === path,
@@ -338,6 +364,82 @@ export const useStore = create<AppStore>((set, get) => ({
     });
   },
   setActivePreview: (id) => set({ activePreviewId: id || null }),
+
+  fileTreeExpanded: new Set<string>(),
+  fileTreeEntries: {},
+  loadFileTreeDir: (rawDir) => {
+    const dir = normPath(rawDir);
+    window.api.fs
+      .listDir(dir)
+      .then((entries) => {
+        const sorted = [...(entries as Array<{ name: string; isDir: boolean }>)].sort((a, b) => {
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [dir]: sorted } }));
+      })
+      .catch(() => {
+        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [dir]: [] } }));
+      });
+  },
+  toggleFileTreeDir: (rawDir) => {
+    const dir = normPath(rawDir);
+    set((s) => {
+      const next = new Set(s.fileTreeExpanded);
+      if (next.has(dir)) next.delete(dir);
+      else {
+        next.add(dir);
+        get().loadFileTreeDir(dir);
+      }
+      return { fileTreeExpanded: next };
+    });
+  },
+  revealInFileTree: (rawDir) => {
+    const dir = normPath(rawDir);
+    const root = normPath(get().currentSessionWorkingDirectory() || get().workingDirectory || "");
+    const inside = root !== "" && (dir === root || dir.startsWith(root + "/"));
+    if (!inside) {
+      // Outside the session folder — fall back to a preview tab
+      get().openFilePreviewTab(dir, dir.split(/[\\\\/]/).pop() || dir);
+      return;
+    }
+    const cfg = get().config;
+    set({
+      dockOpen: true,
+      dockTab: "files",
+      activePreviewId: null,
+      config: { ...cfg, dockOpen: true },
+    });
+    window.api.config.save({ ...cfg, dockOpen: true }).catch(console.error);
+    // Expand every ancestor from root to dir and load their entries
+    const toExpand: string[] = [];
+    let cur = dir;
+    while (cur.startsWith(root + "/") && cur !== root) {
+      toExpand.push(cur);
+      const idx = cur.lastIndexOf("/");
+      if (idx <= 0) break;
+      cur = cur.slice(0, idx);
+    }
+    toExpand.push(root);
+    set((s) => ({ fileTreeExpanded: new Set([...s.fileTreeExpanded, ...toExpand]) }));
+    for (const d of toExpand) get().loadFileTreeDir(d);
+  },
+  hideSession: (key) => {
+    const cfg = get().config;
+    const next = [...(cfg.hiddenSessions ?? []), key];
+    set({ config: { ...cfg, hiddenSessions: next } });
+    window.api.config.save({ ...cfg, hiddenSessions: next }).catch(console.error);
+  },
+  hideProject: (workingDirectory) => {
+    const cfg = get().config;
+    const wd = workingDirectory ?? "";
+    const keys = get().sessions
+      .filter((s) => (s.workingDirectory ?? "") === wd)
+      .map((s) => s.acpSessionId ?? s.id);
+    const merged = [...new Set([...(cfg.hiddenSessions ?? []), ...keys])];
+    set({ config: { ...cfg, hiddenSessions: merged } });
+    window.api.config.save({ ...cfg, hiddenSessions: merged }).catch(console.error);
+  },
 
   collapsedProjects: [],
   toggleProjectCollapse: (project) => {

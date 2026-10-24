@@ -149,6 +149,8 @@ export interface AppConfig {
   dockOpen: boolean
   dockWidth: number
   collapsedProjects: string[]
+  hiddenSessions: string[]
+  hiddenProjects: string[]
 }
 
 export interface AgentConfig {
@@ -217,6 +219,7 @@ export interface VibeSession {
   environment: { workingDirectory: string }
   stats: VibeSessionStats
   config: { activeModel: string } | null
+  models?: string[]
 }
 
 export interface VibeToolCall {
@@ -264,5 +267,7 @@ export const defaultConfig: AppConfig = {
   cachedModes: [],
   dockOpen: false,
   dockWidth: 400,
-  collapsedProjects: []
+  collapsedProjects: [],
+  hiddenSessions: [],
+  hiddenProjects: []
 }

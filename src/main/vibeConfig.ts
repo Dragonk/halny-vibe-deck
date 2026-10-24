@@ -1,11 +1,12 @@
 import fs from 'fs'
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { parse, stringify } from 'smol-toml'
 
 // ---------------------------------------------------------------------------
 // VibeConfig — mirrors the config.toml schema of the latest Mistral Vibe CLI
 // (vibe/core/config/vibe_schema.py). Unknown keys are preserved via the
-// index signature.
+// index signature. Every accessor takes an optional directory so the UI can
+// edit the global (~/.vibe) or the project (<cwd>/.vibe) config.
 // ---------------------------------------------------------------------------
 
 export interface VibeModelConfig {
@@ -149,8 +150,29 @@ export function getVibeDirPath(): string {
   return join(process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.', '.vibe')
 }
 
-function configTomlPath(): string {
-  return join(getVibeDirPath(), 'config.toml')
+/**
+ * Resolve which .vibe directory a settings operation targets.
+ * 'global' → ~/.vibe. 'project' → the .vibe directory of the given project
+ * directory (walking up like the CLI: vibe/core/config/layers/project.py).
+ * If no project config.toml exists, the project root's .vibe is returned so a
+ * save creates it where the CLI would discover it.
+ */
+export function resolveVibeDir(scope: 'global' | 'project', cwd?: string): string {
+  const globalDir = getVibeDirPath()
+  if (scope !== 'project' || !cwd) return globalDir
+  const home = dirname(globalDir)
+  let dir: string | undefined = cwd
+  for (let i = 0; i < 50 && dir; i++) {
+    if (dir === home) break
+    if (fs.existsSync(join(dir, '.vibe', 'config.toml'))) return join(dir, '.vibe')
+    const parent = dirname(dir)
+    dir = parent === dir ? undefined : parent
+  }
+  return join(cwd, '.vibe')
+}
+
+function configTomlPath(dir: string): string {
+  return join(dir, 'config.toml')
 }
 
 function ensureDir(path: string): void {
@@ -163,9 +185,9 @@ function ensureDir(path: string): void {
 // Raw config.toml access (raw TOML editor in Settings)
 // ---------------------------------------------------------------------------
 
-export function loadVibeConfigRaw(): { content: string; error: string | null } {
+export function loadVibeConfigRaw(dir: string = getVibeDirPath()): { content: string; error: string | null } {
   try {
-    const content = fs.readFileSync(configTomlPath(), 'utf-8')
+    const content = fs.readFileSync(configTomlPath(dir), 'utf-8')
     return { content, error: null }
   } catch {
     return { content: '', error: null }
@@ -173,14 +195,14 @@ export function loadVibeConfigRaw(): { content: string; error: string | null } {
 }
 
 /** Validate + persist raw TOML. Returns an error string or null on success. */
-export function saveVibeConfigRaw(content: string): string | null {
+export function saveVibeConfigRaw(content: string, dir: string = getVibeDirPath()): string | null {
   try {
     const parsed = parse(content)
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       return 'config.toml must be a TOML table'
     }
-    ensureDir(getVibeDirPath())
-    fs.writeFileSync(configTomlPath(), content, 'utf-8')
+    ensureDir(dir)
+    fs.writeFileSync(configTomlPath(dir), content, 'utf-8')
     return null
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
@@ -191,36 +213,36 @@ export function saveVibeConfigRaw(content: string): string | null {
 // Structured config access
 // ---------------------------------------------------------------------------
 
-export function loadVibeConfig(): VibeConfig {
+export function loadVibeConfig(dir: string = getVibeDirPath()): VibeConfig {
   try {
-    const content = fs.readFileSync(configTomlPath(), 'utf-8')
+    const content = fs.readFileSync(configTomlPath(dir), 'utf-8')
     return parse(content) as VibeConfig
   } catch {
     return {}
   }
 }
 
-export function saveVibeConfig(config: VibeConfig): void {
-  ensureDir(getVibeDirPath())
-  fs.writeFileSync(configTomlPath(), stringify(config as Record<string, unknown>), 'utf-8')
+export function saveVibeConfig(config: VibeConfig, dir: string = getVibeDirPath()): void {
+  ensureDir(dir)
+  fs.writeFileSync(configTomlPath(dir), stringify(config as Record<string, unknown>), 'utf-8')
 }
 
 // ---------------------------------------------------------------------------
-// Agents (~/.vibe/agents/*.toml)
+// Agents (<dir>/agents/*.toml)
 // ---------------------------------------------------------------------------
 
-function agentsDir(): string {
-  return join(getVibeDirPath(), 'agents')
+function agentsDir(dir: string): string {
+  return join(dir, 'agents')
 }
 
-export function loadAgentFiles(): VibeAgentFileConfig[] {
+export function loadAgentFiles(dir: string = getVibeDirPath()): VibeAgentFileConfig[] {
   try {
-    const files = fs.readdirSync(agentsDir(), { withFileTypes: true })
+    const files = fs.readdirSync(agentsDir(dir), { withFileTypes: true })
     const agents: VibeAgentFileConfig[] = []
     for (const f of files) {
       if (!f.isFile() || !f.name.endsWith('.toml')) continue
       try {
-        const raw = parse(fs.readFileSync(join(agentsDir(), f.name), 'utf-8')) as Record<
+        const raw = parse(fs.readFileSync(join(agentsDir(dir), f.name), 'utf-8')) as Record<
           string,
           unknown
         >
@@ -240,22 +262,22 @@ export function loadAgentFiles(): VibeAgentFileConfig[] {
   }
 }
 
-export function saveAgentFile(name: string, config: VibeAgentFileConfig): void {
-  ensureDir(agentsDir())
+export function saveAgentFile(name: string, config: VibeAgentFileConfig, dir: string = getVibeDirPath()): void {
+  ensureDir(agentsDir(dir))
   const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.toml'
   const data: Record<string, unknown> = { ...config, name }
-  fs.writeFileSync(join(agentsDir(), filename), stringify(data), 'utf-8')
+  fs.writeFileSync(join(agentsDir(dir), filename), stringify(data), 'utf-8')
 }
 
-export function deleteAgentFile(name: string): void {
+export function deleteAgentFile(name: string, dir: string = getVibeDirPath()): void {
   try {
     const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.toml'
-    fs.unlinkSync(join(agentsDir(), filename))
+    fs.unlinkSync(join(agentsDir(dir), filename))
   } catch {}
 }
 
 // ---------------------------------------------------------------------------
-// Prompts (~/.vibe/prompts/*.md)
+// Prompts (<dir>/prompts/*.md)
 // ---------------------------------------------------------------------------
 
 export interface VibePrompt {
@@ -263,13 +285,13 @@ export interface VibePrompt {
   content: string
 }
 
-function promptsDir(): string {
-  return join(getVibeDirPath(), 'prompts')
+function promptsDir(dir: string): string {
+  return join(dir, 'prompts')
 }
 
-export function loadPromptFiles(): VibePrompt[] {
+export function loadPromptFiles(dir: string = getVibeDirPath()): VibePrompt[] {
   try {
-    const files = fs.readdirSync(promptsDir(), { withFileTypes: true })
+    const files = fs.readdirSync(promptsDir(dir), { withFileTypes: true })
     const prompts: VibePrompt[] = []
     for (const f of files) {
       if (!f.isFile()) continue
@@ -277,7 +299,7 @@ export function loadPromptFiles(): VibePrompt[] {
       try {
         prompts.push({
           name: basename(f.name, f.name.endsWith('.md') ? '.md' : '.txt'),
-          content: fs.readFileSync(join(promptsDir(), f.name), 'utf-8'),
+          content: fs.readFileSync(join(promptsDir(dir), f.name), 'utf-8'),
         })
       } catch {}
     }
@@ -287,16 +309,16 @@ export function loadPromptFiles(): VibePrompt[] {
   }
 }
 
-export function savePromptFile(name: string, content: string): void {
-  ensureDir(promptsDir())
+export function savePromptFile(name: string, content: string, dir: string = getVibeDirPath()): void {
+  ensureDir(promptsDir(dir))
   const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.md'
-  fs.writeFileSync(join(promptsDir(), filename), content, 'utf-8')
+  fs.writeFileSync(join(promptsDir(dir), filename), content, 'utf-8')
 }
 
-export function deletePromptFile(name: string): void {
+export function deletePromptFile(name: string, dir: string = getVibeDirPath()): void {
   try {
     const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.md'
-    fs.unlinkSync(join(promptsDir(), filename))
+    fs.unlinkSync(join(promptsDir(dir), filename))
   } catch {}
 }
 
@@ -311,12 +333,12 @@ export interface VibeSkill {
 
 const MAX_SKILL_DEPTH = 4
 
-export function loadSkillFiles(): VibeSkill[] {
-  const cfg = loadVibeConfig()
+export function loadSkillFiles(dir: string = getVibeDirPath()): VibeSkill[] {
+  const cfg = loadVibeConfig(dir)
   const paths = (cfg.skill_paths ?? []).map((p) =>
     String(p).replace(/^~(?=\/|$)/, process.env['HOME'] ?? process.env['USERPROFILE'] ?? '~')
   )
-  paths.push(join(getVibeDirPath(), 'skills'))
+  paths.push(join(dir, 'skills'))
 
   const skills: VibeSkill[] = []
   const seen = new Set<string>()
@@ -349,4 +371,3 @@ function walkSkills(dir: string, depth: number, out: VibeSkill[], seen: Set<stri
     }
   }
 }
-

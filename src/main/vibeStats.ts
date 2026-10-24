@@ -30,6 +30,7 @@ export interface VibeSession {
   stats: VibeSessionStats
   config: { activeModel: string } | null
   agentProfile: { name: string } | null
+  models?: string[]
 }
 
 function camelToSnakeKeys(obj: unknown): unknown {
@@ -214,6 +215,26 @@ function loadUnifiedSessionUsage(sessionDir: string): UnifiedUsage | null {
   }
 }
 
+/** All models used across generations of a unified session (runtime-state.json). */
+function loadUnifiedSessionModels(sessionDir: string, fallback: string | null): string[] {
+  const used: string[] = []
+  const generationsDir = path.join(sessionDir, 'generations')
+  let gens: string[]
+  try {
+    gens = fs.readdirSync(generationsDir)
+  } catch {
+    return fallback ? [fallback] : []
+  }
+  for (const gen of gens.sort()) {
+    const state = readJsonFile(path.join(generationsDir, gen, 'runtime-state.json'))
+    const meta = (state?.['session_metadata'] ?? null) as Record<string, unknown> | null
+    const model = (meta?.['active_model'] as string) ?? null
+    if (model && !used.includes(model)) used.push(model)
+  }
+  if (used.length === 0 && fallback) used.push(fallback)
+  return used
+}
+
 function loadUnifiedSessions(models: VibeModelConfig[]): VibeSession[] {
   const unifiedDir = path.join(os.homedir(), '.vibe', 'logs', 'session', 'unified')
   if (!fs.existsSync(unifiedDir)) return []
@@ -257,6 +278,7 @@ function loadUnifiedSessions(models: VibeModelConfig[]): VibeSession[] {
       gitBranch: (meta.git_branch as string) ?? null,
       environment: { workingDirectory: (environment.working_directory as string) ?? '' },
       agentProfile: null,
+      models: loadUnifiedSessionModels(sessionDir, activeModel),
       config: activeModel ? { activeModel } : null,
       stats: {
         steps: usage?.toolCalls ?? 0,

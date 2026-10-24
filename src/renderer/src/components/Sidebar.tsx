@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
-import { useTranslation } from '../i18n'
+import { useTranslation, t } from '../i18n'
 import type { Session } from '../types'
 
 const MIN_SIDEBAR_WIDTH = 120
@@ -13,6 +13,16 @@ interface ProjectGroup {
   fullPath: string
   sessions: Session[]
   newest: number
+}
+
+interface DeleteTarget {
+  kind: 'session' | 'project'
+  /** acpSessionId (fallback: local session id) for sessions, project key for projects */
+  key: string
+  label: string
+  /** project working directory ('' = sessions without a project) */
+  wd: string
+  count: number
 }
 
 export default function Sidebar(): React.JSX.Element {
@@ -30,12 +40,39 @@ export default function Sidebar(): React.JSX.Element {
     loadAcpSession,
     collapsedProjects,
     toggleProjectCollapse,
+    hideSession,
+    hideProject,
   } = useStore()
   const tr = useTranslation(config.language)
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: DeleteTarget } | null>(null)
+  const [confirmTarget, setConfirmTarget] = useState<DeleteTarget | null>(null)
   const sidebarRef = useRef<HTMLDivElement>(null)
+
+  const openCtx = useCallback((e: React.MouseEvent, target: DeleteTarget): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu({ x: e.clientX, y: e.clientY, target })
+  }, [])
+
+  // Close the context menu on any click outside of it
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = (): void => setCtxMenu(null)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [ctxMenu])
+
+  const executeDelete = useCallback((target: DeleteTarget): void => {
+    // Only hides entries in the UI — nothing is deleted from disk, so
+    // statistics and the unified session store stay intact.
+    if (target.kind === 'session') hideSession(target.key)
+    else hideProject(target.wd)
+    setConfirmTarget(null)
+    setCtxMenu(null)
+  }, [hideSession, hideProject])
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -100,10 +137,14 @@ export default function Sidebar(): React.JSX.Element {
   const sortedSessions = [...sessions].sort(
     (a, b) => (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive),
   )
+  const hiddenSessions = config.hiddenSessions ?? []
+  const visibleSessions = sortedSessions.filter(
+    (s) => !hiddenSessions.includes(s.acpSessionId ?? s.id),
+  )
   const displayedSessions =
     config.sidebarSessionsLimit && config.sidebarSessionsLimit > 0
-      ? sortedSessions.slice(0, config.sidebarSessionsLimit)
-      : sortedSessions
+      ? visibleSessions.slice(0, config.sidebarSessionsLimit)
+      : visibleSessions
 
   const groups = new Map<string, ProjectGroup>()
   for (const session of displayedSessions) {
@@ -146,6 +187,15 @@ export default function Sidebar(): React.JSX.Element {
         onClick={() => handleSelectSession(session.id)}
         onMouseEnter={() => setHoveredSessionId(session.id)}
         onMouseLeave={() => setHoveredSessionId(null)}
+        onContextMenu={(e) =>
+          openCtx(e, {
+            kind: 'session',
+            key: session.acpSessionId ?? session.id,
+            label: session.name,
+            wd: session.workingDirectory ?? '',
+            count: 1,
+          })
+        }
       >
         <div className="session-item-content">
           <div className="session-item-row">
@@ -214,6 +264,15 @@ export default function Sidebar(): React.JSX.Element {
               <button
                 className="project-group-header"
                 onClick={() => toggleProjectCollapse(group.key)}
+                onContextMenu={(e) =>
+                  openCtx(e, {
+                    kind: 'project',
+                    key: group.key,
+                    label: group.label,
+                    wd: group.fullPath,
+                    count: group.sessions.length,
+                  })
+                }
                 title={group.fullPath || tr.noProject}
               >
                 <span className={`project-chevron ${collapsed ? '' : 'open'}`}>▸</span>
@@ -244,6 +303,41 @@ export default function Sidebar(): React.JSX.Element {
       </nav>
 
       <div className="sidebar-resize-handle" onMouseDown={handleMouseDown} />
+
+      {ctxMenu && (
+        <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>
+          <button
+            className="ctx-menu-item danger"
+            onClick={() => {
+              setConfirmTarget(ctxMenu.target)
+              setCtxMenu(null)
+            }}
+          >
+            🗑 {ctxMenu.target.kind === 'session' ? tr.deleteSessionLabel : tr.deleteProjectLabel}
+          </button>
+        </div>
+      )}
+
+      {confirmTarget && (
+        <div className="modal-overlay" onClick={() => setConfirmTarget(null)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{tr.deleteConfirmTitle}</div>
+            <div className="modal-message">
+              {confirmTarget.kind === 'session'
+                ? t(tr, 'deleteSessionConfirmMsg', { name: confirmTarget.label })
+                : t(tr, 'deleteProjectConfirmMsg', { name: confirmTarget.label, count: confirmTarget.count })}
+            </div>
+            <div className="modal-actions">
+              <button className="modal-btn" onClick={() => setConfirmTarget(null)}>
+                {tr.cancelLabel}
+              </button>
+              <button className="modal-btn modal-btn-danger" onClick={() => executeDelete(confirmTarget)}>
+                {tr.deleteLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   )
 }

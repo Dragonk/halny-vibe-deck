@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 
@@ -36,46 +36,18 @@ function normalizeDirPath(dir: string): string {
   return dir.split(BS).join('/')
 }
 
+// The expansion state and directory entries live in the app store, so they
+// survive switching dock tabs (e.g. opening a file preview and coming back).
 export default function FileTree({ cwd }: Props): React.JSX.Element {
-  const { openFilePreview, config } = useStore()
+  const { openFilePreview, config, fileTreeExpanded, fileTreeEntries, loadFileTreeDir, toggleFileTreeDir } = useStore()
   const tr = useTranslation(config.language)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [entriesByDir, setEntriesByDir] = useState<Record<string, DirEntry[]>>({})
-
-  const loadDir = useCallback((rawDir: string) => {
-    const dir = normalizeDirPath(rawDir)
-    window.api.fs
-      .listDir(dir)
-      .then((entries) => {
-        const sorted = [...(entries as DirEntry[])].sort((a, b) => {
-          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-          return a.name.localeCompare(b.name)
-        })
-        setEntriesByDir((prev) => ({ ...prev, [dir]: sorted }))
-      })
-      .catch(() => {
-        setEntriesByDir((prev) => ({ ...prev, [dir]: [] }))
-      })
-  }, [])
 
   useEffect(() => {
-    if (cwd) loadDir(cwd)
-  }, [cwd, loadDir])
-
-  const toggleExpand = (dir: string): void => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(dir)) next.delete(dir)
-      else {
-        next.add(dir)
-        loadDir(dir)
-      }
-      return next
-    })
-  }
+    if (cwd) loadFileTreeDir(cwd)
+  }, [cwd, loadFileTreeDir])
 
   const rootName = useMemo(
-    () => (cwd ? cwd.split(/[/\\]/).filter(Boolean).pop() ?? cwd : ''),
+    () => (cwd ? cwd.split(/[/\\\\]/).filter(Boolean).pop() ?? cwd : ''),
     [cwd],
   )
 
@@ -84,21 +56,21 @@ export default function FileTree({ cwd }: Props): React.JSX.Element {
   }
 
   const renderEntries = (dir: string, depth: number): React.JSX.Element => {
-    const entries = entriesByDir[dir] ?? []
+    const entries = fileTreeEntries[dir] ?? []
     return (
       <>
         {entries
           .filter((e) => !(e.isDir && SKIP_DIRS.has(e.name)))
           .map((entry) => {
             const fullPath = `${dir}/${entry.name}`.split(BS).join('/')
-            const isExpanded = expanded.has(fullPath)
+            const isExpanded = fileTreeExpanded.has(fullPath)
             return (
               <div key={fullPath}>
                 <button
                   className={`filetree-item ${depth > 0 ? '' : ''}`}
                   style={{ paddingLeft: 6 + depth * 12 }}
                   onClick={() => {
-                    if (entry.isDir) toggleExpand(fullPath)
+                    if (entry.isDir) toggleFileTreeDir(fullPath)
                     else openFilePreview(fullPath, entry.name)
                   }}
                   title={fullPath}
