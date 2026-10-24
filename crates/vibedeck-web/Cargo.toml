@@ -19,9 +19,12 @@ tokio = { version = "1", features = ["time"] }
 calamine = { version = "0.37", optional = true }
 zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
 pdf-extract = { version = "0.7", optional = true }
+wry = { version = "0.53.5", optional = true }
+tao = { version = "0.34", optional = true }
 
 [features]
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:vibedeck-vibe", "dep:toml"]
+gui = ["dep:wry", "dep:tao"]

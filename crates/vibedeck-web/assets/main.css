@@ -5707,3 +5707,99 @@ code {
   50% { opacity: 0.3; }
 }
 
+
+/* ===== Code editor (Settings raw TOML, code previews) ===== */
+.code-editor {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    overflow: hidden;
+    height: 420px;
+}
+.code-gutter {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    min-width: 52px;
+    padding: 12px 10px;
+    box-sizing: border-box;
+    text-align: right;
+    color: var(--text-dim);
+    background: var(--panel);
+    border-right: 1px solid var(--border-subtle);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    overflow: hidden;
+    user-select: none;
+}
+.code-hl {
+    position: absolute;
+    top: 0;
+    left: 52px;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    color: var(--text);
+    pointer-events: none;
+}
+.code-ta {
+    position: absolute;
+    top: 0;
+    left: 52px;
+    right: 0;
+    bottom: 0;
+    margin: 0;
+    padding: 12px;
+    border: none;
+    outline: none;
+    resize: none;
+    box-sizing: border-box;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+    overflow: auto;
+    tab-size: 4;
+}
+.code-ta::selection { background: rgba(250, 80, 15, 0.30); }
+pre.code-view { white-space: pre; }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-key { color: var(--tok-key); }
+.tok-str { color: var(--tok-str); }
+.tok-num { color: var(--tok-num); }
+.tok-bool { color: var(--tok-bool); }
+.tok-kw { color: var(--tok-kw); }
+.tok-table { color: var(--tok-table); font-weight: 600; }
+
+[data-theme="dark"] {
+    --tok-com: #6a9955;
+    --tok-key: #9cdcfe;
+    --tok-str: #ce9178;
+    --tok-num: #b5cea8;
+    --tok-bool: #569cd6;
+    --tok-kw: #c586c0;
+    --tok-table: #d7ba7d;
+}
+[data-theme="light"] {
+    --tok-com: #008000;
+    --tok-key: #0451a5;
+    --tok-str: #a31515;
+    --tok-num: #098658;
+    --tok-bool: #0000ff;
+    --tok-kw: #af00db;
+    --tok-table: #795e26;
+}

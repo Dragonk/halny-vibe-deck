@@ -6,6 +6,8 @@
 
 use dioxus::prelude::*;
 
+use crate::components::code_editor::CodeEditor;
+
 use crate::i18n::tr;
 use crate::state::{lang, save_prefs, token, ClientState};
 use crate::vibeconfig::{FileCard, VibeConfigData};
@@ -906,11 +908,9 @@ pub fn SettingsView() -> Element {
                     div { class: "settings-section-title", "config.toml" }
                 }
                 div { class: "field",
-                    textarea {
-                        class: "field-input",
-                        style: "min-height:380px;font-family:monospace;font-size:12px;white-space:pre;",
-                        value: "{raw_toml.read()}",
-                        oninput: move |e| raw_toml.set(e.value()),
+                    CodeEditor {
+                        code: raw_toml,
+                        id: "raw".to_string(),
                     }
                     div { class: "field-hint", "{loc(&lang, \"Zapis waliduje TOML — błędny plik nie nadpisze konfiguracji.\", \"Saving validates the TOML — an invalid file will not overwrite the config.\")}" }
                     button {

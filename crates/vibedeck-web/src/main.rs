@@ -10,6 +10,7 @@ pub mod app;
 pub mod components;
 pub mod events;
 pub mod fsgit;
+pub mod highlight;
 pub mod vibestats;
 pub mod vibeconfig;
 pub mod md;
@@ -34,6 +35,28 @@ fn main() {
             std::process::exit(0);
         }
 
+        // ---- Launch mode: --mode auto|gui|headless (default: auto) ----
+        let mode = args
+            .iter()
+            .position(|a| a == "--mode")
+            .and_then(|p| args.get(p + 1))
+            .cloned()
+            .unwrap_or_else(|| "auto".to_string());
+        let gui = match mode.as_str() {
+            "gui" | "desktop" => true,
+            "headless" => false,
+            "auto" => {
+                std::env::var_os("DISPLAY").is_some()
+                    || std::env::var_os("WAYLAND_DISPLAY").is_some()
+            }
+            other => {
+                eprintln!(
+                    "vibedeck: unknown --mode '{other}' (use auto|gui|headless); staying headless"
+                );
+                false
+            }
+        };
+
         let cfg = vibedeck_engine::EngineConfig::load();
         let port = args
             .iter()
@@ -51,6 +74,34 @@ fn main() {
         }
         if std::env::var_os("IP").is_none() {
             std::env::set_var("IP", if remote { "0.0.0.0" } else { "127.0.0.1" });
+        }
+
+        if gui {
+            #[cfg(feature = "gui")]
+            {
+                let url = format!("http://127.0.0.1:{port}");
+                std::thread::Builder::new()
+                    .name("vibedeck-gui".into())
+                    .spawn(move || {
+                        // Wait until the HTTP server is actually listening.
+                        for _ in 0..150 {
+                            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        if let Err(e) = open_webview(&url) {
+                            eprintln!(
+                                "vibedeck: GUI unavailable ({e}); the server keeps running at {url}"
+                            );
+                        }
+                    })
+                    .ok();
+            }
+            #[cfg(not(feature = "gui"))]
+            eprintln!(
+                "vibedeck: GUI requested, but this build has no gui support (build with --features server,gui); staying headless."
+            );
         }
 
         dioxus::serve(|| async {
@@ -74,4 +125,67 @@ fn main() {
 
     #[cfg(all(not(feature = "server"), feature = "web"))]
     dioxus::launch(app::App);
+}
+
+/// Open the desktop webview window pointed at the running server.
+/// Only compiled with the `gui` feature (wry + tao, same webkit2gtk
+/// version dioxus-desktop 0.7 uses). Blocking: runs the event loop until
+/// the window is closed; the HTTP server keeps running either way.
+#[cfg(feature = "gui")]
+fn open_webview(url: &str) -> Result<(), String> {
+    use tao::{
+        event::{Event, WindowEvent},
+        event_loop::{ControlFlow, EventLoopBuilder},
+        window::WindowBuilder,
+    };
+    use wry::WebViewBuilder;
+
+    // tao panics when the event loop is created off the main thread on
+    // unix; the gui thread is a worker, so use the any-thread constructor.
+    #[cfg(target_os = "linux")]
+    let event_loop = {
+        use tao::platform::unix::EventLoopBuilderExtUnix;
+        EventLoopBuilder::new().with_any_thread(true).build()
+    };
+    #[cfg(not(target_os = "linux"))]
+    let event_loop = tao::event_loop::EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("VibeDeck")
+        .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 820.0))
+        .build(&event_loop)
+        .map_err(|e| e.to_string())?;
+
+    let builder = WebViewBuilder::new().with_url(url.to_string());
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    ))]
+    let _webview = builder.build(&window).map_err(|e| e.to_string())?;
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    )))]
+    let _webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window
+            .default_vbox()
+            .ok_or_else(|| "no gtk vbox in window".to_string())?;
+        builder.build_gtk(vbox).map_err(|e| e.to_string())?
+    };
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            *control_flow = ControlFlow::Exit;
+        }
+    });
 }

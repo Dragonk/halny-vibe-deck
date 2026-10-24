@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod code_editor;
 pub mod dock;
 pub mod header;
 pub mod history;

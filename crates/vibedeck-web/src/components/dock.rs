@@ -405,7 +405,10 @@ fn preview_panel(
                 }
             }
         }
-        _ => rsx! { pre { class: "preview-text", "{data.text}" } },
+        _ => {
+            let html = crate::highlight::highlight_auto(&name, &data.text);
+            rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
+        }
     };
 
     rsx! {
