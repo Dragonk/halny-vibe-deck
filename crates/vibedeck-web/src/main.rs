@@ -9,6 +9,7 @@ pub mod api;
 pub mod app;
 pub mod components;
 pub mod events;
+pub mod fsgit;
 pub mod i18n;
 pub mod state;
 

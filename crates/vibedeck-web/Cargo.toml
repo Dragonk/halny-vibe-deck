@@ -13,9 +13,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 vibedeck-engine = { workspace = true, optional = true }
 tokio = { version = "1", features = ["time"] }
+# optional server-side preview parsers (same versions as the egui app)
+calamine = { version = "0.37", optional = true }
+zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
+pdf-extract = { version = "0.7", optional = true }
 
 [features]
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros"]
+server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract"]

@@ -8095,13 +8095,16 @@ dependencies = [
 name = "vibedeck-web"
 version = "0.8.3"
 dependencies = [
+ "calamine",
  "dioxus",
  "dioxus-fullstack",
+ "pdf-extract",
  "serde",
  "serde_json",
  "tokio",
  "vibedeck-core",
  "vibedeck-engine",
+ "zip",
 ]
 
 [[package]]
