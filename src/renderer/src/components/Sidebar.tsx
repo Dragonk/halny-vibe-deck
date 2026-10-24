@@ -295,6 +295,12 @@ export default function Sidebar(): React.JSX.Element {
           {tr.statistics}
         </button>
         <button
+          className={`sidebar-nav-item ${currentView === 'history' ? 'active' : ''}`}
+          onClick={() => setCurrentView('history')}
+        >
+          {tr.historyLabel}
+        </button>
+        <button
           className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
           onClick={() => setCurrentView('settings')}
         >

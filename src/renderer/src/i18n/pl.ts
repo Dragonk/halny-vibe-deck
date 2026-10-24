@@ -291,5 +291,20 @@ export const pl = {
   durationLabel: 'Czas trwania',
   startedLabel: 'Rozpoczęto',
   projectLabel: 'Projekt',
-  sessionDetailsHint: 'Kliknij, aby zobaczyć szczegóły sesji'
+  sessionDetailsHint: 'Kliknij, aby zobaczyć szczegóły sesji',
+  historyLabel: 'Historia',
+  showHiddenLabel: 'Pokaż ukryte',
+  hiddenProjectsLabel: 'Ukryte projekty',
+  restoreLabel: 'Przywróć',
+  reactivateLabel: 'Reaktywuj',
+  reactivateHint: 'Reaktywuj tę sesję — wznawia pełną rozmowę',
+  searchTitleLabel: 'Tytuł',
+  searchContentLabel: 'Tytuł i treść',
+  searchTitlePlaceholder: 'Szukaj sesji po tytule…',
+  searchContentPlaceholder: 'Szukaj w tytułach i treści wiadomości…',
+  time30d: '30 dni',
+  time90d: '90 dni',
+  time180d: '180 dni',
+  timeAll: 'Cały okres',
+  hiddenBadge: 'ukryta'
 }

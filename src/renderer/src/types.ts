@@ -62,7 +62,7 @@ export interface Session {
   loading?: boolean
 }
 
-export type AppView = 'chat' | 'settings' | 'stats'
+export type AppView = 'chat' | 'settings' | 'stats' | 'history'
 
 export type AcpStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 

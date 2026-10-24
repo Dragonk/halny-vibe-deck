@@ -495,3 +495,68 @@ export function loadVibeSessionMetadata(sessionId: string): { activeModel: strin
 
   return { activeModel: null, agentProfile: null }
 }
+
+
+// ---------------------------------------------------------------------------
+// History content search: scan unified chunks + legacy messages.jsonl
+// ---------------------------------------------------------------------------
+
+export interface ContentMatch {
+  sessionId: string
+  snippet: string
+}
+
+export function searchSessionContent(query: string): ContentMatch[] {
+  const q = query.toLowerCase()
+  if (!q) return []
+  const results: ContentMatch[] = []
+  const seen = new Set<string>()
+  const sessionRoot = path.join(os.homedir(), '.vibe', 'logs', 'session')
+
+  const pushMatch = (sessionId: string, text: string): void => {
+    if (seen.has(sessionId)) return
+    const idx = text.toLowerCase().indexOf(q)
+    if (idx === -1) return
+    seen.add(sessionId)
+    const from = Math.max(0, idx - 70)
+    const raw = text.slice(from, idx + q.length + 70)
+    results.push({ sessionId, snippet: raw.replace(/\s+/g, ' ').slice(0, 200) })
+  }
+
+  // Unified store: ~/.vibe/logs/session/unified/<id>/chunks/*
+  const unifiedDir = path.join(sessionRoot, 'unified')
+  try {
+    const entries = fs.readdirSync(unifiedDir)
+    for (const entry of entries) {
+      const chunksDir = path.join(unifiedDir, entry, 'chunks')
+      let files: string[]
+      try { files = fs.readdirSync(chunksDir) } catch { continue }
+      for (const f of files) {
+        let text: string
+        try { text = fs.readFileSync(path.join(chunksDir, f), 'utf-8') } catch { continue }
+        pushMatch(entry, text)
+        if (seen.has(entry)) break
+      }
+    }
+  } catch { /* unified dir missing */ }
+
+  // Legacy store: ~/.vibe/logs/session/<entry>/messages.jsonl
+  try {
+    const entries = fs.readdirSync(sessionRoot)
+    for (const entry of entries) {
+      if (entry === 'unified') continue
+      const msgPath = path.join(sessionRoot, entry, 'messages.jsonl')
+      if (!fs.existsSync(msgPath)) continue
+      let text: string
+      try { text = fs.readFileSync(msgPath, 'utf-8') } catch { continue }
+      let sessionId = entry
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(sessionRoot, entry, 'meta.json'), 'utf-8'))
+        if (meta.session_id) sessionId = meta.session_id
+      } catch { /* fall back to dir name */ }
+      pushMatch(sessionId, text)
+    }
+  } catch { /* session root missing */ }
+
+  return results
+}

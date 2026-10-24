@@ -291,5 +291,20 @@ export const es = {
   durationLabel: 'Duración',
   startedLabel: 'Iniciada',
   projectLabel: 'Proyecto',
-  sessionDetailsHint: 'Haz clic para ver los detalles de la sesión'
+  sessionDetailsHint: 'Haz clic para ver los detalles de la sesión',
+  historyLabel: 'Historial',
+  showHiddenLabel: 'Mostrar ocultas',
+  hiddenProjectsLabel: 'Proyectos ocultos',
+  restoreLabel: 'Restaurar',
+  reactivateLabel: 'Reactivar',
+  reactivateHint: 'Reactivar esta sesión: reanuda toda la conversación',
+  searchTitleLabel: 'Título',
+  searchContentLabel: 'Título y contenido',
+  searchTitlePlaceholder: 'Buscar sesiones por título…',
+  searchContentPlaceholder: 'Buscar en títulos y contenido de mensajes…',
+  time30d: '30 días',
+  time90d: '90 días',
+  time180d: '180 días',
+  timeAll: 'Todo el historial',
+  hiddenBadge: 'oculta'
 }

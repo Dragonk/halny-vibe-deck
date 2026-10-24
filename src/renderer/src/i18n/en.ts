@@ -291,5 +291,20 @@ export const en = {
   durationLabel: 'Duration',
   startedLabel: 'Started',
   projectLabel: 'Project',
-  sessionDetailsHint: 'Click to see session details'
+  sessionDetailsHint: 'Click to see session details',
+  historyLabel: 'History',
+  showHiddenLabel: 'Show hidden',
+  hiddenProjectsLabel: 'Hidden projects',
+  restoreLabel: 'Restore',
+  reactivateLabel: 'Reactivate',
+  reactivateHint: 'Reactivate this session — resumes the full conversation',
+  searchTitleLabel: 'Title',
+  searchContentLabel: 'Title + content',
+  searchTitlePlaceholder: 'Search sessions by title…',
+  searchContentPlaceholder: 'Search titles and message content…',
+  time30d: '30 days',
+  time90d: '90 days',
+  time180d: '180 days',
+  timeAll: 'All time',
+  hiddenBadge: 'hidden'
 }

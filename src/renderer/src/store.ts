@@ -12,6 +12,7 @@ import type {
   UsageStats,
   DockTabKind,
   VibeSessionMessage,
+  VibeSession,
   PreviewTab,
 } from "./types";
 import { defaultConfig } from "./types";
@@ -132,6 +133,9 @@ interface AppStore {
   revealInFileTree: (dir: string) => void;
   hideSession: (key: string) => void;
   hideProject: (workingDirectory: string) => void;
+  unhideSessions: (keys: string[]) => void;
+  unhideProject: (workingDirectory: string) => void;
+  reactivateHistorySession: (vibe: VibeSession) => Promise<void>;
 
   // Projects (sidebar grouping)
   collapsedProjects: string[];
@@ -439,6 +443,33 @@ export const useStore = create<AppStore>((set, get) => ({
     const merged = [...new Set([...(cfg.hiddenSessions ?? []), ...keys])];
     set({ config: { ...cfg, hiddenSessions: merged } });
     window.api.config.save({ ...cfg, hiddenSessions: merged }).catch(console.error);
+  },
+  unhideSessions: (keys) => {
+    const cfg = get().config;
+    const next = (cfg.hiddenSessions ?? []).filter((k) => !keys.includes(k));
+    set({ config: { ...cfg, hiddenSessions: next } });
+    window.api.config.save({ ...cfg, hiddenSessions: next }).catch(console.error);
+  },
+  unhideProject: (workingDirectory) => {
+    const cfg = get().config;
+    const next = (cfg.hiddenProjects ?? []).filter((wd) => wd !== workingDirectory);
+    set({ config: { ...cfg, hiddenProjects: next } });
+    window.api.config.save({ ...cfg, hiddenProjects: next }).catch(console.error);
+  },
+  reactivateHistorySession: async (vibe) => {
+    const existing = get().sessions.find((s) => s.acpSessionId === vibe.sessionId);
+    let localId = existing?.id;
+    if (!localId) {
+      const created = get().addSession(vibe.environment?.workingDirectory || "");
+      localId = created.id;
+      get().updateSession(localId, {
+        acpSessionId: vibe.sessionId,
+        name: vibe.title ?? created.name,
+        workingDirectory: vibe.environment?.workingDirectory || created.workingDirectory,
+      });
+    }
+    get().setCurrentView("chat");
+    await get().loadAcpSession(localId);
   },
 
   collapsedProjects: [],

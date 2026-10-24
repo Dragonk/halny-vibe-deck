@@ -91,6 +91,8 @@ const api = {
   },
   stats: {
     vibeSessions: (): Promise<unknown[]> => ipcRenderer.invoke('stats:vibe-sessions'),
+    searchSessionContent: (query: string): Promise<Array<{ sessionId: string; snippet: string }>> =>
+      ipcRenderer.invoke('stats:search-session-content', query),
     vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('stats:vibe-session-messages', sessionId),
     vibeSessionMetadata: (

@@ -8,6 +8,7 @@ import {
   loadVibeSessionMessages,
   loadVibeSessionMetadata,
   loadVibeSubagentSessions,
+  searchSessionContent,
 } from "./vibeStats";
 import { checkSetup, installDependencies } from "./setup";
 import {
@@ -196,6 +197,9 @@ app.whenReady().then(() => {
 
   // Vibe stats
   ipcMain.handle("stats:vibe-sessions", () => loadVibeSessions());
+  ipcMain.handle("stats:search-session-content", (_e, query: string) =>
+    searchSessionContent(query),
+  );
   ipcMain.handle("stats:vibe-session-messages", (_e, sessionId: string) =>
     loadVibeSessionMessages(sessionId),
   );

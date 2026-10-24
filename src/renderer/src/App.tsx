@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
 import SettingsView from './components/SettingsView'
 import StatsView from './components/StatsView'
+import HistoryView from './components/HistoryView'
 import SetupView from './components/SetupView'
 import Dock from './components/Dock'
 
@@ -536,6 +537,7 @@ export default function App(): React.JSX.Element {
           {currentView === 'chat' && <ChatView />}
           {currentView === 'settings' && <SettingsView />}
           {currentView === 'stats' && <StatsView />}
+          {currentView === 'history' && <HistoryView />}
         </main>
         <Dock />
       </div>

@@ -291,5 +291,20 @@ export const de = {
   durationLabel: 'Dauer',
   startedLabel: 'Begonnen',
   projectLabel: 'Projekt',
-  sessionDetailsHint: 'Klicken, um Sitzungsdetails anzuzeigen'
+  sessionDetailsHint: 'Klicken, um Sitzungsdetails anzuzeigen',
+  historyLabel: 'Verlauf',
+  showHiddenLabel: 'Ausgeblendete anzeigen',
+  hiddenProjectsLabel: 'Ausgeblendete Projekte',
+  restoreLabel: 'Wiederherstellen',
+  reactivateLabel: 'Reaktivieren',
+  reactivateHint: 'Diese Sitzung reaktivieren — setzt die gesamte Unterhaltung fort',
+  searchTitleLabel: 'Titel',
+  searchContentLabel: 'Titel und Inhalt',
+  searchTitlePlaceholder: 'Sitzungen nach Titel suchen…',
+  searchContentPlaceholder: 'In Titeln und Nachrichteninhalten suchen…',
+  time30d: '30 Tage',
+  time90d: '90 Tage',
+  time180d: '180 Tage',
+  timeAll: 'Gesamter Zeitraum',
+  hiddenBadge: 'ausgeblendet'
 }
