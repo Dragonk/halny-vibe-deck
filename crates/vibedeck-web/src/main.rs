@@ -10,6 +10,7 @@ pub mod app;
 pub mod components;
 pub mod events;
 pub mod fsgit;
+pub mod vibestats;
 pub mod md;
 pub mod i18n;
 pub mod state;

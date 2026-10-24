@@ -8104,6 +8104,7 @@ dependencies = [
  "tokio",
  "vibedeck-core",
  "vibedeck-engine",
+ "vibedeck-vibe",
  "zip",
 ]
 
