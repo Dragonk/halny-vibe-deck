@@ -827,6 +827,17 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     if (key === 'model') setCurrentModel(value)
     if (key === 'mode') setCurrentMode(value)
     if (key === 'thinking') setCurrentThinking(value)
+    // Record the choice on the session so switching back restores it.
+    const sess = currentSession()
+    if (sess) {
+      const patch =
+        key === 'model'
+          ? { lastModel: value }
+          : key === 'mode'
+            ? { lastMode: value }
+            : { lastThinking: value }
+      useStore.getState().updateSession(sess.id, patch)
+    }
     const acpSessId = useStore.getState().activeAcpSessionId ?? currentSession()?.acpSessionId
     await window.api.acp.setConfigOption(key, value, acpSessId ?? undefined).catch(console.error)
   }

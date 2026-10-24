@@ -650,7 +650,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
           {editMode ? (
             <>
               <button
-                className="file-preview-btn"
+                className="file-preview-btn primary"
                 onClick={handleSave}
                 disabled={saving}
                 title="Ctrl+S"

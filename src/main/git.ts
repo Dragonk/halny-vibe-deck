@@ -106,3 +106,51 @@ export async function gitDiffAll(cwd: string): Promise<string | null> {
   }
 }
 
+
+export async function gitStage(cwd: string, paths: string[]): Promise<string | null> {
+  if (!cwd || paths.length === 0) return null
+  try {
+    const g = git(cwd)
+    if (!(await g.checkIsRepo())) return 'Not a git repository'
+    await g.add(paths)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+export async function gitUnstage(cwd: string, paths: string[]): Promise<string | null> {
+  if (!cwd || paths.length === 0) return null
+  try {
+    const g = git(cwd)
+    if (!(await g.checkIsRepo())) return 'Not a git repository'
+    await g.reset(['--', ...paths])
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+export async function gitCommit(cwd: string, message: string): Promise<string | null> {
+  if (!cwd || !message.trim()) return 'Empty commit message'
+  try {
+    const g = git(cwd)
+    if (!(await g.checkIsRepo())) return 'Not a git repository'
+    await g.commit(message)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+export async function gitPush(cwd: string): Promise<string | null> {
+  if (!cwd) return null
+  try {
+    const g = git(cwd)
+    if (!(await g.checkIsRepo())) return 'Not a git repository'
+    await g.push()
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}

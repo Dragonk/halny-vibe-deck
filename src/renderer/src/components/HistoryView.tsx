@@ -23,6 +23,7 @@ export default function HistoryView(): React.JSX.Element {
   const [searchMode, setSearchMode] = useState<SearchMode>('title')
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all')
   const [showHidden, setShowHidden] = useState(false)
+  const [projectFilter, setProjectFilter] = useState('')
   const [contentMatches, setContentMatches] = useState<Record<string, string>>({})
   const [searching, setSearching] = useState(false)
 
@@ -66,6 +67,23 @@ export default function HistoryView(): React.JSX.Element {
     return hiddenSessions.includes(s.sessionId) || (wd !== '' && hiddenProjects.includes(wd))
   }, [hiddenSessions, hiddenProjects])
 
+  // Distinct project folders for the per-project filter; hidden projects
+  // are only listed when "show hidden" is checked.
+  const projectList = useMemo(() => {
+    const wds = new Set<string>()
+    for (const s of sessions) {
+      const wd = s.environment?.workingDirectory ?? ''
+      if (!wd) continue
+      if (!showHidden && hiddenProjects.includes(wd)) continue
+      wds.add(wd)
+    }
+    return [...wds].sort()
+  }, [sessions, showHidden, hiddenProjects])
+
+  useEffect(() => {
+    if (projectFilter !== '' && !projectList.includes(projectFilter)) setProjectFilter('')
+  }, [projectList, projectFilter])
+
   const filtered = useMemo(() => {
     const days = timeFilter === 'all' ? 0 : TIME_FILTER_DAYS[timeFilter]
     const cutoff = days > 0 ? Date.now() - days * 86400000 : 0
@@ -73,13 +91,16 @@ export default function HistoryView(): React.JSX.Element {
     return sessions.filter((s) => {
       if (cutoff && new Date(s.startTime).getTime() < cutoff) return false
       if (!showHidden && isSessionHidden(s)) return false
+      if (projectFilter !== '' && (s.environment?.workingDirectory ?? '') !== projectFilter) {
+        return false
+      }
       if (q) {
         if ((s.title ?? '').toLowerCase().includes(q)) return true
         return searchMode === 'content' && contentMatches[s.sessionId] !== undefined
       }
       return true
     })
-  }, [sessions, timeFilter, showHidden, query, searchMode, contentMatches, isSessionHidden])
+  }, [sessions, timeFilter, showHidden, query, searchMode, contentMatches, isSessionHidden, projectFilter])
 
   const restoreProject = (wd: string): void => {
     const keys = sessions
@@ -112,6 +133,18 @@ export default function HistoryView(): React.JSX.Element {
             onChange={(e) => setQuery(e.target.value)}
           />
           {searching && <span className="history-searching">…</span>}
+          <select
+            className="field-select history-project-select"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+          >
+            <option value="">{tr.allProjects}</option>
+            {projectList.map((wd) => (
+              <option key={wd} value={wd} title={wd}>
+                {wd.split(/[/\\]/).filter(Boolean).pop() ?? wd}
+              </option>
+            ))}
+          </select>
           <label className="history-show-hidden">
             <input
               type="checkbox"

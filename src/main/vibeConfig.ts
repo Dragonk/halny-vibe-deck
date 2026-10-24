@@ -1,6 +1,7 @@
 import fs from 'fs'
 import { join, basename, dirname } from 'path'
 import { parse, stringify } from 'smol-toml'
+import { unzipSync } from 'fflate'
 
 // ---------------------------------------------------------------------------
 // VibeConfig — mirrors the config.toml schema of the latest Mistral Vibe CLI
@@ -404,4 +405,208 @@ function listSkillFiles(dir: string, rel: string, depth: number): VibeSkillFile[
     }
   }
   return out
+}
+
+/** One file in the .vibe directory (relative path + absolute path). */
+export interface VibeConfigFile {
+  path: string
+  full: string
+}
+
+/** All config files in a .vibe dir (depth 3, logs/session dirs skipped). */
+export function listConfigFiles(dir: string = getVibeDirPath()): VibeConfigFile[] {
+  const skip = new Set(['logs', 'sessions', 'node_modules', '.git', '__pycache__', 'tmp'])
+  const out: VibeConfigFile[] = []
+  const walk = (rel: string, depth: number): void => {
+    if (depth > 3) return
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(rel ? join(dir, rel) : dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    entries.sort(
+      (a, b) =>
+        Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name)
+    )
+    for (const e of entries) {
+      const r = rel ? rel + '/' + e.name : e.name
+      if (e.isDirectory()) {
+        if (skip.has(e.name)) continue
+        walk(r, depth + 1)
+      } else {
+        out.push({ path: r, full: join(dir, r) })
+      }
+    }
+  }
+  walk('', 0)
+  return out
+}
+// ---------------------------------------------------------------------------
+// Skill CRUD + import
+// ---------------------------------------------------------------------------
+
+/** Sanitize a skill name: strip path separators and unsafe characters. */
+function sanitizeSkillName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9-_ .]/g, '').replace(/^\.+/, '').trim()
+}
+
+function skillsBase(dir: string): string {
+  return join(dir, 'skills')
+}
+
+/** Create a new skill with a starter SKILL.md. Returns error or null. */
+export function createSkillFile(name: string, dir: string = getVibeDirPath()): string | null {
+  const clean = sanitizeSkillName(name)
+  if (!clean) return 'Invalid skill name'
+  const skillDir = join(skillsBase(dir), clean)
+  if (fs.existsSync(skillDir)) return 'A skill with this name already exists'
+  try {
+    fs.mkdirSync(skillDir, { recursive: true })
+    const starter =
+      '---' + String.fromCharCode(10) +
+      'name: ' + clean + String.fromCharCode(10) +
+      'description: TODO' + String.fromCharCode(10) +
+      '---' + String.fromCharCode(10) + String.fromCharCode(10) +
+      '# ' + clean + String.fromCharCode(10)
+    fs.writeFileSync(join(skillDir, 'SKILL.md'), starter)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Delete a skill directory recursively. Returns error or null. */
+export function deleteSkillFile(name: string, dir: string = getVibeDirPath()): string | null {
+  const clean = sanitizeSkillName(name)
+  if (!clean) return 'Invalid skill name'
+  const skillDir = join(skillsBase(dir), clean)
+  if (!fs.existsSync(skillDir)) return 'Skill not found'
+  try {
+    fs.rmSync(skillDir, { recursive: true, force: true })
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Write a file inside a skill directory (creates parent dirs). */
+export function writeSkillFile(
+  name: string,
+  relPath: string,
+  content: string,
+  dir: string = getVibeDirPath()
+): string | null {
+  const clean = sanitizeSkillName(name)
+  if (!clean) return 'Invalid skill name'
+  const rel = relPath.replace(/\.\./g, '').replace(/^\/+/, '')
+  if (!rel) return 'Invalid file path'
+  const base = join(skillsBase(dir), clean)
+  const target = join(base, rel)
+  if (!target.startsWith(base)) return 'Invalid file path'
+  try {
+    fs.mkdirSync(dirname(target), { recursive: true })
+    fs.writeFileSync(target, content)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Delete one file (or subtree) inside a skill. Returns error or null. */
+export function deleteSkillSubFile(
+  name: string,
+  relPath: string,
+  dir: string = getVibeDirPath()
+): string | null {
+  const clean = sanitizeSkillName(name)
+  if (!clean) return 'Invalid skill name'
+  const rel = relPath.replace(/\.\./g, '').replace(/^\/+/, '')
+  if (!rel) return 'Invalid file path'
+  if (rel.toLowerCase() === 'skill.md') {
+    return 'SKILL.md cannot be removed — delete the skill instead'
+  }
+  const base = join(skillsBase(dir), clean)
+  const target = join(base, rel)
+  if (!target.startsWith(base)) return 'Invalid file path'
+  try {
+    fs.rmSync(target, { recursive: true, force: true })
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Copy a folder as a new skill. Returns error or null. */
+export function importSkillFromFolder(
+  src: string,
+  dir: string = getVibeDirPath()
+): string | null {
+  let base: string
+  try {
+    const st = fs.statSync(src)
+    if (!st.isDirectory()) return 'The selected path is not a folder'
+    base = sanitizeSkillName(basename(src))
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  if (!base) return 'Invalid skill name'
+  const skillDir = join(skillsBase(dir), base)
+  if (fs.existsSync(skillDir)) return 'A skill with this name already exists'
+  try {
+    fs.mkdirSync(skillsBase(dir), { recursive: true })
+    fs.cpSync(src, skillDir, { recursive: true })
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/** Import a .zip archive as a skill (SKILL.md at root or in a single top folder). */
+export function importSkillFromZip(zipPath: string, dir: string = getVibeDirPath()): string | null {
+  let data: Buffer
+  try {
+    data = fs.readFileSync(zipPath)
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  let files: Record<string, Uint8Array>
+  try {
+    files = unzipSync(new Uint8Array(data)) as Record<string, Uint8Array>
+  } catch (err) {
+    return 'Invalid zip: ' + (err instanceof Error ? err.message : String(err))
+  }
+  const names = Object.keys(files).filter((n) => !n.endsWith('/'))
+  if (names.length === 0) return 'The zip archive is empty'
+  let root: string | null = null
+  if (names.some((n) => n.toLowerCase() === 'skill.md')) {
+    root = ''
+  } else {
+    const tops = [...new Set(names.map((n) => n.split('/')[0]))]
+    for (const top of tops) {
+      if (names.some((n) => n.toLowerCase() === top.toLowerCase() + '/skill.md')) {
+        root = top
+        break
+      }
+    }
+  }
+  if (root === null) return 'SKILL.md not found in the archive (root or a single top folder)'
+  const rawName = root === '' ? basename(zipPath).replace(/\.zip$/i, '') : root
+  const base = sanitizeSkillName(rawName)
+  if (!base) return 'Invalid skill name'
+  const skillDir = join(skillsBase(dir), base)
+  if (fs.existsSync(skillDir)) return 'A skill with this name already exists'
+  try {
+    for (const n of names) {
+      const rel = root === '' ? n : n.slice(root.length + 1)
+      if (rel.includes('..')) continue
+      const target = join(skillDir, rel)
+      fs.mkdirSync(dirname(target), { recursive: true })
+      fs.writeFileSync(target, files[n])
+    }
+    return null
+  } catch (err) {
+    fs.rmSync(skillDir, { recursive: true, force: true })
+    return err instanceof Error ? err.message : String(err)
+  }
 }

@@ -235,6 +235,26 @@ function loadUnifiedSessionModels(sessionDir: string, fallback: string | null): 
   return used
 }
 
+/** Last model actually used by a session (newest generation that has one). */
+export function loadSessionLastModel(sessionId: string): string | null {
+  const generationsDir = path.join(
+    os.homedir(), '.vibe', 'logs', 'session', 'unified', sessionId, 'generations'
+  )
+  let gens: string[]
+  try {
+    gens = fs.readdirSync(generationsDir)
+  } catch {
+    return null
+  }
+  for (const gen of gens.sort().reverse()) {
+    const state = readJsonFile(path.join(generationsDir, gen, 'runtime-state.json'))
+    const meta = (state?.['session_metadata'] ?? null) as Record<string, unknown> | null
+    const model = (meta?.['active_model'] as string) ?? null
+    if (model) return model
+  }
+  return null
+}
+
 function loadUnifiedSessions(models: VibeModelConfig[]): VibeSession[] {
   const unifiedDir = path.join(os.homedir(), '.vibe', 'logs', 'session', 'unified')
   if (!fs.existsSync(unifiedDir)) return []

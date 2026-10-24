@@ -1727,6 +1727,17 @@ export default function MessageBubble({
     });
   };
 
+  // CLI checkpoints ("Model changed to …") render as subtle notice rows,
+  // never as chat bubbles.
+  const noticeText = message.content.trim();
+  if (
+    !hasThinking &&
+    !hasToolCalls &&
+    noticeText.startsWith("Model changed to ")
+  ) {
+    return <div className="msg-row msg-notice">{noticeText}</div>;
+  }
+
   if (message.sender === "system" && message.isContext) {
     return (
       <div className="msg-row msg-context">

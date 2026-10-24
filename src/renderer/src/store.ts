@@ -91,6 +91,10 @@ interface AppStore {
   // Config options (model / mode / thinking) from ACP
   configOptions: ConfigOption[];
   setConfigOptions: (options: ConfigOption[]) => void;
+  /** Update the stored currentValue of a single config option (keeps chips in sync). */
+  patchConfigOption: (id: string, value: string) => void;
+  /** Re-apply the model/mode/thinking recorded on a session after switching to it. */
+  syncSessionChips: (localSessionId: string) => Promise<void>;
   currentModel: string;
   currentMode: string;
   currentThinking: string;
@@ -275,6 +279,37 @@ export const useStore = create<AppStore>((set, get) => ({
         currentThinking: pick("thinking"),
       };
     }),
+
+  patchConfigOption: (id, value) =>
+    set((s) => ({
+      configOptions: s.configOptions.map((o) => (o.id === id ? { ...o, currentValue: value } : o)),
+    })),
+
+  syncSessionChips: async (localSessionId) => {
+    const session = get().sessions.find((s) => s.id === localSessionId);
+    if (!session?.acpSessionId) return;
+    const acpSessionId = session.acpSessionId;
+    let model = session.lastModel;
+    if (!model) {
+      try {
+        model = (await window.api.stats.vibeSessionLastModel(acpSessionId)) ?? undefined;
+        if (model) get().updateSession(localSessionId, { lastModel: model });
+      } catch {
+        /* vibe logs unavailable — keep the CLI-reported chips */
+      }
+    }
+    const apply = (id: string, value: string | undefined, cur: string): void => {
+      if (!value || value === cur) return;
+      if (id === "model") get().setCurrentModel(value);
+      if (id === "mode") get().setCurrentMode(value);
+      if (id === "thinking") get().setCurrentThinking(value);
+      get().patchConfigOption(id, value);
+      window.api.acp.setConfigOption(id, value, acpSessionId).catch(console.error);
+    };
+    apply("model", model, get().currentModel);
+    apply("mode", session.lastMode, get().currentMode);
+    apply("thinking", session.lastThinking, get().currentThinking);
+  },
 
   currentModel: "",
   currentMode: "",
@@ -827,6 +862,8 @@ export const useStore = create<AppStore>((set, get) => ({
       // Real resume: session/load replays the full history via events
       await window.api.acp.loadSession(acpSessionId, cwd);
       set({ activeAcpSessionId: acpSessionId });
+      // Per-session isolation: restore this session’s recorded model/mode/thinking.
+      void get().syncSessionChips(localSessionId);
       // Safety net: clear flags if no history event arrives (empty session)
       window.setTimeout(() => {
         const st = useStore.getState();

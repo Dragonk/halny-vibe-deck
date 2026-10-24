@@ -91,6 +91,8 @@ const api = {
   },
   stats: {
     vibeSessions: (): Promise<unknown[]> => ipcRenderer.invoke('stats:vibe-sessions'),
+    vibeSessionLastModel: (sessionId: string): Promise<string | null> =>
+      ipcRenderer.invoke('stats:vibe-session-last-model', sessionId),
     searchSessionContent: (query: string): Promise<Array<{ sessionId: string; snippet: string }>> =>
       ipcRenderer.invoke('stats:search-session-content', query),
     vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
@@ -138,7 +140,15 @@ const api = {
     log: (cwd: string, max: number): Promise<GitCommit[]> => ipcRenderer.invoke('git:log', cwd, max),
     diffFile: (cwd: string, filePath: string): Promise<string | null> =>
       ipcRenderer.invoke('git:diff-file', cwd, filePath),
-    diffAll: (cwd: string): Promise<string | null> => ipcRenderer.invoke('git:diff-all', cwd)
+    diffAll: (cwd: string): Promise<string | null> => ipcRenderer.invoke('git:diff-all', cwd),
+    stage: (cwd: string, paths: string[]): Promise<string | null> =>
+      ipcRenderer.invoke('git:stage', cwd, paths),
+    unstage: (cwd: string, paths: string[]): Promise<string | null> =>
+      ipcRenderer.invoke('git:unstage', cwd, paths),
+    commit: (cwd: string, message: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:commit', cwd, message),
+    push: (cwd: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:push', cwd)
   },
   shell: {
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:open-path', path)
@@ -169,7 +179,19 @@ const api = {
     getSkills: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
       ipcRenderer.invoke('vibe:get-skills', scope ?? 'global', cwd ?? ''),
     getDir: (scope?: VibeScope, cwd?: string): Promise<string> =>
-      ipcRenderer.invoke('vibe:get-dir', scope ?? 'global', cwd ?? '')
+      ipcRenderer.invoke('vibe:get-dir', scope ?? 'global', cwd ?? ''),
+    listConfigFiles: (scope?: VibeScope, cwd?: string): Promise<Array<{ path: string; full: string }>> =>
+      ipcRenderer.invoke('vibe:list-config-files', scope ?? 'global', cwd ?? ''),
+    createSkill: (name: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:create-skill', name, scope ?? 'global', cwd ?? ''),
+    deleteSkill: (name: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:delete-skill', name, scope ?? 'global', cwd ?? ''),
+    writeSkillFile: (name: string, relPath: string, content: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:write-skill-file', name, relPath, content, scope ?? 'global', cwd ?? ''),
+    deleteSkillFile: (name: string, relPath: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:delete-skill-file', name, relPath, scope ?? 'global', cwd ?? ''),
+    importSkill: (src: string, isZip: boolean, scope?: VibeScope, cwd?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:import-skill', src, isZip, scope ?? 'global', cwd ?? '')
   }
 }
 

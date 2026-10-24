@@ -60,6 +60,10 @@ export interface Session {
   workingDirectory?: string
   updatedAt?: number
   loading?: boolean
+  /** Model/mode/thinking last chosen by the user in this session (per-session isolation). */
+  lastModel?: string
+  lastMode?: string
+  lastThinking?: string
 }
 
 export type AppView = 'chat' | 'settings' | 'stats' | 'history'

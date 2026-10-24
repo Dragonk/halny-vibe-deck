@@ -224,6 +224,8 @@ export default function SettingsView(): React.JSX.Element {
   const [rawToml, setRawToml] = useState<string | null>(null)
   const [rawTomlError, setRawTomlError] = useState<string | null>(null)
   const [rawTomlSaved, setRawTomlSaved] = useState(false)
+  const [configFiles, setConfigFiles] = useState<Array<{ path: string; full: string }>>([])
+  const [selectedCfgFile, setSelectedCfgFile] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [selectedAgentIdx, setSelectedAgentIdx] = useState<number | null>(null)
   const [selectedMcpIdx, setSelectedMcpIdx] = useState<number | null>(null)
@@ -233,6 +235,12 @@ export default function SettingsView(): React.JSX.Element {
   const [globalToolsCollapsed, setGlobalToolsCollapsed] = useState(false)
   const [globalModels, setGlobalModels] = useState<VibeModelConfig[]>([])
   const [selectedSkillIdx, setSelectedSkillIdx] = useState<number | null>(null)
+  const [newSkillName, setNewSkillName] = useState('')
+  const [newSkillFileName, setNewSkillFileName] = useState('')
+  const [skillMdDraft, setSkillMdDraft] = useState('')
+  const [selectedSkillFile, setSelectedSkillFile] = useState<{ path: string; full: string; isDir: boolean } | null>(null)
+  const [skillFileDraft, setSkillFileDraft] = useState('')
+  const [skillMsg, setSkillMsg] = useState<string | null>(null)
   const [mcpJsonMode, setMcpJsonMode] = useState(false)
   const [mcpJsonText, setMcpJsonText] = useState('')
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
@@ -308,6 +316,94 @@ export default function SettingsView(): React.JSX.Element {
     }
   }
 
+  // ---- Skills: create / delete / import / edit files ----
+  useEffect(() => {
+    const skill = selectedSkillIdx !== null ? vibeSkills[selectedSkillIdx] : undefined
+    setSkillMdDraft(skill?.content ?? '')
+    setSelectedSkillFile(null)
+    setSkillFileDraft('')
+  }, [selectedSkillIdx, vibeSkills])
+
+  useEffect(() => {
+    if (!selectedSkillFile || selectedSkillFile.isDir) return
+    let cancelled = false
+    window.api.fs.readText(selectedSkillFile.full).then((res) => {
+      if (cancelled) return
+      setSkillFileDraft(res.error ? '' : res.content)
+    }).catch(console.error)
+    return () => { cancelled = true }
+  }, [selectedSkillFile])
+
+  const flashSkillMsg = (msg: string): void => {
+    setSkillMsg(msg)
+    window.setTimeout(() => setSkillMsg(null), 2500)
+  }
+
+  const handleCreateSkill = async (): Promise<void> => {
+    const name = newSkillName.trim()
+    if (!name) return
+    const err = await window.api.vibe.createSkill(name, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    setNewSkillName('')
+    await loadVibeData()
+    const fresh = (await window.api.vibe.getSkills(scope, projectCwd)) as VibeSkill[]
+    const idx = fresh.findIndex((s) => s.name.toLowerCase() === name.toLowerCase())
+    setSelectedSkillIdx(idx >= 0 ? idx : null)
+  }
+
+  const handleDeleteSkill = async (skill: VibeSkill): Promise<void> => {
+    if (!window.confirm(tr.deleteSkillConfirm.replace('{{name}}', skill.name))) return
+    const err = await window.api.vibe.deleteSkill(skill.name, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    setSelectedSkillIdx(null)
+    await loadVibeData()
+  }
+
+  const handleSaveSkillMd = async (skill: VibeSkill): Promise<void> => {
+    const err = await window.api.vibe.writeSkillFile(skill.name, 'SKILL.md', skillMdDraft, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    await loadVibeData()
+  }
+
+  const handleAddSkillFile = async (skill: VibeSkill): Promise<void> => {
+    const rel = newSkillFileName.trim()
+    if (!rel) return
+    const err = await window.api.vibe.writeSkillFile(skill.name, rel, '', scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    setNewSkillFileName('')
+    await loadVibeData()
+  }
+
+  const handleSaveSkillFile = async (skill: VibeSkill): Promise<void> => {
+    if (!selectedSkillFile) return
+    const err = await window.api.vibe.writeSkillFile(skill.name, selectedSkillFile.path, skillFileDraft, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    await loadVibeData()
+  }
+
+  const handleDeleteSkillFileBtn = async (skill: VibeSkill, relPath: string): Promise<void> => {
+    const err = await window.api.vibe.deleteSkillFile(skill.name, relPath, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    if (selectedSkillFile?.path === relPath) setSelectedSkillFile(null)
+    await loadVibeData()
+  }
+
+  const handleImportSkillFolder = async (): Promise<void> => {
+    const folder = await window.api.dialog.openFolder()
+    if (!folder) return
+    const err = await window.api.vibe.importSkill(folder, false, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    await loadVibeData()
+  }
+
+  const handleImportSkillZip = async (): Promise<void> => {
+    const file = await window.api.dialog.openFile()
+    if (!file) return
+    const err = await window.api.vibe.importSkill(file, true, scope, projectCwd)
+    if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
+    await loadVibeData()
+  }
+
   const handleOpenSkillsFolder = async (): Promise<void> => {
     const dir = await window.api.vibe.getDir(scope, projectCwd)
     const skillsDir = `${dir}/skills`
@@ -321,9 +417,50 @@ export default function SettingsView(): React.JSX.Element {
     setRawToml(res.content)
   }, [scope, projectCwd])
 
+  // Reload the raw TOML whenever the scope (or project cwd) changes —
+  // the textarea must always show the config of the current scope.
+  useEffect(() => {
+    if (tab !== 'raw') return
+    setSelectedCfgFile(null)
+    setRawToml(null)
+    void loadRawToml()
+  }, [scope, projectCwd])
+
+  // List every config file in the .vibe directory of the current scope.
+  useEffect(() => {
+    if (tab !== 'raw') return
+    window.api.vibe
+      .listConfigFiles(scope, projectCwd)
+      .then((files) => setConfigFiles(files as Array<{ path: string; full: string }>))
+      .catch(console.error)
+  }, [tab, scope, projectCwd])
+
+  const loadConfigFile = useCallback(async (rel: string | null): Promise<void> => {
+    setSelectedCfgFile(rel)
+    setRawTomlError(null)
+    if (rel === null) {
+      await loadRawToml()
+      return
+    }
+    const f = configFiles.find((x) => x.path === rel)
+    if (!f) return
+    const res = await window.api.fs.readText(f.full)
+    if (res.error) {
+      setRawTomlError(res.error)
+      return
+    }
+    setRawToml(res.content)
+  }, [configFiles, loadRawToml])
+
   const handleSaveRawToml = async (): Promise<void> => {
     if (rawToml === null) return
-    const err = await window.api.vibe.saveRawConfig(rawToml, scope, projectCwd)
+    let err: string | null = null
+    if (selectedCfgFile !== null) {
+      const f = configFiles.find((x) => x.path === selectedCfgFile)
+      if (f) err = (await window.api.fs.writeText(f.full, rawToml)).error
+    } else {
+      err = await window.api.vibe.saveRawConfig(rawToml, scope, projectCwd)
+    }
     if (err) {
       setRawTomlError(err)
       return
@@ -963,6 +1100,7 @@ export default function SettingsView(): React.JSX.Element {
                             <label className="field-label">{tr.name}</label>
                             <div className="config-item-header-row">
                               <input
+                                key={agent.name}
                                 className="field-input"
                                 type="text"
                                 defaultValue={agent.name}
@@ -1150,6 +1288,8 @@ export default function SettingsView(): React.JSX.Element {
                               value={server.name}
                               onChange={(e) => handleUpdateMcpServer(idx, { name: e.target.value })}
                               placeholder={tr.serverName}
+                              disabled={mcpJsonMode}
+                              title={mcpJsonMode ? tr.mcpNameFromJson : undefined}
                             />
                             <button
                               className="field-btn danger"
@@ -1532,6 +1672,7 @@ export default function SettingsView(): React.JSX.Element {
                           <label className="field-label">{tr.name}</label>
                           <div className="config-item-header-row">
                             <input
+                              key={prompt.name}
                               className="field-input"
                               type="text"
                               defaultValue={prompt.name}
@@ -1578,10 +1719,29 @@ export default function SettingsView(): React.JSX.Element {
           <div className="settings-section">
             <div className="settings-section-header">
               <h3 className="settings-section-title">{tr.skills}</h3>
-              <button className="field-btn" onClick={handleOpenSkillsFolder}>
-                {tr.openSkillsFolder}
-              </button>
+              <div className="config-item-header-row">
+                <input
+                  className="field-input skill-new-name"
+                  type="text"
+                  value={newSkillName}
+                  placeholder={tr.newSkillName}
+                  onChange={(e) => setNewSkillName(e.target.value)}
+                />
+                <button className="field-btn primary" onClick={handleCreateSkill}>
+                  {tr.createSkill}
+                </button>
+                <button className="field-btn" onClick={handleImportSkillFolder}>
+                  {tr.importSkillFolder}
+                </button>
+                <button className="field-btn" onClick={handleImportSkillZip}>
+                  {tr.importSkillZip}
+                </button>
+                <button className="field-btn" onClick={handleOpenSkillsFolder}>
+                  {tr.openSkillsFolder}
+                </button>
+              </div>
             </div>
+            {skillMsg && <p className="field-hint">{skillMsg}</p>}
             {!loaded ? (
               <p className="empty-text">{tr.loading}</p>
             ) : vibeSkills.length === 0 ? (
@@ -1613,32 +1773,81 @@ export default function SettingsView(): React.JSX.Element {
                           >
                             {tr.previewOpenExternally}
                           </button>
+                          <button className="field-btn danger" onClick={() => handleDeleteSkill(skill)}>
+                            {tr.deleteSkill}
+                          </button>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.skillFiles}</label>
                           <p className="field-hint">{tr.skillFilesHint}</p>
                           <div className="skill-file-list">
                             {(skill.files || []).map((f) => (
-                              <button
-                                key={f.path}
-                                className="skill-file-item"
-                                title={f.full}
-                                onClick={() => openFilePreview(f.full)}
-                              >
-                                {f.isDir ? '📁' : '📄'} {f.path}
-                              </button>
+                              <div key={f.path} className="skill-file-row">
+                                <button
+                                  className={'skill-file-item' + (selectedSkillFile?.path === f.path ? ' active' : '')}
+                                  title={f.full}
+                                  disabled={f.isDir}
+                                  onClick={() => setSelectedSkillFile(f)}
+                                >
+                                  {f.isDir ? '📁' : '📄'} {f.path}
+                                </button>
+                                {!f.isDir && (
+                                  <button
+                                    className="skill-file-del"
+                                    title={tr.deleteFile}
+                                    onClick={() => handleDeleteSkillFileBtn(skill, f.path)}
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
                             ))}
+                          </div>
+                          <div className="config-item-header-row">
+                            <input
+                              className="field-input"
+                              type="text"
+                              value={newSkillFileName}
+                              placeholder={tr.newSkillFileName}
+                              onChange={(e) => setNewSkillFileName(e.target.value)}
+                            />
+                            <button className="field-btn" onClick={() => handleAddSkillFile(skill)}>
+                              {tr.addFile}
+                            </button>
                           </div>
                         </div>
                         <div className="field">
                           <label className="field-label">SKILL.md</label>
                           <textarea
                             className="field-textarea"
-                            value={skill.content}
-                            readOnly
-                            rows={12}
+                            value={skillMdDraft}
+                            onChange={(e) => setSkillMdDraft(e.target.value)}
+                            rows={10}
+                            spellCheck={false}
                           />
+                          <div className="config-item-header-row">
+                            <button className="field-btn primary" onClick={() => handleSaveSkillMd(skill)}>
+                              {tr.saveFile}
+                            </button>
+                          </div>
                         </div>
+                        {selectedSkillFile && !selectedSkillFile.isDir && (
+                          <div className="field">
+                            <label className="field-label">{selectedSkillFile.path}</label>
+                            <textarea
+                              className="field-textarea"
+                              value={skillFileDraft}
+                              onChange={(e) => setSkillFileDraft(e.target.value)}
+                              rows={10}
+                              spellCheck={false}
+                            />
+                            <div className="config-item-header-row">
+                              <button className="field-btn primary" onClick={() => handleSaveSkillFile(skill)}>
+                                {tr.saveFile}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })() : (
@@ -2039,7 +2248,26 @@ export default function SettingsView(): React.JSX.Element {
           </div>
         )}
         {tab === 'raw' && (
-          <div className="settings-section">
+          <div className="settings-section raw-config-section">
+            <div className="config-files-list">
+              <button
+                className={'cfg-file-item' + (selectedCfgFile === null ? ' active' : '')}
+                onClick={() => void loadConfigFile(null)}
+              >
+                config.toml
+              </button>
+              {configFiles.map((f) => (
+                <button
+                  key={f.path}
+                  className={'cfg-file-item' + (selectedCfgFile === f.path ? ' active' : '')}
+                  onClick={() => void loadConfigFile(f.path)}
+                  title={f.full}
+                >
+                  {f.path}
+                </button>
+              ))}
+            </div>
+            <div className="raw-editor-col">
             <div className="field">
               <label className="field-label">{tr.rawConfig}</label>
               <p className="field-hint">{tr.rawTomlHint}</p>
@@ -2057,9 +2285,13 @@ export default function SettingsView(): React.JSX.Element {
               <button className="save-btn" onClick={handleSaveRawToml}>
                 {rawTomlSaved ? tr.rawTomlSaved : tr.rawTomlSave}
               </button>
-              <button className="save-btn raw-reload-btn" onClick={loadRawToml}>
+              <button
+                className="save-btn raw-reload-btn"
+                onClick={() => void loadConfigFile(selectedCfgFile)}
+              >
                 {tr.reload}
               </button>
+            </div>
             </div>
           </div>
         )}

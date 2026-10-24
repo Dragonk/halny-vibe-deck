@@ -125,15 +125,16 @@ export default function App(): React.JSX.Element {
           const sessionTitle = d.sessionTitle as string | undefined
           const currentModeId = d.currentModeId as string | undefined
 
-          if (configOptions.length > 0) store.setConfigOptions(configOptions)
-          store.setAvailableModes(modes)
-          if (currentModeId) store.setCurrentMode(currentModeId)
-
           // While loading a specific historical session, ignore the priming
           // session that acp:start() creates internally.
           if (store.pendingLoadSessionId && acpSessId !== store.pendingLoadSessionId) {
             break
           }
+          // Chips reflect only the session that is (or becomes) current —
+          // never a background session (per-session model isolation).
+          if (configOptions.length > 0) store.setConfigOptions(configOptions)
+          store.setAvailableModes(modes)
+          if (currentModeId) store.setCurrentMode(currentModeId)
 
           const existing = store.getSessionByAcpId(acpSessId)
           if (existing) {
@@ -160,6 +161,13 @@ export default function App(): React.JSX.Element {
             }
           }
           setSessionStarting(false)
+          // A session with a recorded model/mode/thinking wins over the
+          // CLI-reported defaults (sessions without their own turns would
+          // otherwise fall back to the global active_model).
+          const cur = useStore.getState().currentSession()
+          if (cur?.acpSessionId === acpSessId) {
+            void useStore.getState().syncSessionChips(cur.id)
+          }
           break
         }
 
@@ -217,9 +225,13 @@ export default function App(): React.JSX.Element {
         case 'ConfigOptionsUpdate': {
           const store = useStore.getState()
           const options = d.configOptions as ConfigOption[] | undefined
-          if (options && options.length > 0) store.setConfigOptions(options)
+          const updSessId = d.sessionId as string | undefined
+          const active = store.activeAcpSessionId
+          // Only the active session may move the chips (per-session isolation).
+          const isCurrent = !updSessId || !active || updSessId === active
+          if (options && options.length > 0 && isCurrent) store.setConfigOptions(options)
           const modeChanged = d.modeChanged as string | undefined
-          if (modeChanged) store.setCurrentMode(modeChanged)
+          if (modeChanged && isCurrent) store.setCurrentMode(modeChanged)
           break
         }
 
@@ -229,7 +241,7 @@ export default function App(): React.JSX.Element {
           const local = store.getSessionByAcpId(acpSessId)
           const localId = local?.id ?? store.currentSessionId
           if (!localId) break
-          markSessionBusy(localId)
+          if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
           const text = d.text as string
           const acpMsgId = d.messageId as string | undefined
           let state = streamingState.current.get(localId)
@@ -254,7 +266,7 @@ export default function App(): React.JSX.Element {
           const localId = local?.id ?? store.currentSessionId
           const blockId = (d.blockId as string) ?? 'thinking'
           if (!localId) break
-          markSessionBusy(localId)
+          if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
           let state = streamingState.current.get(localId)
           if (!state) {
             const msgId = store.startAiMessage(localId)
@@ -306,7 +318,7 @@ export default function App(): React.JSX.Element {
             const promptText = sess?.contextSummary
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
-            markSessionBusy(localId)
+            if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
             window.api.acp.sendPrompt(promptText, acpSessId).catch((err: Error) => {
               setAcpError(err.message)
             })
@@ -320,7 +332,10 @@ export default function App(): React.JSX.Element {
           const local = store.getSessionByAcpId(acpSessId)
           const localId = local?.id ?? store.currentSessionId
           if (!localId) break
-          markSessionBusy(localId)
+          // Model-change checkpoints are CLI bookkeeping, not agent activity+�u���T
+          // they must never flip the session into the busy state.
+          const isCheckpoint = String(d.toolCallId ?? '').startsWith('checkpoint-')
+          if (!isCheckpoint && store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
           // Ensure there's an active AI message to attach tool calls to
           if (!streamingState.current.has(localId)) {
             const msgId = store.startAiMessage(localId)

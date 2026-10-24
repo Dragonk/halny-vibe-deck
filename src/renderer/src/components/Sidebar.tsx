@@ -130,6 +130,10 @@ export default function Sidebar(): React.JSX.Element {
     if (session?.acpSessionId && session.messages.length === 0 && !session.loading) {
       // Real resume via ACP session/load (replays the full history)
       await loadAcpSession(id)
+    } else if (session?.acpSessionId) {
+      // Already loaded: make this ACP session active and re-sync chips with it
+      useStore.setState({ activeAcpSessionId: session.acpSessionId })
+      void useStore.getState().syncSessionChips(id)
     }
   }
 

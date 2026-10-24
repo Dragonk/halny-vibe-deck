@@ -13,6 +13,9 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitCommit[]>([])
   const [loading, setLoading] = useState(false)
+  const [commitMsg, setCommitMsg] = useState('')
+  const [gitError, setGitError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
     if (!cwd) return
@@ -37,6 +40,43 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
     const timer = setInterval(refresh, 30_000)
     return () => clearInterval(timer)
   }, [refresh])
+
+  const stagePaths = useCallback(async (paths: string[]): Promise<void> => {
+    const err = await window.api.git.stage(cwd, paths)
+    if (err) setGitError(err)
+    await refresh()
+  }, [cwd, refresh])
+
+  const unstagePaths = useCallback(async (paths: string[]): Promise<void> => {
+    const err = await window.api.git.unstage(cwd, paths)
+    if (err) setGitError(err)
+    await refresh()
+  }, [cwd, refresh])
+
+  const stageAll = useCallback(async (): Promise<void> => {
+    const unstaged = (status?.files ?? []).filter((f) => !f.staged).map((f) => f.path)
+    if (unstaged.length > 0) await stagePaths(unstaged)
+  }, [status, stagePaths])
+
+  const handleCommit = useCallback(async (): Promise<void> => {
+    if (!commitMsg.trim()) return
+    setBusy(true)
+    const err = await window.api.git.commit(cwd, commitMsg)
+    setBusy(false)
+    if (err) { setGitError(err); return }
+    setGitError(null)
+    setCommitMsg('')
+    await refresh()
+  }, [cwd, commitMsg, refresh])
+
+  const handlePush = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    const err = await window.api.git.push(cwd)
+    setBusy(false)
+    if (err) { setGitError(err); return }
+    setGitError(null)
+    await refresh()
+  }, [cwd, refresh])
 
   if (!cwd) {
     return <div className="dock-empty">{tr.openFolderFirst}</div>
@@ -97,34 +137,75 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
             </span>
           )}
         </span>
+        {status.ahead > 0 && (
+          <button className="git-stage-all-btn" onClick={handlePush} disabled={busy} title={tr.pushHint}>
+            {tr.pushLabel} ↑{status.ahead}
+          </button>
+        )}
+
         <button className="git-refresh-btn" onClick={refresh} title={tr.gitRefresh}>
           {loading ? '…' : '⟳'}
         </button>
       </div>
 
-      {status.error && <div className="git-error">{status.error}</div>}
+      {(status.error || gitError) && <div className="git-error">{gitError ?? status.error}</div>}
 
-      <div className="git-section-label">{tr.gitChanges} ({status.files.length})</div>
+      <div className="git-section-label">
+        {tr.gitChanges} ({status.files.length})
+        {status.files.some((f) => !f.staged) && (
+          <button className="git-stage-all-btn" onClick={stageAll} title={tr.stageLabel}>
+            + {tr.stageLabel}
+          </button>
+        )}
+      </div>
       <div className="git-files">
         {status.files.length === 0 && <div className="git-empty">{tr.gitNoChanges}</div>}
         {status.files.map((f) => (
-          <button
-            key={f.path}
-            className="git-file"
-            onClick={() => openDiff(f.path)}
-            title={f.path}
-          >
-            <span className={`git-status-code git-status-${statusIcon(f)}`}>
-              {statusIcon(f)}
-            </span>
-            <span className="git-file-name">{f.path.split(/[/\\]/).pop()}</span>
-            <span className="git-file-dir">
-              {f.path.includes('/') || f.path.includes('\\')
-                ? f.path.split(/[/\\]/).slice(0, -1).join('/')
-                : ''}
-            </span>
-          </button>
+          <div key={f.path} className="git-file-row">
+            <button
+              className="git-file"
+              onClick={() => openDiff(f.path)}
+              title={f.path}
+            >
+              <span className={`git-status-code git-status-${statusIcon(f)}`}>
+                {statusIcon(f)}
+              </span>
+              <span className="git-file-name">{f.path.split(/[\\]/).pop()}</span>
+              <span className="git-file-dir">
+                {f.path.includes('/') || f.path.includes('\\')
+                  ? f.path.split(/[\\]/).slice(0, -1).join('/')
+                  : ''}
+              </span>
+            </button>
+            <button
+              className="git-stage-btn"
+              title={f.staged ? tr.unstageLabel : tr.stageLabel}
+              onClick={() => (f.staged ? unstagePaths([f.path]) : stagePaths([f.path]))}
+            >
+              {f.staged ? '−' : '+'}
+            </button>
+          </div>
         ))}
+      </div>
+
+      <div className="git-commit-box">
+        <input
+          className="git-commit-input"
+          type="text"
+          value={commitMsg}
+          placeholder={tr.commitMessagePlaceholder}
+          onChange={(e) => { setCommitMsg(e.target.value); setGitError(null) }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleCommit()
+          }}
+        />
+        <button
+          className="git-commit-btn"
+          onClick={handleCommit}
+          disabled={busy || !commitMsg.trim()}
+        >
+          {tr.commitLabel}
+        </button>
       </div>
 
       <div className="git-section-label">{tr.gitHistory}</div>

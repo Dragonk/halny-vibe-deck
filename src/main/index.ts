@@ -9,6 +9,7 @@ import {
   loadVibeSessionMetadata,
   loadVibeSubagentSessions,
   searchSessionContent,
+  loadSessionLastModel,
 } from "./vibeStats";
 import { checkSetup, installDependencies } from "./setup";
 import {
@@ -18,6 +19,13 @@ import {
   saveVibeConfigRaw,
   loadAgentFiles,
   saveAgentFile,
+  listConfigFiles,
+  createSkillFile,
+  deleteSkillFile,
+  writeSkillFile,
+  deleteSkillSubFile,
+  importSkillFromFolder,
+  importSkillFromZip,
   deleteAgentFile,
   loadPromptFiles,
   savePromptFile,
@@ -28,7 +36,7 @@ import {
   VibeConfig,
   VibeAgentFileConfig,
 } from "./vibeConfig";
-import { gitStatus, gitLog, gitDiffFile, gitDiffAll } from "./git";
+import { gitStatus, gitLog, gitDiffFile, gitDiffAll, gitStage, gitUnstage, gitCommit, gitPush } from "./git";
 
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -197,6 +205,8 @@ app.whenReady().then(() => {
 
   // Vibe stats
   ipcMain.handle("stats:vibe-sessions", () => loadVibeSessions());
+  ipcMain.handle("stats:vibe-session-last-model", (_e, sessionId: string) =>
+    loadSessionLastModel(sessionId));
   ipcMain.handle("stats:search-session-content", (_e, query: string) =>
     searchSessionContent(query),
   );
@@ -340,6 +350,10 @@ app.whenReady().then(() => {
   ipcMain.handle("git:log", (_e, cwd: string, max: number) => gitLog(cwd, max));
   ipcMain.handle("git:diff-file", (_e, cwd: string, filePath: string) => gitDiffFile(cwd, filePath));
   ipcMain.handle("git:diff-all", (_e, cwd: string) => gitDiffAll(cwd));
+  ipcMain.handle("git:stage", (_e, cwd: string, paths: string[]) => gitStage(cwd, paths));
+  ipcMain.handle("git:unstage", (_e, cwd: string, paths: string[]) => gitUnstage(cwd, paths));
+  ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
+  ipcMain.handle("git:push", (_e, cwd: string) => gitPush(cwd));
 
   // Shell: open path in file explorer, creating if needed
   ipcMain.handle("shell:open-path", async (_e, path: string) => {
@@ -390,6 +404,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle("vibe:get-skills", (_e, scope: string, cwd: string) => loadSkillFiles(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:get-dir", (_e, scope: string, cwd: string) => resolveScopeDir(scope, cwd));
+  ipcMain.handle("vibe:list-config-files", (_e, scope: string, cwd: string) =>
+    listConfigFiles(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:create-skill", (_e, name: string, scope: string, cwd: string) =>
+    createSkillFile(name, resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:delete-skill", (_e, name: string, scope: string, cwd: string) =>
+    deleteSkillFile(name, resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:write-skill-file",
+    (_e, name: string, relPath: string, content: string, scope: string, cwd: string) =>
+    writeSkillFile(name, relPath, content, resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:delete-skill-file", (_e, name: string, relPath: string, scope: string, cwd: string) =>
+    deleteSkillSubFile(name, relPath, resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:import-skill",
+    (_e, src: string, isZip: boolean, scope: string, cwd: string) =>
+    isZip
+      ? importSkillFromZip(src, resolveScopeDir(scope, cwd))
+      : importSkillFromFolder(src, resolveScopeDir(scope, cwd)));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

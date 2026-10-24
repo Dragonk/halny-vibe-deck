@@ -89,6 +89,10 @@ export class AcpManager {
   }
 
   private emit(event: AcpEvent): void {
+    if (process.env.NEXUS_DEBUG_EVENTS) {
+      const dbg = event as unknown as Record<string, unknown>
+      console.log('[ACP] <<<', String(dbg.type), JSON.stringify(dbg.data ?? {}).slice(0, 160))
+    }
     if (this.win && !this.win.isDestroyed()) {
       this.win.webContents.send('acp:event', event)
     }
