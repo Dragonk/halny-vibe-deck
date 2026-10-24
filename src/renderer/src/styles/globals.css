@@ -5502,7 +5502,7 @@ code {
   background: var(--accent-dim);
   color: var(--text);
 }
-.filetree-file {
+.dirtree-row .filetree-file {
   display: inline-flex;
   align-items: center;
   justify-content: center;
