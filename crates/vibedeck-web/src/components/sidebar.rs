@@ -294,6 +294,12 @@ fn session_row(
 ) -> Element {
     let active = current == Some(idx);
     let cls = if active { "session-item active" } else { "session-item" };
+
+    let busy_dot: Element = if m.busy {
+        rsx! { span { class: "session-busy-dot", title: "streaming", "\u{25CF}" } }
+    } else {
+        VNode::empty()
+    };
     let date = date_str(m.last_active_ms);
     let key = m.acp_session_id.clone().unwrap_or_else(|| m.id.clone());
     let name = m.name.clone();
@@ -327,6 +333,7 @@ fn session_row(
             div { class: "session-item-content",
                 div { class: "session-item-row",
                     span { class: "session-name", "{name}" }
+                    {busy_dot}
                 }
                 div { class: "session-item-meta",
                     span { class: "session-date", "{date}" }

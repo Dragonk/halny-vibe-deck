@@ -5689,3 +5689,21 @@ code {
   font-size: 14px;
   background: #111115;
 }
+
+/* ---- parallel sessions: per-session busy indicator (sidebar rows) ---- */
+.session-busy-dot {
+  display: inline-block;
+  margin-left: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #ff6a00);
+  vertical-align: middle;
+  animation: vd-pulse 1.2s ease-in-out infinite;
+  flex: none;
+}
+@keyframes vd-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+

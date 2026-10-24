@@ -49,6 +49,12 @@ impl AcpHandle {
         let _ = self.cmd_tx.send(cmd);
     }
 
+    /// Clone of the command channel (for a dedicated pump thread that
+    /// owns the event receiver).
+    pub fn cmd_sender(&self) -> std::sync::mpsc::Sender<AcpCommand> {
+        self.cmd_tx.clone()
+    }
+
     /// Lock the event receiver (single consumer).
     pub fn events(&self) -> std::sync::MutexGuard<'_, Receiver<AcpEvent>> {
         self.event_rx.lock().expect("ACP event receiver poisoned")

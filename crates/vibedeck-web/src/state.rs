@@ -73,13 +73,6 @@ pub fn apply_event(mut state: Signal<ClientState>, ev: BusEvent) -> bool {
 }
 
 fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
-    // Live usage: update counters locally, no refetch.
-    {
-        let mut s = state.write();
-        if s.snapshot.usage.apply(&e) {
-            return false;
-        }
-    }
     let current_acp_id = {
         let s = state.read();
         s.snapshot
@@ -88,6 +81,15 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             .and_then(|m| m.acp_session_id.clone())
     };
     let is_current = |sid: &str| current_acp_id.as_deref() == Some(sid);
+    // Live usage: update counters locally, no refetch - but only for the
+    // session the user is looking at (parallel slots stream in parallel).
+    if let AcpEvent::UsageUpdate { session_id, .. } = &e {
+        if is_current(session_id) {
+            let mut s = state.write();
+            let _ = s.snapshot.usage.apply(&e);
+        }
+        return false;
+    }
     match e {
         AcpEvent::MessageChunk { session_id, text } => {
             if is_current(&session_id) {

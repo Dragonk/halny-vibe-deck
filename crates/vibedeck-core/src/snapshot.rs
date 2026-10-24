@@ -124,10 +124,16 @@ pub struct SessionMeta {
     pub created_at_ms: i64,
     pub last_active_ms: i64,
     pub message_count: usize,
+    /// This session's agent is streaming (per-slot busy flag).
+    #[serde(default)]
+    pub busy: bool,
+    /// Per-slot connection status ("connecting"/"connected"/...).
+    #[serde(default)]
+    pub status: String,
 }
 
-impl From<&ChatSession> for SessionMeta {
-    fn from(s: &ChatSession) -> Self {
+impl SessionMeta {
+    pub fn from_session(s: &ChatSession, busy: bool, status: &str) -> Self {
         Self {
             id: s.id.clone(),
             name: s.name.clone(),
@@ -136,7 +142,15 @@ impl From<&ChatSession> for SessionMeta {
             created_at_ms: s.created_at_ms,
             last_active_ms: s.last_active_ms,
             message_count: s.messages.len(),
+            busy,
+            status: status.to_string(),
         }
+    }
+}
+
+impl From<&ChatSession> for SessionMeta {
+    fn from(s: &ChatSession) -> Self {
+        Self::from_session(s, false, "")
     }
 }
 
