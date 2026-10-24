@@ -60,7 +60,11 @@ export default function Sidebar(): React.JSX.Element {
   // Close the context menu on any click outside of it
   useEffect(() => {
     if (!ctxMenu) return
-    const close = (): void => setCtxMenu(null)
+    const close = (e: MouseEvent): void => {
+    const el = e.target as HTMLElement | null
+    if (el && el.closest('.ctx-menu')) return
+    setCtxMenu(null)
+  }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [ctxMenu])
@@ -142,9 +146,13 @@ export default function Sidebar(): React.JSX.Element {
     (a, b) => (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive),
   )
   const hiddenSessions = config.hiddenSessions ?? []
-  const visibleSessions = sortedSessions.filter(
-    (s) => !hiddenSessions.includes(s.acpSessionId ?? s.id),
-  )
+  const hiddenProjects = config.hiddenProjects ?? []
+  const visibleSessions = sortedSessions.filter((s) => {
+    if (hiddenSessions.includes(s.acpSessionId ?? s.id)) return false
+    const wd = s.workingDirectory ?? ''
+    if (wd !== '' && hiddenProjects.includes(wd)) return false
+    return true
+  })
   const displayedSessions =
     config.sidebarSessionsLimit && config.sidebarSessionsLimit > 0
       ? visibleSessions.slice(0, config.sidebarSessionsLimit)

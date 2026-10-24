@@ -509,8 +509,9 @@ export const useStore = create<AppStore>((set, get) => ({
       .filter((s) => (s.workingDirectory ?? "") === wd)
       .map((s) => s.acpSessionId ?? s.id);
     const merged = [...new Set([...(cfg.hiddenSessions ?? []), ...keys])];
-    set({ config: { ...cfg, hiddenSessions: merged } });
-    window.api.config.save({ ...cfg, hiddenSessions: merged }).catch(console.error);
+    const mergedProjects = wd !== "" ? [...new Set([...(cfg.hiddenProjects ?? []), wd])] : (cfg.hiddenProjects ?? []);
+    set({ config: { ...cfg, hiddenSessions: merged, hiddenProjects: mergedProjects } });
+    window.api.config.save({ ...cfg, hiddenSessions: merged, hiddenProjects: mergedProjects }).catch(console.error);
   },
   unhideSessions: (keys) => {
     const cfg = get().config;
