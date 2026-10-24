@@ -4590,6 +4590,10 @@ code {
     background: var(--panel-hover);
     color: var(--text);
 }
+.preview-dir-click {
+    cursor: pointer;
+    user-select: none;
+}
 
 /* Diff */
 .preview-diff {
@@ -5223,7 +5227,7 @@ code {
 .session-detail-value { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── CodeMirror editor host (v0.4.0) ── */
-.cm-host { position: absolute; inset: 0; }
+.cm-host { flex: 1 1 auto; min-height: 0; width: 100%; }
 .cm-host .cm-editor { height: 100%; background: transparent; }
 .cm-host .cm-scroller { font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; overflow: auto; }
 
@@ -5268,4 +5272,57 @@ code {
 
 /* ── v0.4.2: anchor the CodeMirror host inside the preview body ── */
 .file-preview-body { position: relative; }
-.file-preview-body:has(.cm-host) { padding: 0; }
+.file-preview-body:has(.cm-host) { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.file-preview-body:has(.cm-host) > *:not(.cm-host) { flex-shrink: 0; }
+
+/* v0.5.0: MCP raw JSON view */
+.mcp-json-textarea {
+  font-family: var(--font-mono, monospace);
+  min-height: 260px;
+  resize: vertical;
+}
+
+.field-btn.primary {
+  background: var(--accent, #7c6cf0);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* v0.5.0: Skills file browser */
+.skill-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.skill-file-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.skill-file-item:hover {
+  background: rgba(128, 128, 128, 0.18);
+}
+
+/* v0.5.0: attach menu */
+.attach-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.attach-dropdown {
+  min-width: 220px;
+}

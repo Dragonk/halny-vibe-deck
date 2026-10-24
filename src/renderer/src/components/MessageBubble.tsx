@@ -1460,6 +1460,8 @@ function extractToolCallPath(toolCall: ToolCall): string | null {
 function resolveSessionPath(rawPath: string, acpSessionId?: string): string {
   const BS = String.fromCharCode(92);
   let path = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
+  // Agent prose wraps paths in quotes/backticks and trailing punctuation
+  path = path.replace(/^["'`]+/, "").replace(/["`]+$/, "").replace(/[.,;:!?)]+$/, "");
   const st = useStore.getState();
   const session = acpSessionId
     ? st.sessions.find((s) => s.acpSessionId === acpSessionId)

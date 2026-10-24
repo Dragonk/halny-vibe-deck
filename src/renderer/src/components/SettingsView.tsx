@@ -57,6 +57,18 @@ interface VibeAgentConfig {
   tools?: Record<string, VibeToolPermission>
 }
 
+interface VibeMcpAuth {
+  type: 'static' | 'oauth'
+  headers?: Record<string, string>
+  api_key_env?: string
+  api_key_header?: string
+  api_key_format?: string
+  scopes?: string[]
+  client_id?: string
+  client_metadata_url?: string
+  redirect_port?: number
+}
+
 interface VibeMcpServerConfig {
   name: string
   transport: 'http' | 'streamable-http' | 'stdio'
@@ -65,9 +77,11 @@ interface VibeMcpServerConfig {
   api_key_env?: string
   api_key_header?: string
   api_key_format?: string
+  auth?: VibeMcpAuth
   command?: string
   args?: string[]
   env?: Record<string, string>
+  cwd?: string
   startup_timeout_sec?: number
   tool_timeout_sec?: number
 }
@@ -89,6 +103,8 @@ interface VibeModelConfig {
   name: string
   provider: string
   alias?: string
+  display_name?: string
+  supports_images?: boolean
   temperature?: number
   input_price?: number
   output_price?: number
@@ -123,12 +139,78 @@ interface VibePrompt {
 interface VibeSkill {
   name: string
   content: string
+  dir?: string
+  files?: Array<{ path: string; full: string; isDir: boolean }>
 }
 
 const CLI_SCOPED_TABS = new Set(['agents', 'mcp', 'tools', 'prompts', 'skills', 'providers', 'models', 'raw'])
 
+// Builds an auth object from legacy flat fields on old MCP configs
+function mcpLegacyAuth(server: VibeMcpServerConfig): VibeMcpAuth {
+  return {
+    type: 'static',
+    headers: server.headers || {},
+    api_key_env: server.api_key_env || '',
+    api_key_header: server.api_key_header || 'Authorization',
+    api_key_format: server.api_key_format || 'Bearer {token}',
+  }
+}
+
+// Writes auth fields and clears the legacy flat keys so the CLI does not
+// reject the config (legacy keys cannot mix with an explicit auth block)
+function mcpAuthUpdate(
+  server: VibeMcpServerConfig,
+  patch: Partial<VibeMcpAuth>,
+): Partial<VibeMcpServerConfig> {
+  const base = server.auth || mcpLegacyAuth(server)
+  return {
+    auth: staticAuth(base, patch),
+    headers: undefined,
+    api_key_env: undefined,
+    api_key_header: undefined,
+    api_key_format: undefined,
+  }
+}
+
+// Strips oauth-only fields so the CLI discriminated union accepts the block
+function staticAuth(auth: VibeMcpAuth, patch: Partial<VibeMcpAuth>): VibeMcpAuth {
+  return {
+    type: 'static',
+    headers: patch.headers !== undefined ? patch.headers : auth.headers,
+    api_key_env: patch.api_key_env !== undefined ? patch.api_key_env : auth.api_key_env,
+    api_key_header: patch.api_key_header !== undefined ? patch.api_key_header : auth.api_key_header,
+    api_key_format: patch.api_key_format !== undefined ? patch.api_key_format : auth.api_key_format,
+  }
+}
+
+// Strips static-only fields for the oauth branch
+function oauthAuth(auth: VibeMcpAuth, patch: Partial<VibeMcpAuth>): VibeMcpAuth {
+  return {
+    type: 'oauth',
+    scopes: patch.scopes !== undefined ? patch.scopes : auth.scopes,
+    client_id: patch.client_id !== undefined ? patch.client_id : auth.client_id,
+    client_metadata_url: patch.client_metadata_url !== undefined ? patch.client_metadata_url : auth.client_metadata_url,
+    redirect_port: patch.redirect_port !== undefined ? patch.redirect_port : auth.redirect_port,
+  }
+}
+
+// Writes an oauth auth block and clears any legacy flat auth keys
+function mcpOauthUpdate(
+  server: VibeMcpServerConfig,
+  patch: Partial<VibeMcpAuth>,
+): Partial<VibeMcpServerConfig> {
+  const base = server.auth || ({ type: 'oauth' } as VibeMcpAuth)
+  return {
+    auth: oauthAuth(base, patch),
+    headers: undefined,
+    api_key_env: undefined,
+    api_key_header: undefined,
+    api_key_format: undefined,
+  }
+}
+
 export default function SettingsView(): React.JSX.Element {
-  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory } = useStore()
+  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview } = useStore()
   const tr = useTranslation(config.language)
   const [tab, setTab] = useState<Tab>('general')
   const [local, setLocal] = useState({ ...config })
@@ -149,6 +231,11 @@ export default function SettingsView(): React.JSX.Element {
   const [selectedProviderIdx, setSelectedProviderIdx] = useState<number | null>(null)
   const [selectedModelIdx, setSelectedModelIdx] = useState<number | null>(null)
   const [globalToolsCollapsed, setGlobalToolsCollapsed] = useState(false)
+  const [globalModels, setGlobalModels] = useState<VibeModelConfig[]>([])
+  const [selectedSkillIdx, setSelectedSkillIdx] = useState<number | null>(null)
+  const [mcpJsonMode, setMcpJsonMode] = useState(false)
+  const [mcpJsonText, setMcpJsonText] = useState('')
+  const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
   const [scope, setScope] = useState<'global' | 'project'>('global')
   const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
 
@@ -167,6 +254,13 @@ export default function SettingsView(): React.JSX.Element {
     setVibeAgents(agents as VibeAgentConfig[])
     setVibePrompts(prompts as VibePrompt[])
     setVibeSkills(skills as VibeSkill[])
+    if (targetScope === 'project') {
+      // Project agents may also reference models defined in the global config
+      const gcfg = await window.api.vibe.getConfig('global', targetCwd)
+      setGlobalModels(((gcfg as VibeConfig).models || []) as VibeModelConfig[])
+    } else {
+      setGlobalModels([])
+    }
     setLoaded(true)
   }, [scope, projectCwd])
 
@@ -911,12 +1005,22 @@ export default function SettingsView(): React.JSX.Element {
                               }}
                             >
                               <option value="">{tr.none || '-- None --'}</option>
-                              {(vibeConfig.models || []).map((model) => (
-                                <option key={model.name} value={model.alias || model.name}>
-                                  {model.alias || model.name} ({model.provider})
-                                </option>
-                              ))}
+                              {(() => {
+                                const local = vibeConfig.models || []
+                                const localKeys = local.map((m) => m.alias || m.name)
+                                const all = [...local, ...globalModels.filter((m) => !localKeys.includes(m.alias || m.name))]
+                                return all.map((model) => {
+                                  const key = model.alias || model.name
+                                  const fromGlobal = !localKeys.includes(key)
+                                  return (
+                                    <option key={key + (fromGlobal ? ':g' : '')} value={key}>
+                                      {model.display_name || key} ({model.provider}){fromGlobal ? ' ' + tr.fromGlobalScope : ''}
+                                    </option>
+                                  )
+                                })
+                              })()}
                             </select>
+                            <p className="field-hint">{tr.agentModelHint}</p>
                           </div>
                           <div className="field">
                             <label className="field-label">{tr.systemPrompt}</label>
@@ -1034,6 +1138,7 @@ export default function SettingsView(): React.JSX.Element {
                   {selectedMcpIdx !== null && vibeConfig.mcp_servers?.[selectedMcpIdx] ? (() => {
                     const server = vibeConfig.mcp_servers[selectedMcpIdx]
                     const idx = selectedMcpIdx
+                    const auth = server.auth || mcpLegacyAuth(server)
                     return (
                       <div>
                         <div className="field">
@@ -1055,14 +1160,57 @@ export default function SettingsView(): React.JSX.Element {
                             >
                               {tr.remove}
                             </button>
+                            <button
+                              className={'field-btn' + (mcpJsonMode ? '' : ' primary')}
+                              onClick={() => {
+                                setMcpJsonText(JSON.stringify(server, null, 2))
+                                setMcpJsonError(null)
+                                setMcpJsonMode(false)
+                              }}
+                            >
+                              {tr.mcpFormView}
+                            </button>
+                            <button
+                              className={'field-btn' + (mcpJsonMode ? ' primary' : '')}
+                              onClick={() => {
+                                setMcpJsonText(JSON.stringify(server, null, 2))
+                                setMcpJsonError(null)
+                                setMcpJsonMode(true)
+                              }}
+                            >
+                              {tr.mcpJsonView}
+                            </button>
                           </div>
                         </div>
+                        {!mcpJsonMode ? (<>
                         <div className="field">
                           <label className="field-label">{tr.transport || 'Transport'}</label>
                           <select
                             className="field-select"
                             value={server.transport}
-                            onChange={(e) => handleUpdateMcpServer(idx, { transport: e.target.value as 'http' | 'streamable-http' | 'stdio' })}
+                            onChange={(e) => {
+                              const t = e.target.value as 'http' | 'streamable-http' | 'stdio'
+                              if (t === 'stdio') {
+                                handleUpdateMcpServer(idx, {
+                                  transport: t,
+                                  url: undefined,
+                                  auth: undefined,
+                                  headers: undefined,
+                                  api_key_env: undefined,
+                                  api_key_header: undefined,
+                                  api_key_format: undefined,
+                                })
+                              } else {
+                                handleUpdateMcpServer(idx, {
+                                  transport: t,
+                                  command: undefined,
+                                  args: undefined,
+                                  env: undefined,
+                                  cwd: undefined,
+                                  auth: server.auth || { type: 'static' },
+                                })
+                              }
+                            }}
                           >
                             <option value="stdio">stdio</option>
                             <option value="http">http</option>
@@ -1082,49 +1230,118 @@ export default function SettingsView(): React.JSX.Element {
                               />
                             </div>
                             <div className="field">
-                              <label className="field-label">Headers (JSON)</label>
-                              <input
-                                className="field-input"
-                                type="text"
-                                value={JSON.stringify(server.headers || {})}
+                              <label className="field-label">{tr.authType}</label>
+                              <select
+                                className="field-select"
+                                value={auth.type}
                                 onChange={(e) => {
-                                  try {
-                                    handleUpdateMcpServer(idx, { headers: JSON.parse(e.target.value) })
-                                  } catch {}
+                                  if (e.target.value === 'oauth') {
+                                    handleUpdateMcpServer(idx, mcpOauthUpdate(server, {}))
+                                  } else {
+                                    handleUpdateMcpServer(idx, mcpAuthUpdate(server, {}))
+                                  }
                                 }}
-                                placeholder='{ "Authorization" = "Bearer token" }'
-                              />
+                              >
+                                <option value="static">{tr.authStatic}</option>
+                                <option value="oauth">{tr.authOauth}</option>
+                              </select>
+                              <p className="field-hint">{auth.type === 'oauth' ? tr.authOauthHint : tr.authStaticHint}</p>
                             </div>
-                            <div className="field">
-                              <label className="field-label">{tr.apiKeyEnv}</label>
-                              <input
-                                className="field-input"
-                                type="text"
-                                value={server.api_key_env || ''}
-                                onChange={(e) => handleUpdateMcpServer(idx, { api_key_env: e.target.value })}
-                                placeholder="MCP_API_KEY"
-                              />
-                            </div>
-                            <div className="field">
-                              <label className="field-label">API Key Header</label>
-                              <input
-                                className="field-input"
-                                type="text"
-                                value={server.api_key_header || ''}
-                                onChange={(e) => handleUpdateMcpServer(idx, { api_key_header: e.target.value })}
-                                placeholder="Authorization"
-                              />
-                            </div>
-                            <div className="field">
-                              <label className="field-label">API Key Format</label>
-                              <input
-                                className="field-input"
-                                type="text"
-                                value={server.api_key_format || ''}
-                                onChange={(e) => handleUpdateMcpServer(idx, { api_key_format: e.target.value })}
-                                placeholder="Bearer {token}"
-                              />
-                            </div>
+                            {auth.type === 'oauth' ? (
+                              <>
+                                <div className="field">
+                                  <label className="field-label">{tr.oauthScopes}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={(auth.scopes || []).join(', ')}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpOauthUpdate(server, { scopes: e.target.value.split(',').map((sv) => sv.trim()).filter(Boolean) }))}
+                                    placeholder="read, write"
+                                  />
+                                  <p className="field-hint">{tr.oauthScopesHint}</p>
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.oauthClientId}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={auth.client_id || ''}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpOauthUpdate(server, { client_id: e.target.value }))}
+                                    placeholder="my-mcp-client"
+                                  />
+                                  <p className="field-hint">{tr.oauthClientIdHint}</p>
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.oauthMetadataUrl}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={auth.client_metadata_url || ''}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpOauthUpdate(server, { client_metadata_url: e.target.value }))}
+                                    placeholder="https://example.com/.well-known/oauth-authorization-server"
+                                  />
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.oauthRedirectPort}</label>
+                                  <input
+                                    className="field-input"
+                                    type="number"
+                                    value={auth.redirect_port || 47823}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpOauthUpdate(server, { redirect_port: Number(e.target.value) }))}
+                                    placeholder="47823"
+                                  />
+                                  <p className="field-hint">{tr.oauthRedirectPortHint}</p>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="field">
+                                  <label className="field-label">{tr.mcpHeaders}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={JSON.stringify(auth.headers || {})}
+                                    onChange={(e) => {
+                                      try {
+                                        handleUpdateMcpServer(idx, mcpAuthUpdate(server, { headers: JSON.parse(e.target.value) }))
+                                      } catch {}
+                                    }}
+                                    placeholder='{ "Authorization" = "Bearer token" }'
+                                  />
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.apiKeyEnv}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={auth.api_key_env || ''}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpAuthUpdate(server, { api_key_env: e.target.value }))}
+                                    placeholder="MCP_API_KEY"
+                                  />
+                                  <p className="field-hint">{tr.apiKeyEnvHint}</p>
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.apiKeyHeader}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={auth.api_key_header || ''}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpAuthUpdate(server, { api_key_header: e.target.value }))}
+                                    placeholder="Authorization"
+                                  />
+                                </div>
+                                <div className="field">
+                                  <label className="field-label">{tr.apiKeyFormat}</label>
+                                  <input
+                                    className="field-input"
+                                    type="text"
+                                    value={auth.api_key_format || ''}
+                                    onChange={(e) => handleUpdateMcpServer(idx, mcpAuthUpdate(server, { api_key_format: e.target.value }))}
+                                    placeholder="Bearer {token}"
+                                  />
+                                </div>
+                              </>
+                            )}
                           </>
                         ) : (
                           <>
@@ -1153,7 +1370,7 @@ export default function SettingsView(): React.JSX.Element {
                               />
                             </div>
                             <div className="field">
-                              <label className="field-label">Env (JSON)</label>
+                              <label className="field-label">{tr.envJson}</label>
                               <input
                                 className="field-input"
                                 type="text"
@@ -1166,26 +1383,68 @@ export default function SettingsView(): React.JSX.Element {
                                 placeholder='{ "DEBUG" = "1" }'
                               />
                             </div>
+                            <div className="field">
+                              <label className="field-label">{tr.mcpCwd}</label>
+                              <input
+                                className="field-input"
+                                type="text"
+                                value={server.cwd || ''}
+                                onChange={(e) => handleUpdateMcpServer(idx, { cwd: e.target.value })}
+                                placeholder="/path/to/dir"
+                              />
+                              <p className="field-hint">{tr.mcpCwdHint}</p>
+                            </div>
                           </>
                         )}
                         <div className="field">
-                          <label className="field-label">Startup Timeout (sec)</label>
+                          <label className="field-label">{tr.startupTimeout}</label>
                           <input
                             className="field-input"
                             type="number"
                             value={server.startup_timeout_sec || 10}
                             onChange={(e) => handleUpdateMcpServer(idx, { startup_timeout_sec: Number(e.target.value) })}
                           />
+                          <p className="field-hint">{tr.startupTimeoutHint}</p>
                         </div>
                         <div className="field">
-                          <label className="field-label">Tool Timeout (sec)</label>
+                          <label className="field-label">{tr.toolTimeout}</label>
                           <input
                             className="field-input"
                             type="number"
                             value={server.tool_timeout_sec || 60}
                             onChange={(e) => handleUpdateMcpServer(idx, { tool_timeout_sec: Number(e.target.value) })}
                           />
+                          <p className="field-hint">{tr.toolTimeoutHint}</p>
                         </div>
+                        </>) : (
+                          <div>
+                            <textarea
+                              className="field-textarea mcp-json-textarea"
+                              spellCheck={false}
+                              value={mcpJsonText}
+                              onChange={(e) => { setMcpJsonText(e.target.value); setMcpJsonError(null) }}
+                            />
+                            {mcpJsonError ? (
+                              <p className="field-hint" style={{ color: 'var(--danger, #e5534b)' }}>{mcpJsonError}</p>
+                            ) : null}
+                            <div className="config-item-header-row">
+                              <button
+                                className="field-btn primary"
+                                onClick={() => {
+                                  try {
+                                    const parsed = JSON.parse(mcpJsonText) as Partial<VibeMcpServerConfig>
+                                    handleUpdateMcpServer(idx, parsed)
+                                    setMcpJsonMode(false)
+                                  } catch (err) {
+                                    setMcpJsonError(tr.mcpJsonInvalid.replace('{{error}}', err instanceof Error ? err.message : String(err)))
+                                  }
+                                }}
+                              >
+                                {tr.mcpJsonApply}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })() : (
@@ -1328,22 +1587,64 @@ export default function SettingsView(): React.JSX.Element {
             ) : vibeSkills.length === 0 ? (
               <p className="empty-text">{tr.noVibeSkillsConfigured}</p>
             ) : (
-              <div className="config-list">
-                {vibeSkills.map((skill) => (
-                  <div key={skill.name} className="config-item">
-                    <div className="config-item-header">
-                      <span className="config-item-name">{skill.name}</span>
+              <div className="master-detail">
+                <div className="master-list">
+                  {vibeSkills.map((skill, sIdx) => (
+                    <div
+                      key={skill.name}
+                      className={'master-item' + (selectedSkillIdx === sIdx ? ' selected' : '')}
+                      onClick={() => setSelectedSkillIdx(sIdx)}
+                    >
+                      <span className="master-item-name">{skill.name}</span>
+                      <span className="master-item-type">{skill.files?.length ?? 0}</span>
                     </div>
-                    <div className="field">
-                      <textarea
-                        className="field-textarea"
-                        value={skill.content}
-                        readOnly
-                        rows={8}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div className="master-detail-panel">
+                  {selectedSkillIdx !== null && vibeSkills[selectedSkillIdx] ? (() => {
+                    const skill = vibeSkills[selectedSkillIdx]
+                    return (
+                      <div>
+                        <div className="config-item-header-row">
+                          <h4 className="config-item-name">{skill.name}</h4>
+                          <button
+                            className="field-btn"
+                            onClick={() => { if (skill.dir) window.api.shell.openPath(skill.dir).catch(console.error) }}
+                          >
+                            {tr.previewOpenExternally}
+                          </button>
+                        </div>
+                        <div className="field">
+                          <label className="field-label">{tr.skillFiles}</label>
+                          <p className="field-hint">{tr.skillFilesHint}</p>
+                          <div className="skill-file-list">
+                            {(skill.files || []).map((f) => (
+                              <button
+                                key={f.path}
+                                className="skill-file-item"
+                                title={f.full}
+                                onClick={() => openFilePreview(f.full)}
+                              >
+                                {f.isDir ? '📁' : '📄'} {f.path}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="field">
+                          <label className="field-label">SKILL.md</label>
+                          <textarea
+                            className="field-textarea"
+                            value={skill.content}
+                            readOnly
+                            rows={12}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })() : (
+                    <div className="master-detail-empty">{tr.selectSkillHint}</div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1554,6 +1855,14 @@ export default function SettingsView(): React.JSX.Element {
                               />
                               {tr.enabled}
                             </label>
+                            <label className="checkbox-label">
+                              <input
+                                type="checkbox"
+                                checked={model.supports_images ?? false}
+                                onChange={(e) => handleUpdateModel(idx, { supports_images: e.target.checked })}
+                              />
+                              {tr.supportsImages}
+                            </label>
                             <button
                               className="field-btn danger"
                               onClick={() => {
@@ -1588,6 +1897,17 @@ export default function SettingsView(): React.JSX.Element {
                           />
                         </div>
                         <div className="field">
+                          <label className="field-label">{tr.displayName}</label>
+                          <input
+                            className="field-input"
+                            type="text"
+                            value={model.display_name || ''}
+                            onChange={(e) => handleUpdateModel(idx, { display_name: e.target.value })}
+                            placeholder="Devstral 2"
+                          />
+                          <p className="field-hint">{tr.displayNameHint}</p>
+                        </div>
+                        <div className="field">
                           <label className="field-label">{tr.temperature || 'Temperature'}</label>
                           <input
                             className="field-input"
@@ -1598,6 +1918,7 @@ export default function SettingsView(): React.JSX.Element {
                             value={model.temperature ?? 0.2}
                             onChange={(e) => handleUpdateModel(idx, { temperature: Number(e.target.value) })}
                           />
+                          <p className="field-hint">{tr.temperatureHint}</p>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.thinking || 'Thinking'}</label>
@@ -1673,6 +1994,7 @@ export default function SettingsView(): React.JSX.Element {
                             value={model.max_output_tokens ?? 0}
                             onChange={(e) => handleUpdateModel(idx, { max_output_tokens: Number(e.target.value) })}
                           />
+                          <p className="field-hint">{tr.maxOutputTokensHint}</p>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.thinkingLevels}</label>
@@ -1682,6 +2004,7 @@ export default function SettingsView(): React.JSX.Element {
                             onChange={(e) => handleUpdateModel(idx, { thinking_levels: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })}
                             placeholder="off, low, medium, high"
                           />
+                          <p className="field-hint">{tr.thinkingLevelsHint}</p>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.maxContextLength}</label>
@@ -1692,6 +2015,7 @@ export default function SettingsView(): React.JSX.Element {
                             value={model.max_context_length ?? 0}
                             onChange={(e) => handleUpdateModel(idx, { max_context_length: Number(e.target.value) })}
                           />
+                          <p className="field-hint">{tr.maxContextHint}</p>
                         </div>
                         <div className="field">
                           <label className="field-label">{tr.autoCompactThreshold || 'Auto Compact Threshold'}</label>
@@ -1702,6 +2026,7 @@ export default function SettingsView(): React.JSX.Element {
                             onChange={(e) => handleUpdateModel(idx, { auto_compact_threshold: Number(e.target.value) })}
                             placeholder="200000"
                           />
+                          <p className="field-hint">{tr.autoCompactHint}</p>
                         </div>
                       </div>
                     )

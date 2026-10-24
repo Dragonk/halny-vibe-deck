@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
-import { resolveLanguage, translateModeName, translateThinkingLevel } from '../i18n/terms'
+import { resolveLanguage, translateModeName, translateModeDescription, translateThinkingLevel, translateThinkingDescription } from '../i18n/terms'
 import type { TermsLang } from '../i18n/terms'
 import type { AppConfig, ConfigOption } from '../types'
 import UsageBar from './UsageBar'
@@ -94,12 +94,20 @@ function ConfigChip({
     return found.name
   })()
 
+  // Translated descriptions for mode/thinking; other options keep the
+  // description the CLI provides
+  const describe = (value: string, fallback: string | undefined): string => {
+    if (option?.id === 'mode') return translateModeDescription(value, lang ?? 'en') || fallback || ''
+    if (option?.id === 'thinking') return translateThinkingDescription(value, lang ?? 'en') || fallback || ''
+    return fallback || ''
+  }
+
   return (
     <div className="ic-chip-wrap" ref={ref}>
       <button
         className={`ic-chip ${disabled ? 'ic-chip-disabled' : ''}`}
         onClick={() => !disabled && setOpen(!open)}
-        title={option?.description ?? label}
+        title={describe(currentValue, option?.description) || label}
         disabled={disabled}
       >
         <span className="ic-chip-label">{label}</span>
@@ -116,7 +124,7 @@ function ConfigChip({
                 onSelect(o.value)
                 setOpen(false)
               }}
-              title={o.description ?? o.name}
+              title={describe(o.value, o.description) || o.name}
             >
               <span className="ic-chip-item-check">{o.value === currentValue ? '✓' : ''}</span>
               <span className="ic-chip-item-body">
@@ -127,7 +135,9 @@ function ConfigChip({
                       ? translateThinkingLevel(o.value, lang ?? 'en')
                       : o.name}
                 </span>
-                {o.description && <span className="ic-chip-item-desc">{o.description}</span>}
+                {describe(o.value, o.description) && (
+                  <span className="ic-chip-item-desc">{describe(o.value, o.description)}</span>
+                )}
               </span>
             </button>
           ))}
@@ -202,6 +212,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   const editorRef = useRef<HTMLDivElement>(null)
   const atPickerRef = useRef<HTMLDivElement>(null)
   const folderPickerRef = useRef<HTMLDivElement>(null)
+  const attachMenuRef = useRef<HTMLDivElement>(null)
+  const [showAttachMenu, setShowAttachMenu] = useState(false)
 
   // Close pickers on outside click
   useEffect(() => {
@@ -212,6 +224,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       }
       if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
         setShowFolderPicker(false)
+      }
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target as Node)) {
+        setShowAttachMenu(false)
       }
     }
     document.addEventListener('mousedown', handler)
@@ -674,6 +689,71 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     }
   }
 
+  // ---- Attach menu (file / directory / image / branch diff) ----
+  const insertTextAtCursor = (text: string): void => {
+    const editor = editorRef.current
+    if (!editor) return
+    const textNode = document.createTextNode(text)
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0)
+      range.deleteContents()
+      range.insertNode(textNode)
+      range.setStartAfter(textNode)
+      range.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(range)
+    } else {
+      editor.appendChild(textNode)
+    }
+    setInputText(editor.textContent ?? '')
+  }
+
+  const handleAttachFile = async (): Promise<void> => {
+    const filePath = await window.api.dialog.openFile()
+    if (filePath) insertTextAtCursor('@' + filePath + ' ')
+    setShowAttachMenu(false)
+  }
+
+  const handleAttachDirectory = async (): Promise<void> => {
+    const folder = await window.api.dialog.openFolder()
+    if (folder) insertTextAtCursor('@' + folder + '/ ')
+    setShowAttachMenu(false)
+  }
+
+  const handleAttachImage = async (): Promise<void> => {
+    const filePath = await window.api.dialog.openFile()
+    setShowAttachMenu(false)
+    if (!filePath) return
+    const name = filePath.split(/[/\\]/).pop() ?? 'image.png'
+    try {
+      const res = await window.api.fs.readBinary(filePath)
+      if (res.error || !res.base64) return
+      const url = 'data:' + (res.mime || 'image/png') + ';base64,' + res.base64
+      setPastedImages((prev) => [...prev, { name, url }])
+      insertTextAtCursor('@' + name + ' ')
+    } catch (err) {
+      console.error('Failed to attach image:', err)
+    }
+  }
+
+  const handleAttachBranchDiff = async (): Promise<void> => {
+    setShowAttachMenu(false)
+    const cwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+    if (!cwd) return
+    try {
+      const diff = await window.api.git.diffAll(cwd)
+      if (!diff || diff.trim().length === 0) {
+        insertTextAtCursor(tr.branchDiffEmpty)
+        return
+      }
+      const capped = diff.length > 100000 ? diff.slice(0, 100000) + '\n… (truncated)' : diff
+      insertTextAtCursor('```diff\n' + capped + '\n```\n')
+    } catch (err) {
+      console.error('Failed to attach branch diff:', err)
+    }
+  }
+
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>): void => {
     const items = Array.from(e.clipboardData.items)
     const imageItem = items.find((item) => item.type.startsWith('image/'))
@@ -888,6 +968,32 @@ export default function InputBar({ config }: Props): React.JSX.Element {
                 ))}
               </div>
             )}
+            <div className="attach-menu-wrap" ref={attachMenuRef}>
+              <button
+                className="ic-btn"
+                onClick={() => setShowAttachMenu(!showAttachMenu)}
+                title={tr.attachHint}
+                aria-label={tr.attachLabel}
+              >
+                ＋
+              </button>
+              {showAttachMenu && (
+                <div className="folder-picker-dropdown attach-dropdown">
+                  <button className="folder-picker-item" onClick={handleAttachFile}>
+                    <span>📄 {tr.attachFile}</span>
+                  </button>
+                  <button className="folder-picker-item" onClick={handleAttachDirectory}>
+                    <span>📁 {tr.attachDirectory}</span>
+                  </button>
+                  <button className="folder-picker-item" onClick={handleAttachImage}>
+                    <span>🖼️ {tr.attachImage}</span>
+                  </button>
+                  <button className="folder-picker-item" onClick={handleAttachBranchDiff}>
+                    <span>🌿 {tr.attachBranchDiff}</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               className={`ic-btn ${sandboxEnabled ? 'ic-btn-active' : ''}`}
               onClick={() => setSandboxEnabled(!sandboxEnabled)}

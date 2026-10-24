@@ -326,9 +326,17 @@ export function deletePromptFile(name: string, dir: string = getVibeDirPath()): 
 // Skills (SKILL.md files, searched recursively in skill paths)
 // ---------------------------------------------------------------------------
 
+export interface VibeSkillFile {
+  path: string
+  full: string
+  isDir: boolean
+}
+
 export interface VibeSkill {
   name: string
   content: string
+  dir: string
+  files: VibeSkillFile[]
 }
 
 const MAX_SKILL_DEPTH = 4
@@ -365,9 +373,35 @@ function walkSkills(dir: string, depth: number, out: VibeSkill[], seen: Set<stri
       const name = basename(dir)
       if (seen.has(name)) continue
       try {
-        out.push({ name, content: fs.readFileSync(full, 'utf-8') })
+        out.push({ name, content: fs.readFileSync(full, 'utf-8'), dir, files: listSkillFiles(dir, '', 0) })
         seen.add(name)
       } catch {}
     }
   }
+}
+
+// Lists the files of a skill directory (depth-limited) for the settings browser
+function listSkillFiles(dir: string, rel: string, depth: number): VibeSkillFile[] {
+  if (depth > 2) return []
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  entries.sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+  const out: VibeSkillFile[] = []
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue
+    const full = join(dir, e.name)
+    const p = rel ? rel + '/' + e.name : e.name
+    out.push({ path: p, full, isDir: e.isDirectory() })
+    if (e.isDirectory()) {
+      out.push(...listSkillFiles(full, p, depth + 1))
+    }
+  }
+  return out
 }

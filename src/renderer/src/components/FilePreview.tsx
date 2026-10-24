@@ -31,17 +31,21 @@ interface CmCache {
   keymap: typeof import('@codemirror/view').keymap
   basicSetup: import('@codemirror/state').Extension
   theme: import('@codemirror/state').Extension
-  languages: Array<{ matchFilename?: (filename: string) => boolean; load: () => Promise<unknown> }>
+  oneDark: import('@codemirror/state').Extension
+  LanguageDescription: typeof import('@codemirror/language').LanguageDescription
+  languages: import('@codemirror/language').LanguageDescription[]
 }
 let cmCache: CmCache | null = null
 
 async function ensureCm(): Promise<CmCache> {
   if (!cmCache) {
-    const [viewMod, stateMod, cmMod, langDataMod] = await Promise.all([
+    const [viewMod, stateMod, cmMod, langMod, langDataMod, oneDarkMod] = await Promise.all([
       import('@codemirror/view'),
       import('@codemirror/state'),
       import('codemirror'),
+      import('@codemirror/language'),
       import('@codemirror/language-data'),
+      import('@codemirror/theme-one-dark'),
     ])
     cmCache = {
       EditorView: viewMod.EditorView,
@@ -57,6 +61,8 @@ async function ensureCm(): Promise<CmCache> {
         '.cm-gutters': { backgroundColor: 'var(--panel)', color: 'var(--text-dim)', border: 'none' },
         '.cm-editor.cm-focused': { outline: 'none' },
       }),
+      oneDark: oneDarkMod.oneDark,
+      LanguageDescription: langMod.LanguageDescription,
       languages: langDataMod.languages as unknown as CmCache['languages'],
     }
   }
@@ -91,12 +97,21 @@ function CodeMirrorPane({
         if (!alive || !hostRef.current) return
         let langExt: unknown[] = []
         try {
-          const desc = cm.languages.find((l) => l.matchFilename?.(path))
+          const desc = cm.LanguageDescription.matchFilename(cm.languages, path)
           if (desc) langExt = [await desc.load()]
         } catch {
           /* language support unavailable — fall back to plain text */
         }
-        const extensions: unknown[] = [cm.basicSetup, cm.theme, cm.EditorView.lineWrapping, ...langExt]
+        // oneDark only in dark theme; cm.theme comes after it so the editor
+        // background stays transparent over the panel
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark'
+        const extensions: unknown[] = [
+          cm.basicSetup,
+          ...(dark ? [cm.oneDark] : []),
+          cm.theme,
+          cm.EditorView.lineWrapping,
+          ...langExt,
+        ]
         if (editable) {
           if (onSaveRef.current) {
             extensions.push(
@@ -495,13 +510,28 @@ function DiffView({ diff }: { diff: string }): React.JSX.Element {
 // FilePreview router
 // ---------------------------------------------------------------------------
 
+// Directory-listing helpers (paths may use / or \ separators)
+function joinPath(dir: string, name: string): string {
+  const sep = dir.includes('\\') && !dir.includes('/') ? '\\' : '/'
+  return dir.replace(/[\\/]+$/, '') + sep + name
+}
+
+function parentOf(p: string): string | null {
+  const norm = p.replace(/[\\/]+$/, '')
+  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'))
+  if (idx <= 0) return null
+  const parent = norm.slice(0, idx)
+  if (/^[A-Za-z]:$/.test(parent)) return parent + '\\'
+  return parent
+}
+
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff'])
 // Files up to this size are viewed (and can be edited) with CodeMirror;
 // larger text files fall back to the plain <pre> preview.
 const CM_CAP = 2 * 1024 * 1024
 
 export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Element {
-  const { config, currentSessionWorkingDirectory } = useStore()
+  const { config, currentSessionWorkingDirectory, openFilePreview } = useStore()
   const tr = useTranslation(config.language)
   const [text, setText] = useState<string | null>(null)
   const [textError, setTextError] = useState<string | null>(null)
@@ -661,8 +691,21 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
         {stat && !stat.exists && <div className="dock-empty">{tr.previewError}</div>}
         {stat?.isDir && (
           <div className="preview-dir-listing">
+            {parentOf(tab.path) && (
+              <div
+                className="preview-dir-entry preview-dir-click"
+                onClick={() => openFilePreview(parentOf(tab.path) as string)}
+              >
+                <span>📁</span>
+                <span>..</span>
+              </div>
+            )}
             {dirEntries.map((e) => (
-              <div key={e.name} className="preview-dir-entry">
+              <div
+                key={e.name}
+                className="preview-dir-entry preview-dir-click"
+                onClick={() => openFilePreview(joinPath(tab.path, e.name))}
+              >
                 <span>{e.isDir ? '📁' : '📄'}</span>
                 <span>{e.name}</span>
               </div>

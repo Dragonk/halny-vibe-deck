@@ -324,7 +324,17 @@ export const useStore = create<AppStore>((set, get) => ({
       .stat(path)
       .then((s) => {
         if (s.exists && s.isDir) get().revealInFileTree(path);
-        else get().openFilePreviewTab(path, name);
+        else if (!s.exists) {
+          // stat can miss unusual paths; try listing before deciding it is a file
+          window.api.fs
+            .listDir(path)
+            .then((entries) => {
+              if ((entries as Array<{ name: string; isDir: boolean }>).length > 0)
+                get().revealInFileTree(path);
+              else get().openFilePreviewTab(path, name);
+            })
+            .catch(() => get().openFilePreviewTab(path, name));
+        } else get().openFilePreviewTab(path, name);
       })
       .catch(() => get().openFilePreviewTab(path, name));
   },
