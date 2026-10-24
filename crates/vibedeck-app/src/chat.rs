@@ -153,7 +153,7 @@ fn user_bubble(ui: &mut Ui, msg: &Message, p: &Palette) {
                         }
                     });
                 }
-                ui.label(egui::RichText::new(&msg.content).color(p.text));
+                ui.add(egui::Label::new(egui::RichText::new(&msg.content).color(p.text)).wrap());
             });
     });
 }

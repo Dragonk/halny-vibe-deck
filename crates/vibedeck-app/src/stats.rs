@@ -962,7 +962,7 @@ fn transcript_row(ui: &mut Ui, msg: &VibeMessage, p: &Palette) {
                     .fill(p.panel)
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width().min(max_w - 24.0));
-                        ui.label(egui::RichText::new(&content).color(p.text));
+                        ui.add(egui::Label::new(egui::RichText::new(&content).color(p.text)).wrap());
                     });
             });
         }

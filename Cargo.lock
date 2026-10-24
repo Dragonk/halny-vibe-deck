@@ -3787,7 +3787,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vibedeck-acp"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "log",
@@ -3797,7 +3797,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-app"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "calamine",
@@ -3826,7 +3826,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-core"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-setup"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3843,7 +3843,7 @@ dependencies = [
 
 [[package]]
 name = "vibedeck-vibe"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "dirs",

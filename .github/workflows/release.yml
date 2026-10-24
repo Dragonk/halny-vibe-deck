@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION: 0.8.2
+  VERSION: 0.8.3
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -95,8 +95,8 @@ jobs:
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.8.2-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.8.2-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `vibedeck-0.8.3-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.8.3-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -118,7 +118,7 @@ jobs:
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.8.2-x86_64-linux.tar.gz
+            tar -xzf vibedeck-0.8.3-x86_64-linux.tar.gz
             ./vibedeck
             ```
 
@@ -126,7 +126,22 @@ jobs:
             library next to the binary — keep them together so PDF previews render.
 
 
-            ## What's new in v0.8.2
+            ## What's new in v0.8.3
+
+            Fixes the text-overflow issue reported after 0.8.2:
+
+            - **Long messages no longer overflow the window.** Messages with long
+              paragraphs (typical for pasted documents and detailed prompts) were
+              laid out as a single unwrapped line inside their frame; when the line
+              was wider than the window it was clipped at **both** edges at once —
+              the text looked like it was "escaping" the window. Every message
+              label in the chat (user bubbles) and in the stats drill-down
+              transcript now wraps at the available width, so long content stays
+              inside the window like the rest of the UI.
+            - Short messages were unaffected — which is why the issue only showed
+              up on long, real-world conversations.
+
+            ## Also in v0.8.2
 
             Fixes for the rendering issues reported after 0.8.1:
 
