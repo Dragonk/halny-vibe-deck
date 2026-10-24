@@ -140,6 +140,37 @@ impl From<&ChatSession> for SessionMeta {
     }
 }
 
+/// UI preferences mirrored from the engine config (subset shown to clients).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub theme: String,
+    #[serde(default)]
+    pub acp_path: String,
+    #[serde(default)]
+    pub working_directory: String,
+    #[serde(default)]
+    pub remote_enabled: bool,
+    #[serde(default = "default_remote_port")]
+    pub remote_port: u16,
+    #[serde(default)]
+    pub auth_configured: bool,
+    #[serde(default)]
+    pub dock_open: bool,
+    #[serde(default)]
+    pub sidebar_sessions_limit: Option<u32>,
+    #[serde(default)]
+    pub hidden_sessions: Vec<String>,
+    #[serde(default)]
+    pub hidden_projects: Vec<String>,
+}
+
+fn default_remote_port() -> u16 {
+    8080
+}
+
 /// Full state snapshot served to freshly-connected UI clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -158,6 +189,7 @@ pub struct Snapshot {
     pub question: Option<PendingQuestion>,
     pub working_directory: String,
     pub preferred_model: Option<String>,
+    pub config: UiConfig,
 }
 
 impl Default for Snapshot {
@@ -178,6 +210,7 @@ impl Default for Snapshot {
             question: None,
             working_directory: String::new(),
             preferred_model: None,
+            config: UiConfig::default(),
         }
     }
 }

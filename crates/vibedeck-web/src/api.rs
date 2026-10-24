@@ -98,3 +98,66 @@ pub async fn api_refresh_sessions(token: String) -> Result<(), ServerFnError> {
     vibedeck_engine::Engine::global().refresh_sessions();
     Ok(())
 }
+
+/// Persist UI preferences: language, theme, dock open, sidebar limit.
+#[server]
+pub async fn api_set_prefs(
+    token: String,
+    language: String,
+    theme: String,
+    dock_open: bool,
+    sidebar_sessions_limit: u32,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().set_prefs(language, theme, dock_open, sidebar_sessions_limit);
+    Ok(())
+}
+
+/// Configure remote-control access (login + password + port + enabled).
+/// The password is hashed (sha256 with salt) server-side; nothing is
+/// ever displayed back to the client.
+#[server]
+pub async fn api_set_remote(
+    token: String,
+    username: String,
+    password: String,
+    port: u16,
+    enable: bool,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    if username.trim().is_empty() || password.is_empty() {
+        return Err(ServerFnError::new("username and password required"));
+    }
+    vibedeck_engine::Engine::global()
+        .set_remote(username.trim(), &password, port, enable);
+    Ok(())
+}
+
+/// Hide a session from the sidebar (nothing is deleted from disk).
+#[server]
+pub async fn api_hide_session(token: String, key: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().hide_session(&key);
+    Ok(())
+}
+
+#[server]
+pub async fn api_hide_project(token: String, wd: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().hide_project(&wd);
+    Ok(())
+}
+
+#[server]
+pub async fn api_restore_session(token: String, key: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().restore_session(&key);
+    Ok(())
+}
+
+#[server]
+pub async fn api_restore_project(token: String, wd: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().restore_project(&wd);
+    Ok(())
+}

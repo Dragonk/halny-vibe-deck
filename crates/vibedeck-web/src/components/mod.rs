@@ -1,5 +1,11 @@
 pub mod chat;
+pub mod dock;
+pub mod header;
+pub mod history;
 pub mod input;
 pub mod login;
+pub mod settings;
 pub mod shell;
 pub mod sidebar;
+pub mod stats;
+pub mod usagebar;

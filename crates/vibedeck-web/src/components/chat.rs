@@ -1,57 +1,148 @@
-//! Chat view: message list with user bubbles, AI rows (thinking + tool
-//! calls + content) and system notes. Minimal markdown: paragraphs and
-//! fenced code blocks.
+//! Chat view: empty state with the pixel flame, message list with user
+//! bubbles / AI rows (thinking, tool calls, markdown-lite), the agent
+//! busy indicator. Ported from Nexus ChatView + MessageBubble (same
+//! CSS classes).
 
 use dioxus::prelude::*;
-use vibedeck_core::snapshot::{PendingApproval, PendingQuestion};
 use vibedeck_core::types::{Message, MessageSender, ToolStatus};
 
-use crate::state::{token, ClientState};
+use crate::i18n::tr;
+use crate::state::{lang, ClientState};
 
-pub fn Chat() -> Element {
+pub fn ChatView() -> Element {
     let state = use_context::<Signal<ClientState>>();
-    let messages = state.read().snapshot.current_messages.clone();
+    let lang = lang(&state);
+
+    let s = state.read();
+    let messages = s.snapshot.current_messages.clone();
+    let busy = s.snapshot.busy;
+    let status = s.snapshot.status.clone();
+    let acp_error = s.snapshot.acp_error.clone();
+    let queue_len = s.queue.len();
+    drop(s);
+
+    let subtitle = match status.as_str() {
+        "connected" => tr(&lang, "agentReady").to_string(),
+        "connecting" => tr(&lang, "statusConnecting").to_string(),
+        "error" => tr(&lang, "agentConnectionError").to_string(),
+        _ => tr(&lang, "configureAcpInSettings").to_string(),
+    };
 
     rsx! {
-        div { class: "chat",
-            for msg in messages {
-                match msg.sender {
-                    MessageSender::User => rsx! {
-                        div { class: "msg-row user",
-                            div { class: "bubble", "{msg.content}" }
+        div { class: "chat-view-wrap",
+            if queue_len > 0 {
+                div { class: "tool-approval-queue-hint", style: "position:static;margin:0 16px 4px;", "⏳ {queue_len}" }
+            }
+            div { class: "chat-messages",
+                div { class: "chat-inner",
+                    if messages.is_empty() {
+                        div { class: "chat-empty",
+                            Flame {}
+                            div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
+                            div { class: "chat-empty-subtitle", "{subtitle}" }
+                            if status == "error" && !acp_error.is_empty() {
+                                div { class: "chat-error-banner", span { "⚠" } " {acp_error}" }
+                            }
                         }
-                    },
-                    MessageSender::Ai => rsx! { AiRow { msg: msg.clone() } },
-                    MessageSender::System => rsx! {
-                        div { class: "system-row", "{msg.content}" }
-                    },
+                    } else {
+                        div { class: "message-list",
+                            for (idx, msg) in messages.iter().enumerate() {
+                                MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1 }
+                            }
+                            if busy {
+                                div { class: "agent-busy-row",
+                                    span { class: "agent-busy-dots", span {}, span {}, span {} }
+                                    "{tr(&lang, \"agentWorkingLabel\")}"
+                                }
+                            }
+                        }
+                    }
                 }
             }
+            crate::components::input::InputBar {}
         }
     }
 }
 
-fn thinking_title(done: bool) -> &'static str {
-    if done { "Myślę" } else { "Myślę…" }
+/// The pixel-art flame from the Nexus empty state.
+#[component]
+fn Flame() -> Element {
+    rsx! {
+        svg {
+            class: "chat-empty-icon",
+            xmlns: "http://www.w3.org/2000/svg",
+            width: "95", height: "68",
+            view_box: "0 0 212.121 151.515",
+            version: "1.1",
+            rect { fill: "var(--yellowbright-500)", x: "30.303001", y: "0", width: "30.302999", height: "30.302999" }
+            rect { fill: "var(--yellowbright-500)", x: "151.515", y: "0", width: "30.302999", height: "30.302999" }
+            rect { fill: "var(--yellow-500)", x: "30.303001", y: "30.303001", width: "60.605999", height: "30.302999" }
+            rect { fill: "var(--yellow-500)", x: "121.21201", y: "30.303001", width: "60.605999", height: "30.302999" }
+            rect { fill: "var(--orangebright-500)", x: "30.303001", y: "60.606003", width: "151.515", height: "30.302999" }
+            rect { fill: "var(--orange-500)", x: "30.303001", y: "90.908997", width: "30.302999", height: "30.302999" }
+            rect { fill: "var(--orange-500)", x: "90.908997", y: "90.908997", width: "30.302999", height: "30.302999" }
+            rect { fill: "var(--orange-500)", x: "151.515", y: "90.908997", width: "30.302999", height: "30.302999" }
+            rect { fill: "var(--red-700)", x: "0", y: "121.21201", width: "90.908997", height: "30.302999" }
+            rect { fill: "var(--red-700)", x: "121.21201", y: "121.21201", width: "90.908997", height: "30.302999" }
+        }
+    }
 }
 
 #[component]
-pub fn AiRow(msg: Message) -> Element {
-    rsx! {
-        div { class: "msg-row",
-            div { class: "ai-row",
-                div { class: "avatar", "V" }
-                div { class: "ai-body",
+pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
+    match msg.sender {
+        MessageSender::User => rsx! {
+            div { class: "msg-row msg-user",
+                div { class: "msg-bubble",
+                    div { class: "msg-text", "{msg.content}" }
+                }
+            }
+        },
+        MessageSender::Ai => rsx! {
+            div { class: "msg-row msg-ai",
+                span { class: "msg-avatar", "V" }
+                div { class: "msg-content",
                     for block in &msg.thinking {
-                        details { class: "think",
-                            summary { "{thinking_title(block.is_complete)}" }
-                            div { "{block.content}" }
+                        ThinkingSection { block: block.clone() }
+                    }
+                    if !msg.tool_calls.is_empty() {
+                        div { class: "tool-calls-list",
+                            for tc in &msg.tool_calls {
+                                ToolCallBlock { tc: tc.clone() }
+                            }
                         }
                     }
-                    for tc in &msg.tool_calls {
-                        ToolCallBlock { tc: tc.clone() }
-                    }
                     MarkdownLite { text: msg.content.clone() }
+                    if streaming {
+                        span { class: "cursor-blink" }
+                    }
+                }
+            }
+        },
+        MessageSender::System => rsx! {
+            div { class: "msg-row msg-notice",
+                div { class: "msg-content", "{msg.content}" }
+            }
+        },
+    }
+}
+
+#[component]
+fn ThinkingSection(block: vibedeck_core::types::ThinkingBlock) -> Element {
+    let label = if block.is_complete { "Myślę" } else { "Myślę…" };
+    let paragraphs: Vec<&str> = block.content.split("\n\n").collect();
+    rsx! {
+        details { class: "thinking-section",
+            summary { class: "thinking-toggle",
+                span { class: "thinking-dot" }
+                span { class: "thinking-label", "{label}" }
+                span { class: "thinking-chevron" }
+            }
+            div { class: "thinking-content",
+                div { class: "thinking-paragraphs",
+                    for para in paragraphs {
+                        p { class: "thinking-paragraph", "{para}" }
+                    }
                 }
             }
         }
@@ -60,25 +151,48 @@ pub fn AiRow(msg: Message) -> Element {
 
 #[component]
 fn ToolCallBlock(tc: vibedeck_core::types::ToolCall) -> Element {
-    let (icon, cls) = match tc.status {
-        ToolStatus::Done => ("✔", "done"),
-        ToolStatus::Error => ("✖", "error"),
-        ToolStatus::Running => ("⏳", "running"),
+    let (icon, done_cls) = match tc.status {
+        ToolStatus::Done => ("✔", "tool-done"),
+        ToolStatus::Error => ("✖", "tool-error"),
+        ToolStatus::Running => ("⏳", "tool-running"),
     };
+    let kind = tc.kind.clone();
+    let title = tc.title.clone();
+    let input = tc.input_json.clone().unwrap_or_default();
+    let output = tc.output.clone().unwrap_or_default();
+    let has_changes = !tc.file_changes.is_empty();
+
     rsx! {
-        details { class: "tool",
-            summary {
-                span { class: "tool-status {cls}", "{icon}" }
-                "{tc.title}"
+        details { class: "tool-rich-bash",
+            summary { class: "tool-call-header",
+                span { class: "tool-status {done_cls}", "{icon}" }
+                span { class: "tool-call-title", "{title}" }
+                span { class: "tool-call-chevron" }
             }
-            if let Some(output) = &tc.output {
-                div { "{output}" }
+            div { class: "tool-call-content",
+                if !kind.is_empty() {
+                    span { class: "tool-kind-chip", "{kind}" }
+                }
+                if !input.is_empty() {
+                    div { class: "tool-call-input", "{input}" }
+                }
+                if has_changes {
+                    div { class: "tool-call-path",
+                        for ch in &tc.file_changes {
+                            span { class: "tool-file-path", "{ch.path}" }
+                        }
+                    }
+                }
+                if !output.is_empty() {
+                    div { class: "tool-call-output", "{output}" }
+                }
             }
         }
     }
 }
 
-/// Minimal markdown renderer: fenced code blocks + paragraphs.
+/// Minimal markdown renderer: fenced code blocks + paragraphs
+/// (full GFM port arrives with the dock/editor iteration).
 #[component]
 fn MarkdownLite(text: String) -> Element {
     if text.is_empty() {
@@ -96,7 +210,7 @@ fn MarkdownLite(text: String) -> Element {
         *key += 1;
         let chunk = std::mem::take(current);
         let node: Element = if code {
-            rsx! { pre { key: "{k}", "{chunk}" } }
+            rsx! { pre { key: "{k}", code { "{chunk}" } } }
         } else {
             rsx! { p { key: "{k}", "{chunk}" } }
         };
@@ -114,105 +228,5 @@ fn MarkdownLite(text: String) -> Element {
     }
     flush(&mut blocks, &mut current, &mut key, code);
 
-    rsx! { div { class: "ai-content", {blocks.iter().cloned()} } }
-}
-
-/// Agent question modal (choices + free-form).
-#[component]
-pub fn QuestionCard(question: PendingQuestion) -> Element {
-    let state = use_context::<Signal<ClientState>>();
-    let mut answer = use_signal(String::new);
-
-    rsx! {
-        div { class: "approval",
-            div { "❓ {question.question}" }
-            div { class: "approval-actions",
-                for choice in question.choices.iter() {
-                    button {
-                        class: "approval-btn primary",
-                        onclick: {
-                            let state = state.clone();
-                            let req = question.request_id.clone();
-                            let ch = choice.clone();
-                            move |_| {
-                                let req = req.clone();
-                                let ch = ch.clone();
-                                async move {
-                                    let _ = crate::api::api_answer_question(token(&state), req, ch).await;
-                                    crate::state::refresh(state).await;
-                                }
-                            }
-                        },
-                        "{choice}"
-                    }
-                }
-            }
-            input {
-                style: "background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);outline:none;",
-                placeholder: "Odpowiedz…",
-                value: "{answer()}",
-                oninput: move |e| answer.set(e.value()),
-            }
-            button {
-                class: "approval-btn",
-                onclick: {
-                    let state = state.clone();
-                    let req = question.request_id.clone();
-                    move |_| {
-                        let req = req.clone();
-                        async move {
-                            let _ = crate::api::api_answer_question(token(&state), req, answer().clone()).await;
-                            crate::state::refresh(state).await;
-                        }
-                    }
-                },
-                "Wyślij"
-            }
-        }
-    }
-}
-
-/// Tool approval card.
-#[component]
-pub fn ApprovalCard(approval: PendingApproval) -> Element {
-    let state = use_context::<Signal<ClientState>>();
-    let title = approval.tool_name.clone().unwrap_or_else(|| approval.method.clone());
-    rsx! {
-        div { class: "approval",
-            div { "🔐 {title}" }
-            div { style: "color:var(--muted);font-size:11px;white-space:pre-wrap;", "{approval.params_json}" }
-            div { class: "approval-actions",
-                button {
-                    class: "approval-btn primary",
-                    onclick: {
-                        let state = state.clone();
-                        let req = approval.request_id.clone();
-                        move |_| {
-                            let req = req.clone();
-                            async move {
-                                let _ = crate::api::api_approve(token(&state), req, "proceed_once".into()).await;
-                                crate::state::refresh(state).await;
-                            }
-                        }
-                    },
-                    "Zatwierdź"
-                }
-                button {
-                    class: "approval-btn",
-                    onclick: {
-                        let state = state.clone();
-                        let req = approval.request_id.clone();
-                        move |_| {
-                            let req = req.clone();
-                            async move {
-                                let _ = crate::api::api_approve(token(&state), req, "reject".into()).await;
-                                crate::state::refresh(state).await;
-                            }
-                        }
-                    },
-                    "Odrzuć"
-                }
-            }
-        }
-    }
+    rsx! { div { class: "markdown-content", {blocks.iter().cloned()} } }
 }

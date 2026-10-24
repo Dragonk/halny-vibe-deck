@@ -10,7 +10,7 @@ mod types;
 pub use config::{random_hex, AuthEntry, EngineConfig};
 pub use types::EngineState;
 pub use vibedeck_core::snapshot::{
-    AcpStatus, BusEvent, PendingApproval, PendingQuestion, SessionMeta, Snapshot, UsageStats,
+    AcpStatus, BusEvent, PendingApproval, PendingQuestion, SessionMeta, Snapshot, UiConfig, UsageStats,
 };
 
 use std::collections::HashMap;
@@ -150,6 +150,19 @@ impl Engine {
             question: st.question.clone(),
             working_directory: cfg.working_directory.clone(),
             preferred_model: cfg.preferred_model.clone(),
+            config: UiConfig {
+                language: cfg.language.clone(),
+                theme: cfg.theme.clone(),
+                acp_path: cfg.acp_path.clone(),
+                working_directory: cfg.working_directory.clone(),
+                remote_enabled: cfg.remote_enabled,
+                remote_port: cfg.remote_port,
+                auth_configured: cfg.auth.is_some(),
+                dock_open: cfg.dock_open,
+                sidebar_sessions_limit: cfg.sidebar_sessions_limit,
+                hidden_sessions: cfg.hidden_sessions.clone(),
+                hidden_projects: cfg.hidden_projects.clone(),
+            },
         }
     }
 
@@ -357,6 +370,70 @@ impl Engine {
 
     pub fn auth_enabled(&self) -> bool {
         self.config().auth.is_some()
+    }
+
+    /// Notify every connected UI client that sessions/config changed.
+    pub fn publish_structure(&self) {
+        let _ = self.tx.send(BusEvent::StructureChanged);
+    }
+
+    /// Persist UI preferences (language / theme / dock / sidebar limit).
+    pub fn set_prefs(&self, language: String, theme: String, dock_open: bool, sidebar_limit: u32) {
+        self.update_config(|c| {
+            c.language = language;
+            c.theme = theme;
+            c.dock_open = dock_open;
+            c.sidebar_sessions_limit = if sidebar_limit > 0 {
+                Some(sidebar_limit)
+            } else {
+                None
+            };
+        });
+        self.publish_structure();
+    }
+
+    /// Configure remote-control access: login credentials + port + enabled.
+    /// Credentials are stored as sha256(salt + password) - never in plain
+    /// text, never sent back to any client.
+    pub fn set_remote(&self, username: &str, password: &str, port: u16, enable: bool) {
+        self.update_config(|c| {
+            c.auth = Some(AuthEntry::new(username, password));
+            c.remote_enabled = enable;
+            c.remote_port = port;
+        });
+        self.publish_structure();
+    }
+
+    pub fn hide_session(&self, key: &str) {
+        self.update_config(|c| {
+            if !c.hidden_sessions.iter().any(|s| s == key) {
+                c.hidden_sessions.push(key.to_string());
+            }
+        });
+        self.publish_structure();
+    }
+
+    pub fn hide_project(&self, wd: &str) {
+        self.update_config(|c| {
+            if !c.hidden_projects.iter().any(|s| s == wd) {
+                c.hidden_projects.push(wd.to_string());
+            }
+        });
+        self.publish_structure();
+    }
+
+    pub fn restore_session(&self, key: &str) {
+        self.update_config(|c| {
+            c.hidden_sessions.retain(|s| s != key);
+        });
+        self.publish_structure();
+    }
+
+    pub fn restore_project(&self, wd: &str) {
+        self.update_config(|c| {
+            c.hidden_projects.retain(|s| s != wd);
+        });
+        self.publish_structure();
     }
 
     /// Verify credentials and mint a session token (None on bad login).

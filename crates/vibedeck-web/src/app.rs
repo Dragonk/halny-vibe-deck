@@ -1,10 +1,10 @@
 //! Root component: bootstrap (auth state + first snapshot), the login
-//! gate, and the app shell once connected.
+//! gate and the app shell (header + sidebar + view).
 
 use dioxus::prelude::*;
 
-use crate::state::{refresh, ClientState};
 use crate::components;
+use crate::state::{refresh, ClientState};
 
 pub fn App() -> Element {
     use_context_provider(|| Signal::new(ClientState::default()));
@@ -34,5 +34,11 @@ pub fn App() -> Element {
         return rsx! { div { class: "loading", "Ładowanie…" } };
     }
     drop(s);
+
     rsx! { components::shell::Shell {} }
+}
+
+/// Switch the top-level view (used by the sidebar nav).
+pub fn set_view(mut state: Signal<ClientState>, view: crate::state::View) {
+    state.write().view = view;
 }

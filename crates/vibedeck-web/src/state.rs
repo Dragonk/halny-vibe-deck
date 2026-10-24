@@ -7,13 +7,25 @@ use vibedeck_core::proto::AcpEvent;
 use vibedeck_core::snapshot::{BusEvent, Snapshot};
 use vibedeck_core::types::{Message, MessageSender};
 
+/// Top-level application views (like Nexus AppView).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Chat,
+    Stats,
+    History,
+    Settings,
+}
+
 #[derive(Clone, Default)]
 pub struct ClientState {
     pub auth_required: bool,
     pub token: Option<String>,
     pub snapshot: Snapshot,
     pub loaded: bool,
-    pub sidebar_open: bool,
+    pub view: View,
+    /// Prompts typed while the agent is busy (sent on completion).
+    pub queue: Vec<String>,
 }
 
 /// Refetch the whole snapshot (structural change or first load).
@@ -21,8 +33,10 @@ pub async fn refresh(mut state: Signal<ClientState>) {
     let token = state.read().token.clone().unwrap_or_default();
     match crate::api::api_snapshot(token).await {
         Ok(snap) => {
-            state.write().snapshot = snap;
-            state.write().loaded = true;
+            apply_theme(&snap.config.theme);
+            let mut s = state.write();
+            s.snapshot = snap;
+            s.loaded = true;
         }
         Err(_e) => { /* snapshot fetch failed; next event will retry */ }
     }
@@ -75,8 +89,6 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
     };
     let is_current = |sid: &str| current_acp_id.as_deref() == Some(sid);
     match e {
-        // Streaming events: apply incrementally when they belong to the
-        // currently-open session.
         AcpEvent::MessageChunk { session_id, text } => {
             if is_current(&session_id) {
                 let mut s = state.write();
@@ -165,4 +177,82 @@ fn ensure_ai_message_pub(messages: &mut Vec<Message>) -> &mut Message {
 /// token() helper: the current auth token (empty when auth is off).
 pub fn token(state: &Signal<ClientState>) -> String {
     state.read().token.clone().unwrap_or_default()
+}
+
+/// Resolve the UI language code for i18n ("auto"/"system" -> English
+/// for now; the settings tab lets the user pick a concrete language).
+pub fn lang(state: &Signal<ClientState>) -> String {
+    let l = state.read().snapshot.config.language.clone();
+    match l.as_str() {
+        "" | "auto" | "system" => "en".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Send a prompt now, or queue it while the agent is busy.
+pub async fn submit(mut state: Signal<ClientState>, text: String) {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    if state.read().snapshot.busy {
+        state.write().queue.push(text);
+        return;
+    }
+    let tok = token(&state);
+    let _ = crate::api::api_send_message(tok, text).await;
+}
+
+/// After a turn finished (and the client refetched a non-busy snapshot),
+/// send the next queued prompt, one at a time.
+pub async fn drain_queue(mut state: Signal<ClientState>) {
+    if state.read().snapshot.busy {
+        return;
+    }
+    let next = {
+        let mut s = state.write();
+        if s.queue.is_empty() {
+            None
+        } else {
+            Some(s.queue.remove(0))
+        }
+    };
+    if let Some(text) = next {
+        let tok = token(&state);
+        let _ = crate::api::api_send_message(tok, text).await;
+    }
+}
+
+/// Apply the current theme to <html data-theme=...> (auto = OS preference).
+pub fn apply_theme(theme: &str) {
+    let script = match theme {
+        "dark" => "document.documentElement.dataset.theme='dark';".to_string(),
+        "light" => "document.documentElement.dataset.theme='light';".to_string(),
+        _ => "var t=document.documentElement;function ap(m){t.dataset.theme=m.matches?'dark':'light'};var mq=matchMedia('(prefers-color-scheme: dark)');ap(mq);mq.addEventListener('change',ap);".to_string(),
+    };
+    dioxus::document::eval(script.as_str());
+}
+
+/// Optimistically persist UI prefs (language / theme / dock / limit).
+pub async fn save_prefs(
+    mut state: Signal<ClientState>,
+    language: String,
+    theme: String,
+    dock_open: bool,
+    sidebar_limit: u32,
+) {
+    {
+        let mut s = state.write();
+        s.snapshot.config.language = language.clone();
+        s.snapshot.config.theme = theme.clone();
+        s.snapshot.config.dock_open = dock_open;
+        s.snapshot.config.sidebar_sessions_limit = if sidebar_limit > 0 {
+            Some(sidebar_limit)
+        } else {
+            None
+        };
+    }
+    apply_theme(&theme);
+    let tok = token(&state);
+    let _ = crate::api::api_set_prefs(tok, language, theme, dock_open, sidebar_limit).await;
 }

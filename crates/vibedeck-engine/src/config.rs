@@ -89,6 +89,22 @@ pub struct EngineConfig {
     pub theme: String,
     #[serde(default)]
     pub auth: Option<AuthEntry>,
+    #[serde(default)]
+    pub remote_enabled: bool,
+    #[serde(default = "default_remote_port")]
+    pub remote_port: u16,
+    #[serde(default)]
+    pub dock_open: bool,
+    #[serde(default)]
+    pub sidebar_sessions_limit: Option<u32>,
+    #[serde(default)]
+    pub hidden_sessions: Vec<String>,
+    #[serde(default)]
+    pub hidden_projects: Vec<String>,
+}
+
+fn default_remote_port() -> u16 {
+    8080
 }
 
 impl EngineConfig {
