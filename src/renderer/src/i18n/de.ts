@@ -306,5 +306,7 @@ export const de = {
   time90d: '90 Tage',
   time180d: '180 Tage',
   timeAll: 'Gesamter Zeitraum',
-  hiddenBadge: 'ausgeblendet'
+  hiddenBadge: 'ausgeblendet',
+  agentWorkingLabel: 'Agent arbeitet…',
+  resumingSessionLabel: 'Sitzung wird fortgesetzt…'
 }

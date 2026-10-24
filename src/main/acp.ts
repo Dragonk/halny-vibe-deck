@@ -42,6 +42,7 @@ export interface AcpEvent {
     | 'SessionsList'
     | 'SessionInitialized'
     | 'SessionHistory'
+    | 'SessionLoadProgress'
     | 'SessionInfoUpdate'
     | 'MessageChunk'
     | 'ThinkingChunk'
@@ -311,7 +312,11 @@ export class AcpManager {
     // Replay buffering: while session/load is in flight for this session,
     // hold the raw update; assembly happens when the response arrives.
     if (this._replaying.has(sessionId)) {
-      this._replaying.get(sessionId)!.push(params)
+      const buffer = this._replaying.get(sessionId)!
+      buffer.push(params)
+      if (buffer.length % 25 === 0) {
+        this.emit({ type: 'SessionLoadProgress', data: { sessionId, count: buffer.length } })
+      }
       return
     }
 

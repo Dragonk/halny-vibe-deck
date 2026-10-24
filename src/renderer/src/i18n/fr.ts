@@ -306,5 +306,7 @@ export const fr = {
   time90d: '90 jours',
   time180d: '180 jours',
   timeAll: 'Tout l’historique',
-  hiddenBadge: 'masquée'
+  hiddenBadge: 'masquée',
+  agentWorkingLabel: 'L’agent travaille…',
+  resumingSessionLabel: 'Reprise de la session…'
 }

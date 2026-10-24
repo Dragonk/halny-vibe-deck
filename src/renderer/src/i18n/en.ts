@@ -306,5 +306,7 @@ export const en = {
   time90d: '90 days',
   time180d: '180 days',
   timeAll: 'All time',
-  hiddenBadge: 'hidden'
+  hiddenBadge: 'hidden',
+  agentWorkingLabel: 'Agent is working…',
+  resumingSessionLabel: 'Resuming session…'
 }

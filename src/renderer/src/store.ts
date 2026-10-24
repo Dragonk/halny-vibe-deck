@@ -85,6 +85,8 @@ interface AppStore {
   busySessions: string[];
   markSessionBusy: (sessionId: string) => void;
   markSessionIdle: (sessionId: string) => void;
+  sessionLoadProgress: { acpSessionId: string; count: number } | null;
+  setSessionLoadProgress: (progress: { acpSessionId: string; count: number } | null) => void;
 
   // Config options (model / mode / thinking) from ACP
   configOptions: ConfigOption[];
@@ -253,6 +255,8 @@ export const useStore = create<AppStore>((set, get) => ({
     })),
   markSessionIdle: (sessionId) =>
     set((s) => ({ busySessions: s.busySessions.filter((id) => id !== sessionId) })),
+  sessionLoadProgress: null,
+  setSessionLoadProgress: (progress) => set({ sessionLoadProgress: progress }),
 
 
   configOptions: [],
@@ -746,6 +750,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   applySessionHistory: (acpSessionId, history, title) => {
+    set({ sessionLoadProgress: null });
     const local = get().getSessionByAcpId(acpSessionId);
     if (!local) return;
     const messages: Message[] = [];

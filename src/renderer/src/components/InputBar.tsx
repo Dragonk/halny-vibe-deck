@@ -525,6 +525,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       if (editorRef.current) editorRef.current.textContent = ''
       setPastedImages([])
       addUserMessage(textToSend, attachments)
+      if (linkedSess?.id) useStore.getState().markSessionBusy(linkedSess.id)
       try {
         await window.api.acp.sendPrompt(expandedText, linkedSess?.acpSessionId ?? undefined)
       } catch (err) {
@@ -569,6 +570,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     }
 
     addUserMessage(textToSend, attachments)
+    useStore.getState().markSessionBusy(currentSess.id)
     const promptText = currentSess.contextSummary
       ? `${currentSess.contextSummary}\n\nUser: ${expandedText}`
       : expandedText
@@ -585,6 +587,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           try {
             // Real resume: session/load replays the full history
             await window.api.acp.loadSession(acpSessId, sessionWd)
+            useStore.getState().markSessionBusy(currentSess.id)
             await window.api.acp.sendPrompt(promptText, acpSessId)
           } catch (loadErr) {
             // session/load failed (log missing) → fall back to a new session

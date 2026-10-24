@@ -173,6 +173,15 @@ export default function App(): React.JSX.Element {
           break
         }
 
+        case 'SessionLoadProgress': {
+          const store = useStore.getState()
+          store.setSessionLoadProgress({
+            acpSessionId: d.sessionId as string,
+            count: d.count as number,
+          })
+          break
+        }
+
         case 'SessionInfoUpdate': {
           const store = useStore.getState()
           const title = d.title as string | undefined
@@ -297,6 +306,7 @@ export default function App(): React.JSX.Element {
             const promptText = sess?.contextSummary
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
+            markSessionBusy(localId)
             window.api.acp.sendPrompt(promptText, acpSessId).catch((err: Error) => {
               setAcpError(err.message)
             })

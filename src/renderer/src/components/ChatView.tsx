@@ -6,7 +6,7 @@ import MessageQueue from './MessageQueue'
 import InputBar from './InputBar'
 
 export default function ChatView(): React.JSX.Element {
-  const { currentSession, streamingSessions, busySessions, currentSessionId, acpStatus, acpError, config, pendingNewSession, messageQueue } =
+  const { currentSession, streamingSessions, busySessions, currentSessionId, acpStatus, acpError, config, pendingNewSession, messageQueue, pendingLoadSessionId, sessionLoadProgress } =
     useStore()
   const tr = useTranslation(config.language)
   const session = pendingNewSession ? null : currentSession()
@@ -14,6 +14,9 @@ export default function ChatView(): React.JSX.Element {
 
   const isCurrentSessionStreaming = currentSessionId != null && streamingSessions.includes(currentSessionId)
   const isCurrentSessionBusy = currentSessionId != null && busySessions.includes(currentSessionId)
+  const isResuming = !!session && (session.loading || (!!session.acpSessionId && pendingLoadSessionId === session.acpSessionId))
+  const resumeCount = session && sessionLoadProgress && session.acpSessionId === sessionLoadProgress.acpSessionId ? sessionLoadProgress.count : null
+  const showAgentBusy = isCurrentSessionBusy && !isCurrentSessionStreaming
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -26,7 +29,7 @@ export default function ChatView(): React.JSX.Element {
       <MessageQueue config={config} />
       <div className="chat-messages" ref={scrollRef}>
         <div className="chat-inner">
-          {!session || session.messages.length === 0 ? (
+          {!session || (session.messages.length === 0 && !isResuming) ? (
             <div className="chat-empty">
               <svg xmlns="http://www.w3.org/2000/svg" width="95" height="68" viewBox="0 0 212.121 151.515" version="1.1" shapeRendering="crispEdges" className="chat-empty-icon">
                 <rect fill="var(--yellowbright-500)" x="30.303001" y="0" width="30.302999" height="30.302999" strokeWidth="0"/>
@@ -73,6 +76,19 @@ export default function ChatView(): React.JSX.Element {
                   acpSessionId={session.acpSessionId}
                 />
               ))}
+              {showAgentBusy && !isResuming && (
+                <div className="agent-busy-row">
+                  <span className="agent-busy-dots"><span /><span /><span /></span>
+                  {tr.agentWorkingLabel}
+                </div>
+              )}
+            </div>
+          )}
+          {isResuming && (
+            <div className="agent-busy-row">
+              <span className="agent-busy-spinner" />
+              {tr.resumingSessionLabel}
+              {resumeCount != null ? ' (' + resumeCount + ')' : ''}
             </div>
           )}
         </div>
