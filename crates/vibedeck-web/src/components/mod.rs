@@ -5,6 +5,7 @@ pub mod history;
 pub mod input;
 pub mod login;
 pub mod settings;
+pub mod setup;
 pub mod shell;
 pub mod sidebar;
 pub mod stats;

@@ -14,6 +14,7 @@ pub mod vibestats;
 pub mod vibeconfig;
 pub mod md;
 pub mod i18n;
+pub mod setup;
 pub mod state;
 
 fn main() {

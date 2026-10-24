@@ -891,6 +891,15 @@ pub fn SettingsView() -> Element {
         },
         "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved),
         "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved),
+        "sandbox" => rsx! {
+            div { class: "settings-section",
+                div { class: "sandbox-planned-card",
+                    span { class: "sandbox-planned-badge", "{tr(&lang, \"sandboxPlannedBadge\")}" }
+                    h3 { class: "sandbox-planned-title", "{tr(&lang, \"sandbox\")}" }
+                    p { class: "field-hint", "{tr(&lang, \"sandboxPlannedDesc\")}" }
+                }
+            }
+        },
         "raw" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
@@ -1039,6 +1048,7 @@ pub fn SettingsView() -> Element {
             div { class: "settings-tabs scope-switch",
                 button { class: "{tab_cls(\"general\")}", onclick: move |_| tab.set("general".into()), "{tr(&lang, \"general\")}" }
                 button { class: "{tab_cls(\"acp\")}", onclick: move |_| tab.set("acp".into()), "ACP" }
+                button { class: "{tab_cls(\"sandbox\")}", onclick: move |_| tab.set("sandbox".into()), "{tr(&lang, \"sandbox\")}" }
                 button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne\", \"Remote\")}" }
                 button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
                 button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }

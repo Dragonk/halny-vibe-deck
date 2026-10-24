@@ -26,6 +26,12 @@ pub struct ClientState {
     pub view: View,
     /// Prompts typed while the agent is busy (sent on completion).
     pub queue: Vec<String>,
+    /// vibe-acp binary missing → show the first-run SetupView.
+    pub setup_needed: bool,
+    /// User skipped the SetupView.
+    pub setup_skipped: bool,
+    /// One-shot guard for the api_setup_status bootstrap check.
+    pub setup_checked: bool,
 }
 
 /// Refetch the whole snapshot (structural change or first load).
@@ -39,6 +45,14 @@ pub async fn refresh(mut state: Signal<ClientState>) {
             s.loaded = true;
         }
         Err(_e) => { /* snapshot fetch failed; next event will retry */ }
+    }
+    // One-shot first-run check: show the setup screen when the
+    // vibe-acp binary is missing (any login state).
+    if !state.read().setup_checked {
+        state.write().setup_checked = true;
+        if let Ok(st) = crate::setup::api_setup_status().await {
+            state.write().setup_needed = !st.vib_acp_found;
+        }
     }
 }
 

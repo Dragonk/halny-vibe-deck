@@ -33,6 +33,10 @@ pub fn App() -> Element {
         drop(s);
         return rsx! { div { class: "loading", "Ładowanie…" } };
     }
+    if s.setup_needed && !s.setup_skipped {
+        drop(s);
+        return rsx! { components::setup::SetupView {} };
+    }
     drop(s);
 
     rsx! { components::shell::Shell {} }
