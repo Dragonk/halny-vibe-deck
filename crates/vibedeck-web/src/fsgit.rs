@@ -506,6 +506,85 @@ mod imp {
         let owned: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         git(&owned).unwrap_or_default()
     }
+
+    /// Whole working-tree diff (staged + unstaged), used by the input
+    /// bar's "branch diff" attach action (Nexus `git.diffAll`).
+    pub fn git_diff_all() -> String {
+        git(&["diff", "HEAD"]).unwrap_or_default()
+    }
+
+    /// Fuzzy file search under the working directory for the `@` picker
+    /// (Nexus `fs.searchFiles`): BFS with depth and result caps, skipping
+    /// heavy directories. An empty query returns the top-level entries.
+    pub fn search_files(query: &str) -> Vec<FileEntry> {
+        const MAX_DEPTH: usize = 6;
+        const MAX_VISITED: usize = 4000;
+        const MAX_RESULTS: usize = 60;
+
+        let Ok(root) = confine("") else {
+            return Vec::new();
+        };
+        let q = query.to_lowercase();
+        let mut results: Vec<FileEntry> = Vec::new();
+        let mut visited: usize = 0;
+
+        // (dir, depth)
+        let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+            std::collections::VecDeque::new();
+        queue.push_back((root, 0));
+
+        while let Some((dir, depth)) = queue.pop_front() {
+            visited += 1;
+            if visited > MAX_VISITED || results.len() >= MAX_RESULTS {
+                break;
+            }
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            for entry in entries {
+                if results.len() >= MAX_RESULTS {
+                    break;
+                }
+                let Ok(entry) = entry else { continue };
+                let meta = entry.metadata().ok();
+                let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == ".git" {
+                    continue;
+                }
+                let is_heavy = is_heavy_dir(&name);
+                let display_root = Engine::global().workdir();
+                let rel = strip_root(&entry.path(), &display_root);
+                if !q.is_empty() && !rel.to_lowercase().contains(&q) {
+                    // still descend into matching dirs so nested hits appear
+                    if is_dir && depth < MAX_DEPTH && !is_heavy {
+                        queue.push_back((entry.path(), depth + 1));
+                    }
+                    continue;
+                }
+                results.push(FileEntry {
+                    name,
+                    path: rel,
+                    is_dir,
+                    size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                    modified_ms: meta
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                });
+                if is_dir && depth < MAX_DEPTH && !is_heavy {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+            }
+        }
+        results
+    }
+
+    fn is_heavy_dir(name: &str) -> bool {
+        matches!(
+            name,
+            "node_modules" | "target" | ".venv" | "venv" | "dist" | "build" | "__pycache__" | ".next" | ".cache"
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,4 +613,18 @@ pub async fn api_git_status(token: String) -> Result<GitStatus, ServerFnError> {
 pub async fn api_git_diff(token: String, staged: bool, path: String) -> Result<String, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::git_diff(staged, &path))
+}
+
+/// Fuzzy file search under the working directory (the `@` picker).
+#[server]
+pub async fn api_search_files(token: String, query: String) -> Result<Vec<FileEntry>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::search_files(&query))
+}
+
+/// Whole working-tree diff for the "branch diff" attach action.
+#[server]
+pub async fn api_git_diff_all(token: String) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_diff_all())
 }

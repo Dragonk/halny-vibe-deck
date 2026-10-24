@@ -1,7 +1,8 @@
 //! Server functions for the Stats view: full session analytics parsed from
 //! the Mistral Vibe CLI logs (`~/.vibe/logs/session/`), token-gated like the
 //! rest of the remote API. Pure data - all filtering, bucketing and chart
-//! shaping happens client-side.
+//! shaping happens client-side. Also exposes subagent transcripts for the
+//! chat view's subagent tool-call blocks.
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,22 @@ pub struct SessionStatsRow {
     pub tool_succeeded: f64,
     pub tool_failed: f64,
     pub tool_rejected: f64,
+}
+
+/// One message of a subagent transcript (role: `user` | `assistant`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubagentMsg {
+    pub role: String,
+    pub content: String,
+}
+
+/// A subagent session spawned by a parent session, with its full transcript.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubagentSessionView {
+    pub session_id: String,
+    pub agent_name: String,
+    pub start_time: String,
+    pub messages: Vec<SubagentMsg>,
 }
 
 #[cfg(feature = "server")]
@@ -72,10 +89,39 @@ mod imp {
             })
             .collect()
     }
+
+    pub fn subagent_sessions(parent: &str) -> Vec<SubagentSessionView> {
+        vibedeck_vibe::stats::load_subagent_sessions(parent)
+            .into_iter()
+            .map(|s| SubagentSessionView {
+                session_id: s.session_id,
+                agent_name: s.agent_name,
+                start_time: s.start_time,
+                messages: s
+                    .messages
+                    .into_iter()
+                    .map(|m| SubagentMsg {
+                        role: m.role,
+                        content: m.content.unwrap_or_default(),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
 }
 
 #[server]
 pub async fn api_vibe_stats(token: String) -> Result<Vec<SessionStatsRow>, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::rows())
+}
+
+/// Subagent transcripts for a parent CLI session (chat subagent blocks).
+#[server]
+pub async fn api_subagent_logs(
+    token: String,
+    parent_session_id: String,
+) -> Result<Vec<SubagentSessionView>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::subagent_sessions(&parent_session_id))
 }

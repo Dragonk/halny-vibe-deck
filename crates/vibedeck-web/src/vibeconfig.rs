@@ -58,6 +58,7 @@ pub struct FileCard {
     pub meta: String,
 }
 
+#[cfg(feature = "server")]
 fn opt(s: &str) -> Option<String> {
     if s.trim().is_empty() {
         None

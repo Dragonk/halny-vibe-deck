@@ -59,9 +59,9 @@ fn parse_csv(src: &str) -> Vec<Vec<String>> {
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
-    let mut tab = use_signal(|| "files".to_string());
+    let tab = use_signal(|| "files".to_string());
     let mut entries = use_signal(Vec::<FileEntry>::new);
-    let mut git = use_signal(|| None::<GitStatus>);
+    let git = use_signal(|| None::<GitStatus>);
     let mut boot = use_signal(|| false);
 
     let s = state.read();
@@ -76,10 +76,10 @@ pub fn Dock() -> Element {
     }
 
     // local state that survives tab switches but resets with the component
-    let mut cwd = use_signal(String::new);
+    let cwd = use_signal(String::new);
     let mut files_msg = use_signal(String::new);
-    let mut preview = use_signal(|| None::<(String, PreviewData)>);
-    let mut git_diff = use_signal(|| None::<(String, String)>);
+    let preview = use_signal(|| None::<(String, PreviewData)>);
+    let git_diff = use_signal(|| None::<(String, String)>);
 
     // one-shot bootstrap: fetch the root listing when the dock first shows
     if !*boot.read() {
@@ -174,10 +174,10 @@ fn files_panel(
     state: Signal<ClientState>,
     lang: String,
     wd: String,
-    mut cwd: Signal<String>,
-    mut entries: Signal<Vec<FileEntry>>,
-    mut files_msg: Signal<String>,
-    mut preview: Signal<Option<(String, PreviewData)>>,
+    cwd: Signal<String>,
+    entries: Signal<Vec<FileEntry>>,
+    files_msg: Signal<String>,
+    preview: Signal<Option<(String, PreviewData)>>,
 ) -> Element {
     let list = entries.read().clone();
     let msg = files_msg.read().clone();
@@ -290,10 +290,10 @@ fn files_panel(
 fn file_row(
     state: Signal<ClientState>,
     e: &FileEntry,
-    mut cwd: Signal<String>,
-    mut entries: Signal<Vec<FileEntry>>,
-    mut files_msg: Signal<String>,
-    mut preview: Signal<Option<(String, PreviewData)>>,
+    cwd: Signal<String>,
+    entries: Signal<Vec<FileEntry>>,
+    files_msg: Signal<String>,
+    preview: Signal<Option<(String, PreviewData)>>,
 ) -> Element {
     let name = e.name.clone();
     let path = e.path.clone();
@@ -473,8 +473,8 @@ fn sheet_table(rows: &[Vec<String>], sheet: Option<String>) -> Element {
 fn git_panel(
     state: Signal<ClientState>,
     lang: String,
-    mut git: Signal<Option<GitStatus>>,
-    mut git_diff: Signal<Option<(String, String)>>,
+    git: Signal<Option<GitStatus>>,
+    git_diff: Signal<Option<(String, String)>>,
 ) -> Element {
     let st = git.read().clone();
     let diff = git_diff.read().clone();

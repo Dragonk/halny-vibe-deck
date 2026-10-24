@@ -82,8 +82,8 @@ fn files_panel(
     lang: String,
     state: Signal<ClientState>,
     kind: &'static str,
-    mut files: Signal<Vec<FileCard>>,
-    mut sel_path: Signal<String>,
+    files: Signal<Vec<FileCard>>,
+    sel_path: Signal<String>,
     mut editor: Signal<String>,
     mut new_name: Signal<String>,
     mut saved: Signal<String>,
@@ -100,8 +100,8 @@ fn files_panel(
                 "session-row".to_string()
             };
             let _ = cls;
-            let mut state2 = state;
-            let mut files2 = files;
+            let state2 = state;
+            let files2 = files;
             let mut sel_path2 = sel_path;
             let mut editor2 = editor;
             let path = f.path.clone();
@@ -178,7 +178,7 @@ fn files_panel(
                                 let state = state.clone();
                                 let sel = sel.clone();
                                 let editor = editor.clone();
-                                let mut files = files.clone();
+                                let files = files.clone();
                                 let mut saved = saved.clone();
                                 async move {
                                     let res = crate::vibeconfig::api_save_vibe_file(
@@ -294,15 +294,15 @@ pub fn SettingsView() -> Element {
     let mut skills_en = use_signal(String::new);
     let mut skills_dis = use_signal(String::new);
     let mut raw_toml = use_signal(String::new);
-    let mut list_saved = use_signal(String::new);
+    let list_saved = use_signal(String::new);
 
     // file-manager state per kind
-    let mut files = use_signal(|| Vec::<FileCard>::new());
+    let files = use_signal(|| Vec::<FileCard>::new());
     let mut files_kind = use_signal(|| "agents".to_string());
-    let mut sel_path = use_signal(String::new);
-    let mut editor = use_signal(String::new);
-    let mut new_name = use_signal(String::new);
-    let mut file_saved = use_signal(String::new);
+    let sel_path = use_signal(String::new);
+    let editor = use_signal(String::new);
+    let new_name = use_signal(String::new);
+    let file_saved = use_signal(String::new);
 
     // add-form state
     let mut p_name = use_signal(String::new);
@@ -317,7 +317,7 @@ pub fn SettingsView() -> Element {
     let mut c_url = use_signal(String::new);
     let mut c_command = use_signal(String::new);
     let mut c_args = use_signal(String::new);
-    let mut c_api_key_env = use_signal(String::new);
+    let c_api_key_env = use_signal(String::new);
 
     if !*cfg_loaded.read() {
         cfg_loaded.set(true);
@@ -495,9 +495,9 @@ pub fn SettingsView() -> Element {
                 .iter()
                 .enumerate()
                 .map(|(i, p)| {
-                    let mut state2 = state;
-                    let mut cfg2 = cfg;
-                    let mut cfg_err2 = cfg_err;
+                    let state2 = state;
+                    let cfg2 = cfg;
+                    let cfg_err2 = cfg_err;
                     let name = p.name.clone();
                     cfg_row(
                         i.to_string(),
@@ -576,11 +576,11 @@ pub fn SettingsView() -> Element {
                 .iter()
                 .enumerate()
                 .map(|(i, m)| {
-                    let mut state2 = state;
-                    let mut cfg2 = cfg;
-                    let mut cfg_err2 = cfg_err;
+                    let state2 = state;
+                    let cfg2 = cfg;
+                    let cfg_err2 = cfg_err;
                     let name = m.name.clone();
-                    let alias = if m.alias.is_empty() { m.name.clone() } else { m.alias.clone() };
+                    let _alias = if m.alias.is_empty() { m.name.clone() } else { m.alias.clone() };
                     cfg_row(
                         i.to_string(),
                         m.name.clone(),
@@ -686,9 +686,9 @@ pub fn SettingsView() -> Element {
                 .iter()
                 .enumerate()
                 .map(|(i, s)| {
-                    let mut state2 = state;
-                    let mut cfg2 = cfg;
-                    let mut cfg_err2 = cfg_err;
+                    let state2 = state;
+                    let cfg2 = cfg;
+                    let cfg_err2 = cfg_err;
                     let name = s.name.clone();
                     cfg_row(
                         i.to_string(),
@@ -918,7 +918,7 @@ pub fn SettingsView() -> Element {
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
                                 let mut list_saved = list_saved.clone();
-                                let lang = lang_c.clone();
+                                let _lang = lang_c.clone();
                                 async move {
                                     match crate::vibeconfig::api_save_vibe_config_raw(
                                         token(&state), raw_toml.read().clone(),

@@ -223,7 +223,7 @@ fn donut(lang: &str, ok: f64, fail: f64, rej: f64) -> Element {
         (fail, ERROR, "failedLabel"),
         (rej, MUTED, "rejectedLabel"),
     ];
-    for (idx, (v, color, key)) in segs.iter().enumerate() {
+    for (idx, (v, color, _key)) in segs.iter().enumerate() {
         let frac = v / total;
         if frac <= 0.0 {
             continue;
@@ -340,7 +340,7 @@ pub fn StatsView() -> Element {
     let mut day_cost = vec![0.0f64; nb];
     let labels: Vec<String> = (0..nb)
         .map(|i| {
-            let (y, m, d) = civil_from_days(now - (nb - 1 - i) as i64);
+            let (_y, m, d) = civil_from_days(now - (nb - 1 - i) as i64);
             format!("{d:02}.{m:02}")
         })
         .collect();

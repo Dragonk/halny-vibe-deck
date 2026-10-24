@@ -22,7 +22,7 @@ use tokio::sync::broadcast;
 
 use vibedeck_acp::AcpHandle;
 use vibedeck_core::proto::{AcpCommand, AcpEvent};
-use vibedeck_core::types::{now_ms, ChatSession, Message, MessageSender};
+use vibedeck_core::types::{now_ms, Attachment, ChatSession, Message, MessageSender};
 
 use crate::types::{spawn_slot, SlotPurpose};
 
@@ -351,6 +351,13 @@ impl Engine {
     }
 
     pub fn send_message(&self, text: String) {
+        self.send_message_with(text, Vec::new());
+    }
+
+    /// Like [`send_message`], but stores `attachments` on the user
+    /// message (the web `@marker` resolver expands file references into
+    /// attachments before sending).
+    pub fn send_message_with(&self, text: String, attachments: Vec<Attachment>) {
         let text = text.trim().to_string();
         if text.is_empty() {
             return;
@@ -381,6 +388,9 @@ impl Engine {
             let mut st = self.state.lock().unwrap();
             let Some(session) = st.current_session_mut() else { return };
             session.messages.push(Message::new_user(&text));
+            if let Some(m) = session.messages.last_mut() {
+                m.attachments = attachments;
+            }
             session.last_active_ms = now_ms();
             (
                 session.id.clone(),
