@@ -290,16 +290,35 @@ export const useStore = create<AppStore>((set, get) => ({
     if (!session?.acpSessionId) return;
     const acpSessionId = session.acpSessionId;
     let model = session.lastModel;
-    if (!model) {
+    let mode = session.lastMode;
+    let thinking = session.lastThinking;
+    if (!model || !mode || !thinking) {
       try {
-        model = (await window.api.stats.vibeSessionLastModel(acpSessionId)) ?? undefined;
-        if (model) get().updateSession(localSessionId, { lastModel: model });
+        const last = await window.api.stats.vibeSessionLastConfig(acpSessionId);
+        const patch: { lastModel?: string; lastMode?: string; lastThinking?: string } = {};
+        if (!model && last?.model) {
+          model = last.model;
+          patch.lastModel = last.model;
+        }
+        if (!mode && last?.mode) {
+          mode = last.mode;
+          patch.lastMode = last.mode;
+        }
+        if (!thinking && last?.thinking) {
+          thinking = last.thinking;
+          patch.lastThinking = last.thinking;
+        }
+        if (Object.keys(patch).length > 0) get().updateSession(localSessionId, patch);
       } catch {
         /* vibe logs unavailable — keep the CLI-reported chips */
       }
     }
     const apply = (id: string, value: string | undefined, cur: string): void => {
       if (!value || value === cur) return;
+      // A fallback value that is not part of the option list (e.g. a
+      // custom agent name) must not corrupt the chip dropdown.
+      const opt = get().configOptions.find((o) => o.id === id);
+      if (opt && opt.options && opt.options.length > 0 && !opt.options.some((op) => op.value === value)) return;
       if (id === "model") get().setCurrentModel(value);
       if (id === "mode") get().setCurrentMode(value);
       if (id === "thinking") get().setCurrentThinking(value);
@@ -307,8 +326,8 @@ export const useStore = create<AppStore>((set, get) => ({
       window.api.acp.setConfigOption(id, value, acpSessionId).catch(console.error);
     };
     apply("model", model, get().currentModel);
-    apply("mode", session.lastMode, get().currentMode);
-    apply("thinking", session.lastThinking, get().currentThinking);
+    apply("mode", mode, get().currentMode);
+    apply("thinking", thinking, get().currentThinking);
   },
 
   currentModel: "",

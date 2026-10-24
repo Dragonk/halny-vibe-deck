@@ -229,7 +229,22 @@ export default function App(): React.JSX.Element {
           const active = store.activeAcpSessionId
           // Only the active session may move the chips (per-session isolation).
           const isCurrent = !updSessId || !active || updSessId === active
-          if (options && options.length > 0 && isCurrent) store.setConfigOptions(options)
+          if (options && options.length > 0 && isCurrent) {
+            store.setConfigOptions(options)
+            // Record the reported values on the local session so switching
+            // back restores them (per-session mode/thinking isolation).
+            const target = updSessId ? store.getSessionByAcpId(updSessId) : store.currentSession()
+            if (target) {
+              const modelOpt = options.find((o) => o.id === 'model')
+              const modeOpt = options.find((o) => o.id === 'mode')
+              const thinkOpt = options.find((o) => o.id === 'thinking')
+              const patch: { lastModel?: string; lastMode?: string; lastThinking?: string } = {}
+              if (modelOpt && typeof modelOpt.currentValue === 'string') patch.lastModel = modelOpt.currentValue
+              if (modeOpt && typeof modeOpt.currentValue === 'string') patch.lastMode = modeOpt.currentValue
+              if (thinkOpt && typeof thinkOpt.currentValue === 'string') patch.lastThinking = thinkOpt.currentValue
+              if (Object.keys(patch).length > 0) store.updateSession(target.id, patch)
+            }
+          }
           const modeChanged = d.modeChanged as string | undefined
           if (modeChanged && isCurrent) store.setCurrentMode(modeChanged)
           break

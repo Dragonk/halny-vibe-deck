@@ -653,9 +653,9 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
                 className="file-preview-btn primary"
                 onClick={handleSave}
                 disabled={saving}
-                title="Ctrl+S"
+                title={tr.saveLabel}
               >
-                {saving ? '…' : savedAt ? '✓' : tr.saveLabel}
+                {saving ? '…' : savedAt ? '✓' : '💾'}
               </button>
               <button
                 className="file-preview-btn"

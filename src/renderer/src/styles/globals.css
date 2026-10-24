@@ -5480,3 +5480,116 @@ code {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+
+/* ---- v0.5.2: directory tree + editor panels (skills, raw config) ---- */
+.dirtree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 8px 0;
+}
+.dirtree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.dirtree-row .filetree-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dirtree .filetree-item.selected {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.filetree-file {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.dirtree-col {
+  width: 260px;
+  min-width: 200px;
+  max-width: 340px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+  gap: 6px;
+}
+.raw-config-section .dirtree-col {
+  max-height: 560px;
+}
+.dirtree-col .cfg-file-item {
+  flex-shrink: 0;
+}
+.vibe-editor-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+}
+.vibe-editor-box {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 280px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.vibe-editor-box .cm-host {
+  position: absolute;
+  inset: 0;
+}
+.skill-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+}
+.skill-detail-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 10px;
+  height: 440px;
+}
+.sandbox-planned-card {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 18px;
+  max-width: 680px;
+}
+.sandbox-planned-badge {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin-bottom: 10px;
+}
+.sandbox-planned-title {
+  margin: 0 0 6px 0;
+  font-size: 15px;
+  color: var(--text);
+}
+.ic-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.file-preview-btn.primary {
+  width: auto;
+  min-width: 24px;
+  padding: 0 7px;
+}

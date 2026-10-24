@@ -93,6 +93,10 @@ const api = {
     vibeSessions: (): Promise<unknown[]> => ipcRenderer.invoke('stats:vibe-sessions'),
     vibeSessionLastModel: (sessionId: string): Promise<string | null> =>
       ipcRenderer.invoke('stats:vibe-session-last-model', sessionId),
+    vibeSessionLastConfig: (
+      sessionId: string
+    ): Promise<{ model: string | null; mode: string | null; thinking: string | null; cwd: string | null } | null> =>
+      ipcRenderer.invoke('stats:vibe-session-last-config', sessionId),
     searchSessionContent: (query: string): Promise<Array<{ sessionId: string; snippet: string }>> =>
       ipcRenderer.invoke('stats:search-session-content', query),
     vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>

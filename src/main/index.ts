@@ -10,6 +10,7 @@ import {
   loadVibeSubagentSessions,
   searchSessionContent,
   loadSessionLastModel,
+  loadSessionLastConfig,
 } from "./vibeStats";
 import { checkSetup, installDependencies } from "./setup";
 import {
@@ -207,6 +208,8 @@ app.whenReady().then(() => {
   ipcMain.handle("stats:vibe-sessions", () => loadVibeSessions());
   ipcMain.handle("stats:vibe-session-last-model", (_e, sessionId: string) =>
     loadSessionLastModel(sessionId));
+  ipcMain.handle("stats:vibe-session-last-config", (_e, sessionId: string) =>
+    loadSessionLastConfig(sessionId));
   ipcMain.handle("stats:search-session-content", (_e, query: string) =>
     searchSessionContent(query),
   );

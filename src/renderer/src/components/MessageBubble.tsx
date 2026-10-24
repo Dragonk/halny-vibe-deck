@@ -1712,6 +1712,7 @@ export default function MessageBubble({
   acpSessionId,
 }: Props): React.JSX.Element {
   const { config } = useStore();
+  const tr = useTranslation(config.language);
   const isUser = message.sender === "user";
   const hasThinking = message.thinking && message.thinking.length > 0;
   const hasToolCalls = message.toolCalls && message.toolCalls.length > 0;
@@ -1727,15 +1728,43 @@ export default function MessageBubble({
     });
   };
 
-  // CLI checkpoints ("Model changed to …") render as subtle notice rows,
-  // never as chat bubbles.
+  // CLI checkpoints ("Model changed to …", "Compacting context", …) render
+  // as subtle notice rows, never as chat bubbles — localized when possible.
   const noticeText = message.content.trim();
-  if (
-    !hasThinking &&
-    !hasToolCalls &&
-    noticeText.startsWith("Model changed to ")
-  ) {
-    return <div className="msg-row msg-notice">{noticeText}</div>;
+  const isCliNotice = (text: string): boolean =>
+    text.startsWith("Model changed to ") ||
+    text.startsWith("Agent changed to ") ||
+    text === "Compacting context" ||
+    text === "Context compacted" ||
+    text === "Compaction failed" ||
+    text === "Compacting conversation history..." ||
+    text === "Compacted conversation history" ||
+    text === "Session title updated";
+  if (!hasThinking && !hasToolCalls && isCliNotice(noticeText)) {
+    const translateCliNotice = (text: string): string => {
+      const configOptions = useStore.getState().configOptions;
+      if (text.startsWith("Model changed to ")) {
+        const tech = text.slice("Model changed to ".length).trim();
+        const modelOpt = configOptions.find((o) => o.id === "model");
+        const displayName =
+          modelOpt?.options.find((op) => op.value === tech)?.name ?? tech;
+        return tr.modelChangedTo.replace("{{model}}", displayName);
+      }
+      if (text.startsWith("Agent changed to ")) {
+        const agent = text.slice("Agent changed to ".length).trim();
+        return tr.agentChangedTo.replace("{{agent}}", agent);
+      }
+      if (text === "Compacting context") return tr.compactingContext;
+      if (text === "Context compacted") return tr.contextCompacted;
+      if (text === "Compaction failed") return tr.compactionFailed;
+      if (text === "Compacting conversation history...") return tr.compactingHistory;
+      if (text === "Compacted conversation history") return tr.compactedHistory;
+      if (text === "Session title updated") return tr.sessionTitleUpdated;
+      return text;
+    };
+    return (
+      <div className="msg-row msg-notice">{translateCliNotice(noticeText)}</div>
+    );
   }
 
   if (message.sender === "system" && message.isContext) {

@@ -1006,9 +1006,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               )}
             </div>
             <button
-              className={`ic-btn ${sandboxEnabled ? 'ic-btn-active' : ''}`}
-              onClick={() => setSandboxEnabled(!sandboxEnabled)}
-              title={sandboxEnabled ? tr.sandboxOn : tr.sandboxOff}
+            className="ic-btn"
+            disabled
+            title={tr.sandboxPlannedHint}
             >
               <svg
                 width="15"

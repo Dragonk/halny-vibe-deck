@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
+import { CodeMirrorPane } from './CodeEditor'
+import DirTree from './DirTree'
 import type { Language } from '../i18n'
 
 type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw'
@@ -226,6 +228,9 @@ export default function SettingsView(): React.JSX.Element {
   const [rawTomlSaved, setRawTomlSaved] = useState(false)
   const [configFiles, setConfigFiles] = useState<Array<{ path: string; full: string }>>([])
   const [selectedCfgFile, setSelectedCfgFile] = useState<string | null>(null)
+  const [selectedCfgFileFull, setSelectedCfgFileFull] = useState<string | null>(null)
+  const [rawReadyFile, setRawReadyFile] = useState<string | null>(null)
+  const [vibeCfgDir, setVibeCfgDir] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [selectedAgentIdx, setSelectedAgentIdx] = useState<number | null>(null)
   const [selectedMcpIdx, setSelectedMcpIdx] = useState<number | null>(null)
@@ -240,7 +245,13 @@ export default function SettingsView(): React.JSX.Element {
   const [skillMdDraft, setSkillMdDraft] = useState('')
   const [selectedSkillFile, setSelectedSkillFile] = useState<{ path: string; full: string; isDir: boolean } | null>(null)
   const [skillFileDraft, setSkillFileDraft] = useState('')
+  const [skillFileReady, setSkillFileReady] = useState<string | null>(null)
+  const [skillTreeRev, setSkillTreeRev] = useState(0)
   const [skillMsg, setSkillMsg] = useState<string | null>(null)
+  const rawDocRef = React.useRef<(() => string) | null>(null)
+  const skillDocRef = React.useRef<(() => string) | null>(null)
+  const registerRawDoc = useCallback((getDoc: (() => string) | null): void => { rawDocRef.current = getDoc }, [])
+  const registerSkillDoc = useCallback((getDoc: (() => string) | null): void => { skillDocRef.current = getDoc }, [])
   const [mcpJsonMode, setMcpJsonMode] = useState(false)
   const [mcpJsonText, setMcpJsonText] = useState('')
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
@@ -320,16 +331,28 @@ export default function SettingsView(): React.JSX.Element {
   useEffect(() => {
     const skill = selectedSkillIdx !== null ? vibeSkills[selectedSkillIdx] : undefined
     setSkillMdDraft(skill?.content ?? '')
-    setSelectedSkillFile(null)
-    setSkillFileDraft('')
+    // Keep the edited file selected across reloads; default to SKILL.md.
+    const stillThere =
+      selectedSkillFile && skill?.files?.some((f) => f.full === selectedSkillFile.full)
+    if (skill && !stillThere) {
+      const md = skill.files?.find((f) => !f.isDir && f.path === 'SKILL.md')
+      setSelectedSkillFile(md ? { path: 'SKILL.md', full: md.full, isDir: false } : null)
+      setSkillFileDraft('')
+    } else if (!skill) {
+      setSelectedSkillFile(null)
+      setSkillFileDraft('')
+    }
+    setSkillTreeRev((r) => r + 1)
   }, [selectedSkillIdx, vibeSkills])
 
   useEffect(() => {
     if (!selectedSkillFile || selectedSkillFile.isDir) return
     let cancelled = false
+    setSkillFileReady(null)
     window.api.fs.readText(selectedSkillFile.full).then((res) => {
       if (cancelled) return
       setSkillFileDraft(res.error ? '' : res.content)
+      setSkillFileReady(selectedSkillFile.full)
     }).catch(console.error)
     return () => { cancelled = true }
   }, [selectedSkillFile])
@@ -376,12 +399,14 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleSaveSkillFile = async (skill: VibeSkill): Promise<void> => {
     if (!selectedSkillFile) return
-    const err = await window.api.vibe.writeSkillFile(skill.name, selectedSkillFile.path, skillFileDraft, scope, projectCwd)
+    const content = skillDocRef.current?.() ?? skillFileDraft
+    const err = await window.api.vibe.writeSkillFile(skill.name, selectedSkillFile.path, content, scope, projectCwd)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     await loadVibeData()
   }
 
   const handleDeleteSkillFileBtn = async (skill: VibeSkill, relPath: string): Promise<void> => {
+    if (!window.confirm(tr.deleteFileConfirm.replace('{{path}}', relPath))) return
     const err = await window.api.vibe.deleteSkillFile(skill.name, relPath, scope, projectCwd)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     if (selectedSkillFile?.path === relPath) setSelectedSkillFile(null)
@@ -412,9 +437,12 @@ export default function SettingsView(): React.JSX.Element {
 
   const loadRawToml = useCallback(async (): Promise<void> => {
     setRawTomlError(null)
+    setRawReadyFile(null)
     const res = await window.api.vibe.getRawConfig(scope, projectCwd)
     if (res.error) setRawTomlError(res.error)
+    else setRawTomlError(null)
     setRawToml(res.content)
+    setRawReadyFile('__config__')
   }, [scope, projectCwd])
 
   // Reload the raw TOML whenever the scope (or project cwd) changes —
@@ -422,44 +450,51 @@ export default function SettingsView(): React.JSX.Element {
   useEffect(() => {
     if (tab !== 'raw') return
     setSelectedCfgFile(null)
+    setSelectedCfgFileFull(null)
     setRawToml(null)
+    setRawReadyFile(null)
     void loadRawToml()
   }, [scope, projectCwd])
 
-  // List every config file in the .vibe directory of the current scope.
+  // Show the .vibe directory tree of the current scope next to the editor.
   useEffect(() => {
     if (tab !== 'raw') return
     window.api.vibe
-      .listConfigFiles(scope, projectCwd)
-      .then((files) => setConfigFiles(files as Array<{ path: string; full: string }>))
+      .getDir(scope, projectCwd)
+      .then((dir) => setVibeCfgDir(dir))
       .catch(console.error)
   }, [tab, scope, projectCwd])
 
-  const loadConfigFile = useCallback(async (rel: string | null): Promise<void> => {
+  const loadConfigFile = useCallback(async (rel: string | null, full?: string | null): Promise<void> => {
     setSelectedCfgFile(rel)
     setRawTomlError(null)
+    setRawReadyFile(null)
     if (rel === null) {
+      setSelectedCfgFileFull(null)
       await loadRawToml()
       return
     }
-    const f = configFiles.find((x) => x.path === rel)
-    if (!f) return
-    const res = await window.api.fs.readText(f.full)
+    const target = full ?? configFiles.find((x) => x.path === rel)?.full ?? null
+    if (!target) return
+    setSelectedCfgFileFull(target)
+    const res = await window.api.fs.readText(target)
     if (res.error) {
       setRawTomlError(res.error)
       return
     }
     setRawToml(res.content)
+    setRawReadyFile(target)
   }, [configFiles, loadRawToml])
 
   const handleSaveRawToml = async (): Promise<void> => {
-    if (rawToml === null) return
+    const content = rawDocRef.current?.() ?? rawToml
+    if (content === null) return
     let err: string | null = null
     if (selectedCfgFile !== null) {
-      const f = configFiles.find((x) => x.path === selectedCfgFile)
-      if (f) err = (await window.api.fs.writeText(f.full, rawToml)).error
+      const target = selectedCfgFileFull ?? configFiles.find((x) => x.path === selectedCfgFile)?.full ?? null
+      if (target) err = (await window.api.fs.writeText(target, content)).error
     } else {
-      err = await window.api.vibe.saveRawConfig(rawToml, scope, projectCwd)
+      err = await window.api.vibe.saveRawConfig(content, scope, projectCwd)
     }
     if (err) {
       setRawTomlError(err)
@@ -984,74 +1019,11 @@ export default function SettingsView(): React.JSX.Element {
 
         {tab === 'sandbox' && (
           <div className="settings-section">
-            <div className="field">
-              <label className="field-label checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={local.sandboxEnabled}
-                  onChange={(e) => setLocal((p) => ({ ...p, sandboxEnabled: e.target.checked }))}
-                />
-                {tr.enableSandbox}
-              </label>
-              <p className="field-hint">
-                {tr.sandboxHint}
-              </p>
+            <div className="sandbox-planned-card">
+              <span className="sandbox-planned-badge">{tr.sandboxPlannedBadge}</span>
+              <h3 className="sandbox-planned-title">{tr.sandbox}</h3>
+              <p className="field-hint">{tr.sandboxPlannedDesc}</p>
             </div>
-
-            {local.sandboxEnabled && (
-              <>
-                <div className="field">
-                  <label className="field-label">{tr.networkAccess}</label>
-                  <select
-                    className="field-select"
-                    value={local.sandbox.network}
-                    onChange={(e) =>
-                      setLocal((p) => ({
-                        ...p,
-                        sandbox: {
-                          ...p.sandbox,
-                          network: e.target.value as 'none' | 'whitelist' | 'unrestricted'
-                        }
-                      }))
-                    }
-                  >
-                    <option value="none">{tr.none}</option>
-                    <option value="whitelist">{tr.whitelist}</option>
-                    <option value="unrestricted">{tr.unrestricted}</option>
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label className="field-label">{tr.timeoutSeconds}</label>
-                  <input
-                    className="field-input"
-                    type="number"
-                    value={local.sandbox.timeoutSeconds}
-                    onChange={(e) =>
-                      setLocal((p) => ({
-                        ...p,
-                        sandbox: { ...p.sandbox, timeoutSeconds: Number(e.target.value) }
-                      }))
-                    }
-                  />
-                </div>
-
-                <div className="field">
-                  <label className="field-label">{tr.memoryLimitMb}</label>
-                  <input
-                    className="field-input"
-                    type="number"
-                    value={local.sandbox.memoryLimitMb}
-                    onChange={(e) =>
-                      setLocal((p) => ({
-                        ...p,
-                        sandbox: { ...p.sandbox, memoryLimitMb: Number(e.target.value) }
-                      }))
-                    }
-                  />
-                </div>
-              </>
-            )}
           </div>
         )}
 
@@ -1764,7 +1736,7 @@ export default function SettingsView(): React.JSX.Element {
                   {selectedSkillIdx !== null && vibeSkills[selectedSkillIdx] ? (() => {
                     const skill = vibeSkills[selectedSkillIdx]
                     return (
-                      <div>
+                      <div className="skill-detail">
                         <div className="config-item-header-row">
                           <h4 className="config-item-name">{skill.name}</h4>
                           <button
@@ -1777,77 +1749,59 @@ export default function SettingsView(): React.JSX.Element {
                             {tr.deleteSkill}
                           </button>
                         </div>
-                        <div className="field">
-                          <label className="field-label">{tr.skillFiles}</label>
-                          <p className="field-hint">{tr.skillFilesHint}</p>
-                          <div className="skill-file-list">
-                            {(skill.files || []).map((f) => (
-                              <div key={f.path} className="skill-file-row">
-                                <button
-                                  className={'skill-file-item' + (selectedSkillFile?.path === f.path ? ' active' : '')}
-                                  title={f.full}
-                                  disabled={f.isDir}
-                                  onClick={() => setSelectedSkillFile(f)}
-                                >
-                                  {f.isDir ? '📁' : '📄'} {f.path}
-                                </button>
-                                {!f.isDir && (
-                                  <button
-                                    className="skill-file-del"
-                                    title={tr.deleteFile}
-                                    onClick={() => handleDeleteSkillFileBtn(skill, f.path)}
-                                  >
-                                    ✕
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                          <div className="config-item-header-row">
-                            <input
-                              className="field-input"
-                              type="text"
-                              value={newSkillFileName}
-                              placeholder={tr.newSkillFileName}
-                              onChange={(e) => setNewSkillFileName(e.target.value)}
-                            />
-                            <button className="field-btn" onClick={() => handleAddSkillFile(skill)}>
-                              {tr.addFile}
-                            </button>
-                          </div>
-                        </div>
-                        <div className="field">
-                          <label className="field-label">SKILL.md</label>
-                          <textarea
-                            className="field-textarea"
-                            value={skillMdDraft}
-                            onChange={(e) => setSkillMdDraft(e.target.value)}
-                            rows={10}
-                            spellCheck={false}
-                          />
-                          <div className="config-item-header-row">
-                            <button className="field-btn primary" onClick={() => handleSaveSkillMd(skill)}>
-                              {tr.saveFile}
-                            </button>
-                          </div>
-                        </div>
-                        {selectedSkillFile && !selectedSkillFile.isDir && (
-                          <div className="field">
-                            <label className="field-label">{selectedSkillFile.path}</label>
-                            <textarea
-                              className="field-textarea"
-                              value={skillFileDraft}
-                              onChange={(e) => setSkillFileDraft(e.target.value)}
-                              rows={10}
-                              spellCheck={false}
-                            />
+                        <div className="skill-detail-body">
+                          <div className="dirtree-col">
                             <div className="config-item-header-row">
-                              <button className="field-btn primary" onClick={() => handleSaveSkillFile(skill)}>
-                                {tr.saveFile}
+                              <input
+                                className="field-input"
+                                type="text"
+                                value={newSkillFileName}
+                                placeholder={tr.newSkillFileName}
+                                onChange={(e) => setNewSkillFileName(e.target.value)}
+                              />
+                              <button className="field-btn" onClick={() => handleAddSkillFile(skill)}>
+                                {tr.addFile}
                               </button>
                             </div>
+                            {skill.dir ? (
+                              <DirTree
+                                rootDir={skill.dir}
+                                selectedFull={selectedSkillFile?.full ?? null}
+                                onSelect={(sel) => {
+                                  if (!sel.isDir) setSelectedSkillFile({ path: sel.rel, full: sel.full, isDir: false })
+                                }}
+                                onDeleteFile={(sel) => handleDeleteSkillFileBtn(skill, sel.rel)}
+                                deleteTitle={tr.deleteFile}
+                                refreshKey={skillTreeRev}
+                              />
+                            ) : (
+                              <p className="empty-text">{tr.skillFilesHint}</p>
+                            )}
                           </div>
-                        )}
+                          <div className="vibe-editor-col">
+                            {selectedSkillFile && !selectedSkillFile.isDir && skillFileReady === selectedSkillFile.full ? (
+                              <>
+                                <div className="config-item-header-row">
+                                  <span className="field-label">{selectedSkillFile.path}</span>
+                                  <button className="field-btn primary" onClick={() => handleSaveSkillFile(skill)}>
+                                    {tr.saveFile}
+                                  </button>
+                                </div>
+                                <div className="vibe-editor-box">
+                                  <CodeMirrorPane
+                                    path={selectedSkillFile.full}
+                                    content={skillFileDraft}
+                                    editable
+                                    registerDoc={registerSkillDoc}
+                                    onSave={() => { void handleSaveSkillFile(skill) }}
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <p className="empty-text">{tr.selectSkillFileHint}</p>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     )
                   })() : (
@@ -2249,49 +2203,59 @@ export default function SettingsView(): React.JSX.Element {
         )}
         {tab === 'raw' && (
           <div className="settings-section raw-config-section">
-            <div className="config-files-list">
+            <div className="dirtree-col">
               <button
                 className={'cfg-file-item' + (selectedCfgFile === null ? ' active' : '')}
                 onClick={() => void loadConfigFile(null)}
               >
                 config.toml
               </button>
-              {configFiles.map((f) => (
-                <button
-                  key={f.path}
-                  className={'cfg-file-item' + (selectedCfgFile === f.path ? ' active' : '')}
-                  onClick={() => void loadConfigFile(f.path)}
-                  title={f.full}
-                >
-                  {f.path}
-                </button>
-              ))}
+              {vibeCfgDir ? (
+                <DirTree
+                  rootDir={vibeCfgDir}
+                  selectedFull={selectedCfgFileFull}
+                  onSelect={(sel) => {
+                    if (sel.isDir) return
+                    if (sel.rel === 'config.toml') void loadConfigFile(null)
+                    else void loadConfigFile(sel.rel, sel.full)
+                  }}
+                  refreshKey={scope + '|' + projectCwd}
+                />
+              ) : null}
             </div>
             <div className="raw-editor-col">
-            <div className="field">
-              <label className="field-label">{tr.rawConfig}</label>
-              <p className="field-hint">{tr.rawTomlHint}</p>
-              <textarea
-                className="field-textarea raw-toml-editor"
-                value={rawToml ?? ''}
-                onChange={(e) => setRawToml(e.target.value)}
-                spellCheck={false}
-              />
-            </div>
-            {rawTomlError && (
-              <div className="raw-toml-error">{rawTomlError}</div>
-            )}
-            <div className="raw-toml-actions">
-              <button className="save-btn" onClick={handleSaveRawToml}>
-                {rawTomlSaved ? tr.rawTomlSaved : tr.rawTomlSave}
-              </button>
-              <button
-                className="save-btn raw-reload-btn"
-                onClick={() => void loadConfigFile(selectedCfgFile)}
-              >
-                {tr.reload}
-              </button>
-            </div>
+              <div className="field">
+                <label className="field-label">{selectedCfgFile === null ? tr.rawConfig : selectedCfgFile}</label>
+                <p className="field-hint">{selectedCfgFile === null ? tr.rawTomlHint : tr.rawFileHint}</p>
+                {rawReadyFile !== null && ((selectedCfgFile === null && rawReadyFile === '__config__') || (selectedCfgFile !== null && rawReadyFile === selectedCfgFileFull)) ? (
+                  <div className="vibe-editor-box">
+                    <CodeMirrorPane
+                      path={selectedCfgFile === null ? 'config.toml' : selectedCfgFileFull ?? selectedCfgFile}
+                      content={rawToml ?? ''}
+                      editable
+                      registerDoc={registerRawDoc}
+                      onSave={() => { void handleSaveRawToml() }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+              {rawTomlError && (
+                <div className="raw-toml-error">{rawTomlError}</div>
+              )}
+              <div className="raw-toml-actions">
+                <button className="save-btn" onClick={handleSaveRawToml}>
+                  {rawTomlSaved ? tr.rawTomlSaved : tr.rawTomlSave}
+                </button>
+                <button
+                  className="save-btn raw-reload-btn"
+                  onClick={() => {
+                    if (selectedCfgFile === null) void loadConfigFile(null)
+                    else void loadConfigFile(selectedCfgFile, selectedCfgFileFull)
+                  }}
+                >
+                  {tr.reload}
+                </button>
+              </div>
             </div>
           </div>
         )}

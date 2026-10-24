@@ -580,3 +580,35 @@ export function searchSessionContent(query: string): ContentMatch[] {
 
   return results
 }
+
+/** Last config actually used by a session: model, agent (mode), reasoning effort, cwd. */
+export function loadSessionLastConfig(sessionId: string): {
+  model: string | null;
+  mode: string | null;
+  thinking: string | null;
+  cwd: string | null;
+} | null {
+  const generationsDir = path.join(
+    os.homedir(), '.vibe', 'logs', 'session', 'unified', sessionId, 'generations'
+  );
+  let gens: string[];
+  try {
+    gens = fs.readdirSync(generationsDir);
+  } catch {
+    return null;
+  }
+  for (const gen of gens.sort().reverse()) {
+    const state = readJsonFile(path.join(generationsDir, gen, 'runtime-state.json'));
+    const meta = (state?.['session_metadata'] ?? null) as Record<string, unknown> | null;
+    if (!meta) continue;
+    const model = (meta['active_model'] as string) ?? null;
+    if (!model) continue;
+    return {
+      model,
+      mode: (meta['agent_name'] as string) ?? null,
+      thinking: (meta['reasoning_effort'] as string) ?? null,
+      cwd: (meta['cwd'] as string) ?? null,
+    };
+  }
+  return null;
+}
