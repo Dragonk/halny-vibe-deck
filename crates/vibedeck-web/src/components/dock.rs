@@ -180,8 +180,8 @@ fn open_diff_tab(
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
-    let mut tab = use_signal(|| "files".to_string());
-    let mut entries = use_signal(Vec::<FileEntry>::new);
+    let tab = use_signal(|| "files".to_string());
+    let entries = use_signal(Vec::<FileEntry>::new);
     let git = use_signal(|| None::<GitStatus>);
     let mut boot = use_signal(|| false);
 
@@ -198,7 +198,7 @@ pub fn Dock() -> Element {
 
     // local state that survives tab switches but resets with the component
     let cwd = use_signal(String::new);
-    let mut files_msg = use_signal(String::new);
+    let files_msg = use_signal(String::new);
     let tabs = use_signal(Vec::<PreviewTab>::new);
     let active = use_signal(|| None::<u64>);
     let next_id = use_signal(|| 1u64);
@@ -242,7 +242,7 @@ pub fn Dock() -> Element {
             let id = t.id;
             let name = t.name.clone();
             let tabs_c2 = tabs.clone();
-            let active_c2 = active.clone();
+            let mut active_c2 = active.clone();
             rsx! {
                 div {
                     class: "{cls}",
