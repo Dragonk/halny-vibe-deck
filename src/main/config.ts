@@ -94,6 +94,7 @@ export interface AppConfig {
   prompts: PromptConfig[]
   skills: SkillConfig[]
   sidebarSessionsLimit: number | null
+  autoCloseIdleMinutes?: number
   hiddenSessions: string[]
   hiddenProjects: string[]
   serve: ServeConfig
@@ -122,6 +123,7 @@ const defaultConfig: AppConfig = {
   prompts: [],
   skills: [],
   sidebarSessionsLimit: null,
+  autoCloseIdleMinutes: 60,
   hiddenSessions: [],
   hiddenProjects: [],
   serve: {

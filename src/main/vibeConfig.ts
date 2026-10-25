@@ -247,11 +247,20 @@ export function loadAgentFiles(dir: string = getVibeDirPath()): VibeAgentFileCon
           string,
           unknown
         >
+        const rawTools = (raw['tools'] as Record<string, unknown> | undefined) ?? {}
+        const tools: Record<string, unknown> = {}
+        for (const [k, v] of Object.entries(rawTools)) {
+          tools['tools.' + k] = v
+        }
         agents.push({
-          name: (raw['name'] as string) ?? basename(f.name, '.toml'),
+          name: basename(f.name, '.toml'),
           agent_type: raw['agent_type'] as VibeAgentFileConfig['agent_type'],
           active_model: raw['active_model'] as string | undefined,
           system_prompt_id: raw['system_prompt_id'] as string | undefined,
+          display_name: raw['display_name'] as string | undefined,
+          description: raw['description'] as string | undefined,
+          instructions: raw['instructions'] as string | undefined,
+          tools,
           disabled_tools: raw['disabled_tools'] as string[] | undefined,
           enabled_tools: raw['enabled_tools'] as string[] | undefined,
         })
@@ -263,11 +272,48 @@ export function loadAgentFiles(dir: string = getVibeDirPath()): VibeAgentFileCon
   }
 }
 
+// v0.9.0: builds the TOML payload for an agent profile file. The CLI derives
+// the agent id from the file stem and treats unknown keys as config overrides:
+// an empty system_prompt_id string makes the CLI reject the whole profile, so
+// empty values must never be written, and the "name" key is not a real CLI
+// field (the stem is authoritative). Tool permission keys are written bare
+// (the CLI expects "read_file", not "tools.read_file").
+export function agentFileData(config: VibeAgentFileConfig): Record<string, unknown> {
+  const data: Record<string, unknown> = {}
+  data['agent_type'] = config.agent_type ?? 'agent'
+  const clean = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim() : undefined
+  const display_name = clean(config.display_name)
+  if (display_name) data['display_name'] = display_name
+  const description = clean(config.description)
+  if (description) data['description'] = description
+  const instructions = clean(config.instructions)
+  if (instructions) data['instructions'] = instructions
+  const active_model = clean(config.active_model)
+  if (active_model) data['active_model'] = active_model
+  const system_prompt_id = clean(config.system_prompt_id)
+  if (system_prompt_id) data['system_prompt_id'] = system_prompt_id
+  if (Array.isArray(config.enabled_tools) && config.enabled_tools.length > 0) {
+    data['enabled_tools'] = config.enabled_tools
+  }
+  if (Array.isArray(config.disabled_tools) && config.disabled_tools.length > 0) {
+    data['disabled_tools'] = config.disabled_tools
+  }
+  const toolsIn = config.tools
+  if (toolsIn && typeof toolsIn === 'object' && Object.keys(toolsIn).length > 0) {
+    const tools: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(toolsIn as Record<string, unknown>)) {
+      tools[k.startsWith('tools.') ? k.slice(6) : k] = v
+    }
+    data['tools'] = tools
+  }
+  return data
+}
+
 export function saveAgentFile(name: string, config: VibeAgentFileConfig, dir: string = getVibeDirPath()): void {
   ensureDir(agentsDir(dir))
   const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.toml'
-  const data: Record<string, unknown> = { ...config, name }
-  fs.writeFileSync(join(agentsDir(dir), filename), stringify(data), 'utf-8')
+  fs.writeFileSync(join(agentsDir(dir), filename), stringify(agentFileData(config)), 'utf-8')
 }
 
 export function deleteAgentFile(name: string, dir: string = getVibeDirPath()): void {

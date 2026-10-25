@@ -1713,7 +1713,7 @@ function UserMessageContent({
   return <>{parts}</>;
 }
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   isStreaming,
   isAgentBusy,
@@ -1911,3 +1911,5 @@ export default function MessageBubble({
     </div>
   );
 }
+
+export default React.memo(MessageBubble)

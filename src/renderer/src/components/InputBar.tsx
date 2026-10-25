@@ -497,10 +497,14 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     }
 
     const currentSess = currentSession()
+    // v0.9.0: a previewed (not live) session with an empty preview must
+    // CONTINUE its own ACP session after a real resume, not fork into a
+    // fresh one - only live empty drafts (primed) re-bind to a new session.
     const isDraft =
       !currentSess ||
       !currentSess.acpSessionId ||
-      currentSess.messages.length === 0
+      (currentSess.messages.length === 0 &&
+        useStore.getState().liveSessions.includes(currentSess.id))
 
     if (pendingNewSession || sessionStarting || !currentSess?.acpSessionId) {
       // ---- First message on a draft session — create the ACP session ----
@@ -634,6 +638,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           try {
             // Real resume: session/load replays the full history
             await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined)
+            useStore.getState().markSessionLive(currentSess.id)
             useStore.getState().markSessionBusy(currentSess.id)
             await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
           } catch (loadErr) {

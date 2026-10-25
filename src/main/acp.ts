@@ -392,16 +392,20 @@ export class AcpManager {
       case 'tool_call_update': {
         const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
         if (toolCallId) {
+          const tcuStatus = this.normalizeToolStatus(update.status)
           this.emit({
             type: 'ToolCallUpdate',
             data: {
               sessionId,
               toolCallId,
-              status: this.normalizeToolStatus(update.status),
+              status: tcuStatus,
               output: this.toolOutputText(update),
               diffs: this.diffBlocks(update)
             }
           })
+          // v0.9.0: release the name entry once the call reaches a terminal
+          // status so long-running workers do not grow the map forever.
+          if (tcuStatus !== 'running') this.toolCallNames.delete(toolCallId)
         }
         break
       }
@@ -903,6 +907,9 @@ export class AcpManager {
     }
     this.pending.forEach((p) => p.reject(new Error('ACP stopped')))
     this.pending.clear()
+    // v0.9.0: drop request bookkeeping so a restarted worker starts clean.
+    this.pendingApprovals.clear()
+    this.toolCallNames.clear()
   }
 
   isRemote(): boolean {

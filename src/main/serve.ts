@@ -398,6 +398,7 @@ async function readBody(req: IncomingMessage, limit = 64 * 1024): Promise<Buffer
 
 let server: https.Server | null = null
 let wss: WebSocketServer | null = null
+let wsHeartbeat: ReturnType<typeof setInterval> | null = null
 let servePort = 0
 
 export function isServeRunning(): boolean {
@@ -435,6 +436,7 @@ const WEB_BLOCKED = new Set([
   "serve:set-credentials",
   "serve:regen-cert",
   "remote:install-acp",
+  "updates:update-app",
 ])
 
 /**
@@ -580,7 +582,27 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
     }
     wss?.handleUpgrade(req, socket, head, (ws) => wss?.emit("connection", ws, req))
   })
+  // v0.9.0: heartbeat - terminate clients that missed two rounds of
+  // pings (dropped phones, dead NATs) so a server that stays up for weeks
+  // does not accumulate dead sockets.
+  wsHeartbeat = setInterval(() => {
+    if (!wss) return
+    for (const client of wss.clients) {
+      const c = client as WebSocket & { nexusAlive?: boolean }
+      if (c.nexusAlive === false) {
+        c.terminate()
+        continue
+      }
+      c.nexusAlive = false
+      c.ping()
+    }
+  }, 30000)
+
   wss.on("connection", (ws, req) => {
+    ;(ws as WebSocket & { nexusAlive?: boolean }).nexusAlive = true
+    ws.on("pong", () => {
+      ;(ws as WebSocket & { nexusAlive?: boolean }).nexusAlive = true
+    })
     const auth = tokenFromRequest(req)
     if (!auth) {
       ws.close(4401, "unauthorized")
@@ -621,6 +643,10 @@ const busListener = (ev: { ch: string; args: unknown[] }): void => {
 
 export function stopServe(): void {
   bus.removeListener("bus-event", busListener)
+  if (wsHeartbeat) {
+    clearInterval(wsHeartbeat)
+    wsHeartbeat = null
+  }
   if (wss) {
     for (const c of wss.clients) c.close(1001)
     wss.close()

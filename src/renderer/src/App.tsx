@@ -77,6 +77,24 @@ export default function App(): React.JSX.Element {
   } = useStore()
 
   const tr = useTranslation(config.language)
+  const updateInfo = useStore((s) => s.updateInfo)
+  const dismissUpdateBanner = useStore((s) => s.dismissUpdateBanner)
+
+  const handleUpdateApp = useCallback(async () => {
+    setUpdateBusy(true)
+    setUpdateError(null)
+    const res = await useStore.getState().updateAppNow()
+    setUpdateBusy(false)
+    if (!res.ok && res.error) setUpdateError(res.error)
+  }, [])
+
+  const handleUpdateCli = useCallback(async () => {
+    setUpdateBusy(true)
+    setUpdateError(null)
+    const res = await useStore.getState().updateCliNow()
+    setUpdateBusy(false)
+    if (!res.ok && res.error) setUpdateError(res.error)
+  }, [])
 
   // v0.7.2: in web mode remember the resolved UI language so the pre-auth
   // login page can greet the user in their language on the next visit.
@@ -92,6 +110,8 @@ export default function App(): React.JSX.Element {
   // Per-session streaming state: localSessionId → streaming info
   const streamingState = useRef<Map<string, StreamingState>>(new Map())
   const [setupRequired, setSetupRequired] = useState(false)
+  const [updateBusy, setUpdateBusy] = useState(false)
+  const [updateError, setUpdateError] = useState<string | null>(null)
   const [pendingToolApprovals, setPendingToolApprovals] = useState<
     Array<{ requestId: string; method: string; params: Record<string, unknown>; remoteId: string | null }>
   >([])
@@ -196,6 +216,7 @@ export default function App(): React.JSX.Element {
           // otherwise fall back to the global active_model).
           const cur = useStore.getState().currentSession()
           if (cur?.acpSessionId === acpSessId) {
+            useStore.getState().markSessionLive(cur.id)
             void useStore.getState().syncSessionChips(cur.id)
           }
           break
@@ -557,6 +578,36 @@ export default function App(): React.JSX.Element {
     return unsub
   }, [handleAcpEvent])
 
+  // v0.9.0: auto-close idle live sessions (config.autoCloseIdleMinutes,
+  // default 60; 0 disables). Sending a message to a closed session revives
+  // it through the regular resume path.
+  useEffect(() => {
+    const iv = window.setInterval(() => {
+      const store = useStore.getState()
+      const minutes = store.config.autoCloseIdleMinutes ?? 60
+      if (!minutes || minutes <= 0) return
+      const now = Date.now()
+      for (const id of [...store.liveSessions]) {
+        if (store.busySessions.includes(id)) continue
+        const sess = store.sessions.find((s) => s.id === id)
+        const ts = store.sessionActivity[id] ?? sess?.updatedAt ?? sess?.lastActive ?? 0
+        if (ts > 0 && now - ts > minutes * 60000) store.closeSession(id)
+      }
+    }, 60000)
+    return () => window.clearInterval(iv)
+  }, [])
+
+  // v0.9.0: look for app + CLI updates shortly after startup so the banner
+  // appears without opening Settings. Silent - failures just keep the banner
+  // hidden.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      void useStore.getState().checkAppUpdate()
+      void useStore.getState().checkCliUpdate()
+    }, 4000)
+    return () => window.clearTimeout(t)
+  }, [])
+
   // v0.6.0: poll remote SSH connections (status dots + remote session lists).
   // The store loads the config asynchronously after mount, so the effect must
   // re-run once the enabled connections become available - and whenever they
@@ -669,6 +720,43 @@ export default function App(): React.JSX.Element {
       }`}
     >
       <Header />
+      {!updateInfo.dismissed &&
+        ((updateInfo.app?.updateAvailable ?? false) || (updateInfo.cli?.updateAvailable ?? false)) && (
+          <div className="update-banner">
+            <div className="update-banner-texts">
+              {updateInfo.app?.updateAvailable && (
+                <span>
+                  {tr.updateBannerApp.replace('{{version}}', updateInfo.app.latestVersion ?? '')}
+                </span>
+              )}
+              {updateInfo.cli?.updateAvailable && (
+                <span>
+                  {tr.updateBannerCli.replace('{{version}}', updateInfo.cli.latestVersion ?? '')}
+                </span>
+              )}
+              {updateError && <span className="update-banner-error">{updateError}</span>}
+            </div>
+            <div className="update-banner-actions">
+              {updateInfo.app?.updateAvailable && (
+                <button className="update-banner-btn" disabled={updateBusy} onClick={handleUpdateApp}>
+                  {tr.updateBannerAction}
+                </button>
+              )}
+              {updateInfo.cli?.updateAvailable && (
+                <button className="update-banner-btn" disabled={updateBusy} onClick={handleUpdateCli}>
+                  {tr.updateBannerAction}
+                </button>
+              )}
+              <button
+                className="update-banner-dismiss"
+                title={tr.updateBannerDismiss}
+                onClick={dismissUpdateBanner}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
       {mobileSidebarOpen && (
         <div className="mobile-scrim" onClick={() => setMobileSidebarOpen(false)} />
       )}

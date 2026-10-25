@@ -35,7 +35,7 @@ function augmentedEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-function tryExec(cmd: string): string | null {
+export function tryExec(cmd: string): string | null {
   try {
     return execSync(cmd, {
       encoding: 'utf8',
@@ -69,7 +69,7 @@ function candidatePaths(name: string): string[] {
   }
 }
 
-function findBinary(name: string): string | null {
+export function findBinary(name: string): string | null {
   // 1. Check PATH (with augmented env)
   const whereResult = tryExec(
     process.platform === 'win32' ? `where "${name}"` : `which "${name}"`

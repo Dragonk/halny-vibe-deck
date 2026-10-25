@@ -40,6 +40,17 @@ npm install
 # The app will guide you through this on first run
 ```
 
+### Linux installation (user directory, no root)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dragonk/mistral-vibe-nexus/main/scripts/install-linux.sh | bash
+```
+
+Installs the app into `~/.local/share/vibe-nexus/app` and adds the `vibe-nexus`
+command through `~/.local/bin`. Re-run the same command to upgrade in place
+(Settings also offers in-app self-updates on Linux).
+
+
 ## Development
 
 ```bash

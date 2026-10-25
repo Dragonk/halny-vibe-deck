@@ -177,6 +177,10 @@ function buildApi(): AppAPI {
         invoke('stats:search-session-content', [query]) as Promise<unknown[]>,
       vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
         invoke('stats:vibe-session-messages', [sessionId]) as Promise<unknown[]>,
+      sessionPreview: (sessionId: string): Promise<unknown> =>
+        invoke('stats:session-preview', [sessionId]),
+      remoteSessionPreview: (remoteId: string, sessionId: string): Promise<unknown> =>
+        invoke('stats:remote-session-preview', [remoteId, sessionId]),
       vibeSessionMetadata: (sessionId: string): Promise<unknown> =>
         invoke('stats:vibe-session-metadata', [sessionId]),
       vibeSubagentSessions: (parentSessionId: string): Promise<unknown[]> =>
@@ -271,6 +275,13 @@ function buildApi(): AppAPI {
       statusNow: (ids?: string[]): Promise<unknown> => invoke('remote:status-now', [ids ?? null]),
       save: (conn: unknown): Promise<unknown> => invoke('remote:save', [conn]),
       delete: (id: string): Promise<unknown> => invoke('remote:delete', [id])
+    },
+    updates: {
+      checkApp: (): Promise<unknown> => invoke('updates:check-app', []),
+      checkCli: (): Promise<unknown> => invoke('updates:check-cli', []),
+      checkCliRemote: (remoteId: string): Promise<unknown> => invoke('updates:check-cli-remote', [remoteId]),
+      updateCli: (remoteId?: string): Promise<unknown> => invoke('updates:update-cli', [remoteId ?? null]),
+      updateApp: (): Promise<unknown> => invoke('updates:update-app', [])
     }
   } as unknown as AppAPI
 }

@@ -5047,6 +5047,14 @@ code {
     color: var(--accent);
     font-size: 11px;
 }
+.session-live-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #34d399;
+    flex: 0 0 auto;
+    box-shadow: 0 0 4px rgba(52, 211, 153, 0.8);
+}
 @keyframes session-spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
@@ -5791,3 +5799,95 @@ code {
 
 .history-load-more { padding: 10px 0 4px; text-align: center; font-size: 12px; opacity: 0.65; }
 .history-remote-marker { opacity: 0.85; }
+
+/* v0.9.0: update banner (app + CLI) */
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: var(--accent-soft, rgba(255, 163, 102, 0.12));
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  font-size: 13px;
+}
+.update-banner-texts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  align-items: center;
+  min-width: 0;
+}
+.update-banner-texts span {
+  color: var(--text-primary, inherit);
+}
+.update-banner-error {
+  color: var(--danger, #e5484d) !important;
+  word-break: break-word;
+}
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.update-banner-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent, #ffa366);
+  background: var(--accent, #ffa366);
+  color: #14141a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.update-banner-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.update-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary, #888);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.update-banner-dismiss:hover {
+  color: var(--text-primary, inherit);
+}
+
+/* v0.9.0: updates section rows (Settings general + remote CLI) */
+.updates-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.updates-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.updates-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.updates-versions {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+}
+.updates-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.remote-cli-updates {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+

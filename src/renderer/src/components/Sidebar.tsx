@@ -47,6 +47,8 @@ export default function Sidebar(): React.JSX.Element {
     startRemoteSession,
     mobileSidebarOpen,
     setMobileSidebarOpen,
+    liveSessions,
+    closeSession,
   } = useStore()
   const tr = useTranslation(config.language)
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
@@ -172,6 +174,7 @@ export default function Sidebar(): React.JSX.Element {
         !busySessions.includes(s.id) &&
         !s.loading &&
         !s.remoteId &&
+        liveSessions.includes(s.id) &&
         s.acpSessionId,
     )
     if (emptyDraft) {
@@ -199,22 +202,34 @@ export default function Sidebar(): React.JSX.Element {
     setMobileSidebarOpen(false)
 
     const session = sessions.find((s) => s.id === id)
-    // v0.7.0: loadAcpSession ensures the right worker (local or remote)
-    // is alive, so no explicit worker switching is needed here.
-    if (session?.acpSessionId && session.messages.length === 0 && !session.loading) {
-      // Real resume via ACP session/load (replays the full history)
-      await loadAcpSession(id)
-    } else if (session?.acpSessionId) {
-      // Already loaded: make this ACP session active and re-sync chips with it
-      useStore.setState({ activeAcpSessionId: session.acpSessionId })
-      void useStore.getState().syncSessionChips(id)
+    if (!session?.acpSessionId) return
+    if (liveSessions.includes(id)) {
+      // v0.9.0: only LIVE sessions resume over ACP (loadAcpSession ensures
+      // the right worker is alive). A live session without messages is a
+      // freshly primed draft - a real load fills its history.
+      if (session.messages.length === 0 && !session.loading) {
+        await loadAcpSession(id)
+      } else {
+        useStore.setState({ activeAcpSessionId: session.acpSessionId })
+        void useStore.getState().syncSessionChips(id)
+      }
+      return
+    }
+    // v0.9.0 lazy resume: clicking a session only reads its history from
+    // disk (no vibe-acp start). ACP wakes up when the user consciously
+    // sends a message in this session.
+    if (session.messages.length === 0 && !session.loading) {
+      await useStore.getState().previewSession(id)
     }
   }
 
-  // Newest first, always — then group by working directory
-  const sortedSessions = [...sessions].sort(
-    (a, b) => (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive),
-  )
+  // v0.9.0: live (running) sessions first, then newest first
+  const sortedSessions = [...sessions].sort((a, b) => {
+    const la = liveSessions.includes(a.id) ? 1 : 0
+    const lb = liveSessions.includes(b.id) ? 1 : 0
+    if (la !== lb) return lb - la
+    return (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive)
+  })
   const hiddenSessions = config.hiddenSessions ?? []
   const hiddenProjects = config.hiddenProjects ?? []
   const visibleSessions = sortedSessions.filter((s) => {
@@ -257,6 +272,7 @@ export default function Sidebar(): React.JSX.Element {
     const isActive =
       !pendingNewSession && session.id === currentSessionId && currentView === 'chat'
     const isBusy = busySessions.includes(session.id)
+    const isLive = liveSessions.includes(session.id)
     const isHovered = hoveredSessionId === session.id
     const timestamp = session.updatedAt ?? session.lastActive ?? session.createdAt
     const sessionDate = new Date(timestamp)
@@ -302,6 +318,7 @@ export default function Sidebar(): React.JSX.Element {
             )}
             {session.loading && <span className="session-loading-dot">⟳</span>}
             {session.remoteId && <span className="remote-badge-mini" title="SSH">📍</span>}
+            {isLive && <span className="session-live-dot" title={tr.sessionActiveLabel} />}
             <span className="session-name">{session.name}</span>
           </div>
           <div className="session-item-meta">
@@ -317,6 +334,18 @@ export default function Sidebar(): React.JSX.Element {
               window.api.acp
                 .cancelSession(session.acpSessionId!, session.remoteId ?? undefined)
                 .catch(console.error)
+            }}
+          >
+            ✕
+          </button>
+        )}
+        {!isBusy && isLive && isHovered && (
+          <button
+            className="session-cancel-btn"
+            title={tr.closeSessionLabel}
+            onClick={(e) => {
+              e.stopPropagation()
+              closeSession(session.id)
             }}
           >
             ✕

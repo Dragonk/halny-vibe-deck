@@ -12,6 +12,7 @@ import {
   searchSessionContent,
   loadSessionLastModel,
   loadSessionLastConfig,
+  loadSessionPreview,
 } from "./vibeStats";
 import { checkSetup, installDependencies } from "./setup";
 import {
@@ -57,6 +58,7 @@ import {
   writeRemoteSkillFile,
   deleteRemoteSkillFile,
   importRemoteSkill,
+  loadRemoteSessionPreview,
 } from "./remoteVibe";
 import { gitStatus, gitLog, gitDiffFile, gitDiffAll, gitStage, gitUnstage, gitCommit, gitPush } from "./git";
 import { randomUUID } from "crypto";
@@ -66,11 +68,20 @@ import {
   startServe,
   stopServe,
   serveStatus,
+  isServeRunning,
   regenerateCertificate,
   makeSalt,
   hashPassword,
 } from "./serve";
 import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus } from "./remote";
+import {
+  checkAppUpdate,
+  checkCliUpdate,
+  checkRemoteCliUpdate,
+  upgradeLocalCli,
+  upgradeRemoteCli,
+  updateApp,
+} from "./updates";
 import {
   remoteListDir,
   remoteStat,
@@ -394,6 +405,38 @@ app.whenReady().then(() => {
     await acpManager.stop()
   })
 
+  // v0.9.0: update system - app (GitHub releases) + mistral-vibe CLI (PyPI).
+  ipcMain.handle("updates:check-app", () => checkAppUpdate());
+  ipcMain.handle("updates:check-cli", () => checkCliUpdate());
+  ipcMain.handle("updates:check-cli-remote", (_e, remoteId: string) => {
+    const conn = loadConfig().remoteConnections.find((c) => c.id === remoteId);
+    if (!conn) throw new Error("Remote connection not found: " + remoteId);
+    return checkRemoteCliUpdate(conn);
+  });
+  ipcMain.handle("updates:update-cli", async (_e, remoteId?: string | null) => {
+    // The CLI binaries are being replaced on disk - every vibe-acp worker
+    // (local + remote) must stop first. The renderer restores live sessions
+    // once the upgrade finishes.
+    await stopAllAcp();
+    if (remoteId) {
+      const conn = loadConfig().remoteConnections.find((c) => c.id === remoteId);
+      if (!conn) throw new Error("Remote connection not found: " + remoteId);
+      return upgradeRemoteCli(conn);
+    }
+    return upgradeLocalCli();
+  });
+  ipcMain.handle("updates:update-app", () => {
+    // Preserve serving across the restart: when the server is running even
+    // though serving is disabled in config (started manually), flip it on so
+    // it comes back automatically after the update relaunch.
+    const cfg = loadConfig();
+    if (isServeRunning() && !(cfg.serve?.enabled)) {
+      cfg.serve = { ...cfg.serve, enabled: true };
+      saveConfig(cfg);
+    }
+    return updateApp();
+  });
+
   ipcMain.handle("acp:is-running", (_e, remoteId?: string) =>
     remoteId ? (remoteAcpManagers.get(remoteId)?.isRunning() ?? false) : acpManager.isRunning(),
   )
@@ -413,6 +456,12 @@ app.whenReady().then(() => {
   );
   ipcMain.handle("stats:vibe-session-messages", (_e, sessionId: string) =>
     loadVibeSessionMessages(sessionId),
+  );
+  ipcMain.handle("stats:session-preview", (_e, sessionId: string) =>
+    loadSessionPreview(sessionId),
+  );
+  ipcMain.handle("stats:remote-session-preview", (_e, remoteId: string, sessionId: string) =>
+    loadRemoteSessionPreview(remoteId, sessionId),
   );
   ipcMain.handle("stats:vibe-session-metadata", (_e, sessionId: string) =>
     loadVibeSessionMetadata(sessionId),

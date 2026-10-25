@@ -166,6 +166,7 @@ export interface AppConfig {
   prompts: PromptConfig[]
   skills: SkillConfig[]
   sidebarSessionsLimit: number | null
+  autoCloseIdleMinutes?: number
   cachedModels: string[]
   cachedModes: Array<{ id: string; name: string }>
   dockOpen: boolean
@@ -287,6 +288,7 @@ export const defaultConfig: AppConfig = {
   prompts: [],
   skills: [],
   sidebarSessionsLimit: null,
+  autoCloseIdleMinutes: 60,
   cachedModels: [],
   cachedModes: [],
   dockOpen: false,
@@ -296,4 +298,49 @@ export const defaultConfig: AppConfig = {
   hiddenProjects: [],
   serve: { enabled: false, port: 8765, username: '', salt: '', hash: '', certPath: '', keyPath: '' },
   remoteConnections: []
+}
+
+/** v0.9.0: lazy session preview read from the unified session store on disk. */
+export interface SessionPreviewData {
+  messages: Array<{
+    role: 'user' | 'ai'
+    content: string
+    thinking?: Array<{ id: string; content: string }>
+    toolCalls?: Array<{
+      id: string
+      title: string
+      kind: string
+      status: 'done' | 'error'
+      input?: Record<string, unknown>
+      output?: string
+    }>
+  }>
+  title: string | null
+  cwd: string | null
+  updatedAt: number | null
+  config: { model: string | null; mode: string | null; thinking: string | null } | null
+  usage: {
+    contextUsed: number
+    promptTokens: number
+    completionTokens: number
+    cachedTokens: number
+    totalTokens: number
+  } | null
+}
+
+// v0.9.0: update system
+export interface AppUpdateInfo {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+  releaseUrl: string | null
+  downloadUrl: string | null
+  error: string | null
+}
+
+export interface CliUpdateInfo {
+  currentVersion: string | null
+  latestVersion: string | null
+  updateAvailable: boolean
+  error: string | null
 }

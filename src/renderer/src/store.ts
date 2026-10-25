@@ -14,9 +14,10 @@ import type {
   VibeSessionMessage,
   VibeSession,
   PreviewTab,
+  SessionPreviewData,
 } from "./types";
 import { defaultConfig } from "./types";
-import type { RemoteConnection, RemoteStatus, RemoteSessionInfo } from "./types";
+import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, AppUpdateInfo, CliUpdateInfo } from "./types";
 
 /** ACP history message (from SessionHistory event) */
 export interface AcpHistoryToolCall {
@@ -91,6 +92,29 @@ interface AppStore {
   busySessions: string[];
   markSessionBusy: (sessionId: string) => void;
   markSessionIdle: (sessionId: string) => void;
+  /** v0.9.0: local session ids with a live ACP session in a worker (runtime only). */
+  liveSessions: string[];
+  markSessionLive: (sessionId: string) => void;
+  /** Last activity timestamp per local session id (drives idle auto-close). */
+  sessionActivity: Record<string, number>;
+  /** Turn a live session off (frees the worker when it was the last one). */
+  closeSession: (sessionId: string) => void;
+  /** v0.9.0: lazy resume - read the history from disk without starting ACP. */
+  previewSession: (localSessionId: string) => Promise<void>;
+  /** v0.9.0: update system state (app + CLI, banner dismissal). */
+  updateInfo: {
+    app: AppUpdateInfo | null;
+    cli: CliUpdateInfo | null;
+    checking: boolean;
+    dismissed: boolean;
+  };
+  checkAppUpdate: () => Promise<void>;
+  checkCliUpdate: () => Promise<void>;
+  checkRemoteCliUpdate: (remoteId: string) => Promise<CliUpdateInfo>;
+  dismissUpdateBanner: () => void;
+  /** Upgrade the CLI (local or remote); stops all workers and restores live sessions. */
+  updateCliNow: (remoteId?: string) => Promise<{ ok: boolean; version: string | null; error: string | null }>;
+  updateAppNow: () => Promise<{ ok: boolean; error: string | null }>;
   sessionLoadProgress: { acpSessionId: string; count: number } | null;
   setSessionLoadProgress: (progress: { acpSessionId: string; count: number } | null) => void;
 
@@ -284,9 +308,173 @@ export const useStore = create<AppStore>((set, get) => ({
   markSessionBusy: (sessionId) =>
     set((s) => ({
       busySessions: s.busySessions.includes(sessionId) ? s.busySessions : [...s.busySessions, sessionId],
+      sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
     })),
+
   markSessionIdle: (sessionId) =>
-    set((s) => ({ busySessions: s.busySessions.filter((id) => id !== sessionId) })),
+    set((s) => ({
+      busySessions: s.busySessions.filter((id) => id !== sessionId),
+      sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
+    })),
+
+  liveSessions: [],
+  sessionActivity: {},
+
+  markSessionLive: (sessionId) =>
+    set((s) => ({
+      liveSessions: s.liveSessions.includes(sessionId) ? s.liveSessions : [...s.liveSessions, sessionId],
+      sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
+    })),
+
+  closeSession: (sessionId) => {
+    const st = get();
+    const sess = st.sessions.find((x) => x.id === sessionId);
+    if (!sess) return;
+    const liveSessions = st.liveSessions.filter((id) => id !== sessionId);
+    set({
+      liveSessions,
+      busySessions: st.busySessions.filter((id) => id !== sessionId),
+    });
+    // v0.9.0: free the worker when its last live session went away.
+    if (sess.remoteId) {
+      const stillLive = liveSessions.some((id) => {
+        const other = get().sessions.find((x) => x.id === id);
+        return other?.remoteId === sess.remoteId;
+      });
+      if (!stillLive) {
+        window.api.acp.stopWorker(sess.remoteId).catch(console.error);
+      }
+    } else {
+      const stillLive = liveSessions.some((id) => {
+        const other = get().sessions.find((x) => x.id === id);
+        return !other?.remoteId;
+      });
+      if (!stillLive) {
+        window.api.acp.stop().catch(console.error);
+      }
+    }
+  },
+
+  updateInfo: { app: null, cli: null, checking: false, dismissed: false },
+
+  checkAppUpdate: async () => {
+    set((s) => ({ updateInfo: { ...s.updateInfo, checking: true } }));
+    try {
+      const info = (await window.api.updates.checkApp()) as AppUpdateInfo;
+      set((s) => ({ updateInfo: { ...s.updateInfo, app: info, checking: false } }));
+    } catch (err) {
+      console.error(err);
+      set((s) => ({ updateInfo: { ...s.updateInfo, checking: false } }));
+    }
+  },
+
+  checkCliUpdate: async () => {
+    set((s) => ({ updateInfo: { ...s.updateInfo, checking: true } }));
+    try {
+      const info = (await window.api.updates.checkCli()) as CliUpdateInfo;
+      set((s) => ({ updateInfo: { ...s.updateInfo, cli: info, checking: false } }));
+    } catch (err) {
+      console.error(err);
+      set((s) => ({ updateInfo: { ...s.updateInfo, checking: false } }));
+    }
+  },
+
+  checkRemoteCliUpdate: async (remoteId) => {
+    return (await window.api.updates.checkCliRemote(remoteId)) as CliUpdateInfo;
+  },
+
+  dismissUpdateBanner: () => set((s) => ({ updateInfo: { ...s.updateInfo, dismissed: true } })),
+
+  updateCliNow: async (remoteId) => {
+    // Main stops every vibe-acp worker first; afterwards bring all previously
+    // live sessions back (worker restart + real session/load resume).
+    const liveBefore = [...get().liveSessions];
+    const currentId = get().currentSessionId;
+    try {
+      const res = (await window.api.updates.updateCli(remoteId)) as {
+        version: string | null;
+        error: string | null;
+      };
+      if (res.error) return { ok: false, version: null, error: res.error };
+      for (const id of liveBefore) {
+        if (id !== currentId) await get().loadAcpSession(id).catch(console.error);
+      }
+      if (currentId && liveBefore.includes(currentId)) {
+        await get().loadAcpSession(currentId).catch(console.error);
+      }
+      await get().checkCliUpdate().catch(console.error);
+      return { ok: true, version: res.version, error: null };
+    } catch (err) {
+      return { ok: false, version: null, error: (err as Error).message };
+    }
+  },
+
+  updateAppNow: async () => {
+    try {
+      return (await window.api.updates.updateApp()) as { ok: boolean; error: string | null };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  },
+
+  previewSession: async (localSessionId) => {
+    const session = get().sessions.find((s) => s.id === localSessionId);
+    if (!session?.acpSessionId) return;
+    get().updateSession(localSessionId, { loading: true });
+    try {
+      const rid = session.remoteId ?? null;
+      const preview = rid
+        ? ((await window.api.stats.remoteSessionPreview(rid, session.acpSessionId)) as SessionPreviewData | null)
+        : ((await window.api.stats.sessionPreview(session.acpSessionId)) as SessionPreviewData | null);
+      if (preview && preview.messages && preview.messages.length > 0) {
+        get().applySessionHistory(
+          session.acpSessionId,
+          preview.messages as AcpHistoryMessage[],
+          preview.title ?? undefined,
+        );
+      } else {
+        if (preview?.title) get().updateSession(localSessionId, { name: preview.title });
+        get().updateSession(localSessionId, { loading: false });
+      }
+      if (preview) {
+        if (preview.usage) {
+          get().setUsage(localSessionId, {
+            contextUsed: preview.usage.contextUsed,
+            contextSize: 0,
+            promptTokens: preview.usage.promptTokens,
+            completionTokens: preview.usage.completionTokens,
+            cachedTokens: preview.usage.cachedTokens,
+            totalTokens: preview.usage.totalTokens,
+          });
+        }
+        const patch: { lastModel?: string; lastMode?: string; lastThinking?: string } = {};
+        if (preview.config?.model) patch.lastModel = preview.config.model;
+        if (preview.config?.mode) patch.lastMode = preview.config.mode;
+        if (preview.config?.thinking) patch.lastThinking = preview.config.thinking;
+        if (Object.keys(patch).length > 0) get().updateSession(localSessionId, patch);
+        // Display-only chip move: the session is not live yet, so no ACP
+        // call happens here (the real sync runs after the session resumes).
+        const st2 = get();
+        if (st2.currentSessionId === localSessionId) {
+          if (patch.lastModel) {
+            st2.setCurrentModel(patch.lastModel);
+            st2.patchConfigOption("model", patch.lastModel);
+          }
+          if (patch.lastMode) {
+            st2.setCurrentMode(patch.lastMode);
+            st2.patchConfigOption("mode", patch.lastMode);
+          }
+          if (patch.lastThinking) {
+            st2.setCurrentThinking(patch.lastThinking);
+            st2.patchConfigOption("thinking", patch.lastThinking);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[store] session preview failed:", err);
+      get().updateSession(localSessionId, { loading: false });
+    }
+  },
   sessionLoadProgress: null,
   setSessionLoadProgress: (progress) => set({ sessionLoadProgress: progress }),
 
@@ -946,6 +1134,7 @@ export const useStore = create<AppStore>((set, get) => ({
       // Real resume: session/load replays the full history via events
       await window.api.acp.loadSession(acpSessionId, cwd, rid ?? undefined);
       set({ activeAcpSessionId: acpSessionId });
+      get().markSessionLive(localSessionId);
       // Per-session isolation: restore this session’s recorded model/mode/thinking.
       void get().syncSessionChips(localSessionId);
       // Safety net: clear flags if no history event arrives (empty session)

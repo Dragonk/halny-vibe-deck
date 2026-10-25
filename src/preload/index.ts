@@ -155,6 +155,10 @@ const api = {
       ipcRenderer.invoke('stats:search-session-content', query),
     vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('stats:vibe-session-messages', sessionId),
+    sessionPreview: (sessionId: string): Promise<unknown> =>
+      ipcRenderer.invoke('stats:session-preview', sessionId),
+    remoteSessionPreview: (remoteId: string, sessionId: string): Promise<unknown> =>
+      ipcRenderer.invoke('stats:remote-session-preview', remoteId, sessionId),
     vibeSessionMetadata: (
       sessionId: string
     ): Promise<{ activeModel: string | null; agentProfile: string | null }> =>
@@ -266,6 +270,15 @@ const api = {
     setCredentials: (username: string, password: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('serve:set-credentials', username, password),
     regenCert: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('serve:regen-cert')
+  },
+  updates: {
+    checkApp: (): Promise<unknown> => ipcRenderer.invoke('updates:check-app'),
+    checkCli: (): Promise<unknown> => ipcRenderer.invoke('updates:check-cli'),
+    checkCliRemote: (remoteId: string): Promise<unknown> =>
+      ipcRenderer.invoke('updates:check-cli-remote', remoteId),
+    updateCli: (remoteId?: string): Promise<unknown> =>
+      ipcRenderer.invoke('updates:update-cli', remoteId ?? null),
+    updateApp: (): Promise<unknown> => ipcRenderer.invoke('updates:update-app')
   },
   remote: {
     test: (draft: RemoteConnection): Promise<RemoteTestResult> => ipcRenderer.invoke('remote:test', draft),

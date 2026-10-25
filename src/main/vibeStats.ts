@@ -612,3 +612,223 @@ export function loadSessionLastConfig(sessionId: string): {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// v0.9.0: lazy session preview - reads the unified session store projection
+// chunks straight from disk so the sidebar can show a session's history
+// WITHOUT starting vibe-acp (real resume happens on the first message).
+// ---------------------------------------------------------------------------
+
+export interface SessionPreview {
+  messages: Array<{
+    role: 'user' | 'ai'
+    content: string
+    thinking?: Array<{ id: string; content: string }>
+    toolCalls?: Array<{
+      id: string
+      title: string
+      kind: string
+      status: 'done' | 'error'
+      input?: Record<string, unknown>
+      output?: string
+    }>
+  }>
+  title: string | null
+  cwd: string | null
+  updatedAt: number | null
+  config: { model: string | null; mode: string | null; thinking: string | null } | null
+  usage: {
+    contextUsed: number
+    promptTokens: number
+    completionTokens: number
+    cachedTokens: number
+    totalTokens: number
+  } | null
+}
+
+interface PreviewRawEntry {
+  [key: string]: unknown
+}
+
+const PREVIEW_MAX_CHUNKS = 48
+const PREVIEW_MAX_MESSAGES = 2000
+const PREVIEW_OUTPUT_CAP = 20000
+
+/** Convert projection chunk entries into a UI-friendly history. */
+export function buildSessionPreview(
+  entries: PreviewRawEntry[],
+  indexEntry: Record<string, unknown> | null,
+): SessionPreview {
+  const messages: SessionPreview['messages'] = []
+  let curAi: SessionPreview['messages'][number] | null = null
+  let pendingThinking: Array<{ id: string; content: string }> = []
+  const flushAi = (): void => {
+    if (curAi) messages.push(curAi)
+    curAi = null
+  }
+  for (const e of entries) {
+    if (messages.length > PREVIEW_MAX_MESSAGES) break
+    const type = e['type']
+    if (type === 'message') {
+      const role = e['role'] === 'user' ? 'user' : 'ai'
+      const blocks = Array.isArray(e['content']) ? (e['content'] as Array<Record<string, unknown>>) : []
+      const text = blocks
+        .filter((b) => b && b['type'] === 'text')
+        .map((b) => String(b['text'] ?? ''))
+        .join('')
+      if (role === 'user') {
+        flushAi()
+        pendingThinking = []
+        messages.push({ role: 'user', content: text })
+      } else {
+        flushAi()
+        curAi = {
+          role: 'ai',
+          content: text,
+          thinking: pendingThinking.length > 0 ? pendingThinking : undefined,
+        }
+        pendingThinking = []
+      }
+    } else if (type === 'reasoning') {
+      const block = { id: String(e['id'] ?? 'reasoning'), content: String(e['text'] ?? '') }
+      if (curAi) {
+        curAi.thinking = [...(curAi.thinking ?? []), block]
+      } else {
+        pendingThinking = [...pendingThinking, block]
+      }
+    } else if (type === 'effect') {
+      if (!curAi) {
+        curAi = {
+          role: 'ai',
+          content: '',
+          thinking: pendingThinking.length > 0 ? pendingThinking : undefined,
+        }
+        pendingThinking = []
+      }
+      const det = (e['detail'] as Record<string, unknown> | undefined) ?? {}
+      const display = (det['display'] as Record<string, unknown> | undefined) ?? {}
+      const state = (e['state'] as Record<string, unknown> | undefined) ?? {}
+      const out = (state['output'] as Record<string, unknown> | undefined) ?? {}
+      const outBlocks = Array.isArray(out['content']) ? (out['content'] as Array<Record<string, unknown>>) : []
+      let output = outBlocks
+        .filter((b) => b && b['type'] === 'text')
+        .map((b) => String(b['text'] ?? ''))
+        .join('')
+      if (output.length > PREVIEW_OUTPUT_CAP) output = output.slice(0, PREVIEW_OUTPUT_CAP) + '...'
+      const decision = state['decision']
+      const success =
+        display['success'] !== false && (decision === undefined || decision === null || decision === 'execute')
+      curAi.toolCalls = [
+        ...(curAi.toolCalls ?? []),
+        {
+          id: String(e['id'] ?? 'effect'),
+          title: String(display['summary'] ?? det['toolName'] ?? e['title'] ?? 'tool'),
+          kind: 'tool',
+          status: success ? 'done' : 'error',
+          input: det['input'] as Record<string, unknown> | undefined,
+          output: output.length > 0 ? output : undefined,
+        },
+      ]
+    }
+  }
+  flushAi()
+
+  let title: string | null = null
+  let cwd: string | null = null
+  let updatedAt: number | null = null
+  let config: SessionPreview['config'] = null
+  let usage: SessionPreview['usage'] = null
+  if (indexEntry) {
+    const sess = (indexEntry['session'] as Record<string, unknown> | undefined) ?? {}
+    const meta = (indexEntry['metadata'] as Record<string, unknown> | undefined) ?? {}
+    title = typeof sess['title'] === 'string' ? sess['title'] : null
+    cwd = typeof meta['cwd'] === 'string' ? meta['cwd'] : null
+    updatedAt = typeof sess['updatedAt'] === 'number' ? sess['updatedAt'] : null
+    config = {
+      model: typeof meta['active_model'] === 'string' ? meta['active_model'] : null,
+      mode: typeof meta['agent_name'] === 'string' ? meta['agent_name'] : null,
+      thinking: typeof meta['reasoning_effort'] === 'string' ? meta['reasoning_effort'] : null,
+    }
+    const ctx = (sess['contextUsage'] as Record<string, unknown> | undefined) ?? {}
+    const tok = (sess['tokenUsage'] as Record<string, unknown> | undefined) ?? {}
+    const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+    if (ctx['totalTokens'] !== undefined || tok['totalTokens'] !== undefined) {
+      usage = {
+        contextUsed: num(ctx['totalTokens']),
+        promptTokens: num(tok['inputTokens']),
+        completionTokens: num(tok['outputTokens']),
+        cachedTokens: num(tok['cachedInputTokens']),
+        totalTokens: num(tok['totalTokens']),
+      }
+    }
+  }
+  return { messages, title, cwd, updatedAt, config, usage }
+}
+
+function readSessionIndexEntry(sessionId: string): Record<string, unknown> | null {
+  try {
+    const p = path.join(os.homedir(), '.vibe', 'logs', 'session', 'unified', '.session-index.json')
+    const idx = JSON.parse(fs.readFileSync(p, 'utf-8')) as Record<string, unknown>
+    const entries = Array.isArray(idx['entries']) ? (idx['entries'] as Array<Record<string, unknown>>) : []
+    for (const e of entries) {
+      const ident = (e['identity'] as Record<string, unknown> | undefined) ?? {}
+      if (ident['session_id'] === sessionId || e['session_id'] === sessionId) return e
+    }
+  } catch {}
+  return null
+}
+
+function readUnifiedChunks(sessionDir: string): PreviewRawEntry[] | null {
+  try {
+    const cur = JSON.parse(fs.readFileSync(path.join(sessionDir, 'CURRENT'), 'utf-8')) as Record<string, unknown>
+    const gen = String(cur['generation'] ?? '')
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(sessionDir, 'generations', gen, 'manifest.json'), 'utf-8'),
+    ) as Record<string, unknown>
+    const ps = (manifest['projection_state'] as Record<string, unknown> | undefined) ?? {}
+    const shasAll = Array.isArray(ps['chunks']) ? (ps['chunks'] as string[]) : []
+    const shas = shasAll.length > PREVIEW_MAX_CHUNKS ? shasAll.slice(shasAll.length - PREVIEW_MAX_CHUNKS) : shasAll
+    const entries: PreviewRawEntry[] = []
+    for (const sha of shas) {
+      try {
+        const p = path.join(sessionDir, 'chunks', sha + '.json')
+        const data = JSON.parse(fs.readFileSync(p, 'utf-8')) as unknown
+        if (Array.isArray(data)) entries.push(...(data as PreviewRawEntry[]))
+      } catch {}
+    }
+    return entries
+  } catch {
+    return null
+  }
+}
+
+/** Locate the unified session directory for an ACP session id. */
+function findUnifiedSessionDir(sessionId: string): string | null {
+  const base = path.join(os.homedir(), '.vibe', 'logs', 'session', 'unified')
+  const direct = path.join(base, sessionId)
+  if (fs.existsSync(path.join(direct, 'CURRENT'))) return direct
+  try {
+    for (const entry of fs.readdirSync(base)) {
+      const cand = path.join(base, entry)
+      try {
+        if (!fs.statSync(cand).isDirectory()) continue
+      } catch {
+        continue
+      }
+      if (!fs.existsSync(path.join(cand, 'CURRENT'))) continue
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(cand, 'meta.json'), 'utf-8')) as Record<string, unknown>
+        if (meta['session_id'] === sessionId) return cand
+      } catch {}
+    }
+  } catch {}
+  return null
+}
+
+export function loadSessionPreview(sessionId: string): SessionPreview | null {
+  const dir = findUnifiedSessionDir(sessionId)
+  if (!dir) return null
+  const entries = readUnifiedChunks(dir)
+  if (!entries) return null
+  return buildSessionPreview(entries, readSessionIndexEntry(sessionId))
+}

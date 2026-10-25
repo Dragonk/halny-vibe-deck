@@ -6,7 +6,7 @@ import DirTree from './DirTree'
 import type { Language } from '../i18n'
 import { isWebMode } from '../webBridge'
 import { defaultConfig } from '../types'
-import type { AppConfig, RemoteConnection, RemoteTestResult, ServeStatus } from '../types'
+import type { AppConfig, RemoteConnection, RemoteTestResult, ServeStatus, CliUpdateInfo } from '../types'
 
 type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw' | 'serve' | 'remote'
 
@@ -57,6 +57,9 @@ interface VibeAgentConfig {
   agent_type?: 'agent' | 'subagent'
   active_model?: string
   system_prompt_id?: string
+  display_name?: string
+  description?: string
+  instructions?: string
   disabled_tools?: string[]
   enabled_tools?: string[]
   tools?: Record<string, VibeToolPermission>
@@ -216,11 +219,15 @@ function mcpOauthUpdate(
 
 export default function SettingsView(): React.JSX.Element {
   const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview, remoteStatuses } = useStore()
+  const updateInfo = useStore((s) => s.updateInfo)
   const tr = useTranslation(config.language)
   const [tab, setTab] = useState<Tab>('general')
   const [local, setLocal] = useState({ ...config })
   const [saved, setSaved] = useState(false)
   const [sessionsLimitFocused, setSessionsLimitFocused] = useState(false)
+  const [updatesBusy, setUpdatesBusy] = useState(false)
+  const [updatesError, setUpdatesError] = useState<string | null>(null)
+  const [remoteCli, setRemoteCli] = useState<Record<string, CliUpdateInfo | 'checking'>>({})
 
   const [vibeConfig, setVibeConfig] = useState<VibeConfig>({})
   const [vibeAgents, setVibeAgents] = useState<VibeAgentConfig[]>([])
@@ -330,6 +337,47 @@ export default function SettingsView(): React.JSX.Element {
   const handleAcpPathBrowse = async (): Promise<void> => {
     const file = await window.api.dialog.openFile()
     if (file) setLocal((prev) => ({ ...prev, acpPath: file }))
+  }
+
+  // v0.9.0: update system actions
+  const handleCheckUpdates = async (): Promise<void> => {
+    setUpdatesBusy(true)
+    setUpdatesError(null)
+    await Promise.allSettled([useStore.getState().checkAppUpdate(), useStore.getState().checkCliUpdate()])
+    setUpdatesBusy(false)
+  }
+
+  const handleUpdateAppNow = async (): Promise<void> => {
+    setUpdatesBusy(true)
+    setUpdatesError(null)
+    const res = await useStore.getState().updateAppNow()
+    setUpdatesBusy(false)
+    if (!res.ok && res.error) setUpdatesError(res.error)
+  }
+
+  const handleCheckRemoteCli = async (remoteId: string): Promise<void> => {
+    setRemoteCli((p) => ({ ...p, [remoteId]: 'checking' }))
+    try {
+      const info = await useStore.getState().checkRemoteCliUpdate(remoteId)
+      setRemoteCli((p) => ({ ...p, [remoteId]: info }))
+    } catch (err) {
+      setRemoteCli((p) => ({
+        ...p,
+        [remoteId]: { currentVersion: null, latestVersion: null, updateAvailable: false, error: String(err) },
+      }))
+    }
+  }
+
+  const handleUpdateCliNow = async (remoteId?: string): Promise<void> => {
+    setUpdatesBusy(true)
+    setUpdatesError(null)
+    const res = await useStore.getState().updateCliNow(remoteId)
+    setUpdatesBusy(false)
+    if (res.ok) {
+      if (remoteId) void handleCheckRemoteCli(remoteId)
+    } else if (res.error) {
+      setUpdatesError(res.error)
+    }
   }
 
   const handleStartAcp = async (): Promise<void> => {
@@ -658,8 +706,7 @@ export default function SettingsView(): React.JSX.Element {
   const handleRenameAgent = async (oldName: string, newName: string, agentConfig: VibeAgentConfig): Promise<void> => {
     if (newName && newName !== oldName) {
       await window.api.vibe.deleteAgent(oldName, scope, projectCwd, vibeRemoteId)
-      const { name: _, ...configWithoutName } = agentConfig
-      await window.api.vibe.saveAgent(newName, { ...configWithoutName, name: newName }, scope, projectCwd, vibeRemoteId)
+      await window.api.vibe.saveAgent(newName, agentConfig, scope, projectCwd, vibeRemoteId)
       await loadVibeData()
     }
   }
@@ -678,11 +725,7 @@ export default function SettingsView(): React.JSX.Element {
     const name = `agent-${Date.now()}`
     const newAgent: VibeAgentConfig = {
       name,
-      agent_type: 'agent',
-      active_model: '',
-      system_prompt_id: '',
-      disabled_tools: [],
-      enabled_tools: []
+      agent_type: 'agent'
     }
     await window.api.vibe.saveAgent(name, newAgent, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
@@ -1169,6 +1212,23 @@ export default function SettingsView(): React.JSX.Element {
             </div>
 
             <div className="field">
+              <label className="field-label">{tr.autoCloseIdleLabel}</label>
+              <input
+                className="field-input"
+                type="number"
+                min={0}
+                max={10080}
+                value={local.autoCloseIdleMinutes ?? 60}
+                onChange={(e) =>
+                  setLocal((p) => ({
+                    ...p,
+                    autoCloseIdleMinutes: Math.max(0, parseInt(e.target.value, 10) || 0),
+                  }))
+                }
+              />
+            </div>
+
+            <div className="field">
               <button className="action-btn" onClick={handleStartAcp}>
                 {tr.connectToAgent}
               </button>
@@ -1180,6 +1240,54 @@ export default function SettingsView(): React.JSX.Element {
                 {tr.disconnect}
               </button>
             </div>
+          </div>
+        )}
+
+        {tab === 'general' && (
+          <div className="settings-section">
+            <h3 className="settings-section-title">{tr.updatesSectionTitle}</h3>
+            <div className="updates-row">
+              <div className="updates-info">
+                <span className="updates-name">{tr.updatesAppLabel}</span>
+                <span className="updates-versions">
+                  {tr.updatesCurrentLabel.replace('{{version}}', updateInfo.app?.currentVersion ?? '?')}
+                  {updateInfo.app?.latestVersion
+                    ? ' · ' + tr.updatesLatestLabel.replace('{{version}}', updateInfo.app.latestVersion)
+                    : ''}
+                </span>
+              </div>
+              <div className="updates-actions">
+                <button className="field-btn" disabled={updatesBusy} onClick={() => void handleCheckUpdates()}>
+                  {tr.updatesCheckButton}
+                </button>
+                <button
+                  className="action-btn"
+                  disabled={updatesBusy || !(updateInfo.app?.updateAvailable ?? false)}
+                  onClick={() => void handleUpdateAppNow()}
+                >
+                  {tr.updatesUpdateButton}
+                </button>
+              </div>
+            </div>
+            <p className="field-hint">{tr.updatesAppRestartHint}</p>
+            <div className="updates-row">
+              <div className="updates-info">
+                <span className="updates-name">{tr.updatesCliLabel}</span>
+                <span className="updates-versions">
+                  {tr.updatesCurrentLabel.replace('{{version}}', updateInfo.cli?.currentVersion ?? '?')}
+                  {updateInfo.cli?.latestVersion
+                    ? ' · ' + tr.updatesLatestLabel.replace('{{version}}', updateInfo.cli.latestVersion)
+                    : ''}
+                </span>
+              </div>
+              <div className="updates-actions">
+                <button className="action-btn" disabled={updatesBusy} onClick={() => void handleUpdateCliNow()}>
+                  {tr.updatesUpdateButton}
+                </button>
+              </div>
+            </div>
+            <p className="field-hint">{tr.updatesUpdateHint}</p>
+            {updatesError && <p className="field-hint">{updatesError}</p>}
           </div>
         )}
 
@@ -1272,6 +1380,33 @@ export default function SettingsView(): React.JSX.Element {
                             </div>
                           </div>
                           <div className="field">
+                            <label className="field-label">{tr.agentDisplayName}</label>
+                            <input
+                              className="field-input"
+                              type="text"
+                              defaultValue={agent.display_name || ''}
+                              onBlur={(e) => {
+                                if (e.target.value !== (agent.display_name || '')) {
+                                  handleSaveAgent(agent.name, { ...agent, display_name: e.target.value })
+                                }
+                              }}
+                            />
+                            <p className="field-hint">{tr.agentModeHint}</p>
+                          </div>
+                          <div className="field">
+                            <label className="field-label">{tr.agentDescription}</label>
+                            <input
+                              className="field-input"
+                              type="text"
+                              defaultValue={agent.description || ''}
+                              onBlur={(e) => {
+                                if (e.target.value !== (agent.description || '')) {
+                                  handleSaveAgent(agent.name, { ...agent, description: e.target.value })
+                                }
+                              }}
+                            />
+                          </div>
+                          <div className="field">
                             <label className="field-label">{tr.modelOptional}</label>
                             <select
                               className="field-select"
@@ -1308,12 +1443,31 @@ export default function SettingsView(): React.JSX.Element {
                               }}
                             >
                               <option value="">{tr.none || '-- None --'}</option>
+                              {['cli', 'explore', 'tests', 'lean', 'minimal'].map((id) => (
+                                <option key={'builtin-' + id} value={id}>
+                                  {id} ({tr.builtinPromptLabel})
+                                </option>
+                              ))}
                               {vibePrompts.map((prompt) => (
                                 <option key={prompt.name} value={prompt.name}>
                                   {prompt.name}
                                 </option>
                               ))}
                             </select>
+                          </div>
+                          <div className="field">
+                            <label className="field-label">{tr.agentInstructions}</label>
+                            <textarea
+                              className="field-textarea"
+                              rows={4}
+                              defaultValue={agent.instructions || ''}
+                              onBlur={(e) => {
+                                if (e.target.value !== (agent.instructions || '')) {
+                                  handleSaveAgent(agent.name, { ...agent, instructions: e.target.value })
+                                }
+                              }}
+                              placeholder={tr.systemPromptPlaceholder}
+                            />
                           </div>
                           <div className="field">
                             <label className="field-label">{tr.enabledTools || 'Enabled Tools'}</label>
@@ -2620,6 +2774,49 @@ export default function SettingsView(): React.JSX.Element {
                     </button>
                   </div>
                 ))}
+                <div className="remote-cli-updates">
+                  <label className="field-label">{tr.updatesRemoteCliTitle}</label>
+                  {(local.remoteConnections ?? []).filter((c) => c.enabled).length === 0 && (
+                    <p className="field-hint">{tr.remoteNoConnections}</p>
+                  )}
+                  {(local.remoteConnections ?? []).filter((c) => c.enabled).map((conn) => {
+                    const info = remoteCli[conn.id]
+                    return (
+                      <div key={conn.id} className="updates-row">
+                        <div className="updates-info">
+                          <span className="updates-name">{conn.name}</span>
+                          <span className="updates-versions">
+                            {info === 'checking'
+                              ? tr.updatesChecking
+                              : info
+                                ? tr.updatesCurrentLabel.replace('{{version}}', info.currentVersion ?? '?') +
+                                  ' · ' +
+                                  tr.updatesLatestLabel.replace('{{version}}', info.latestVersion ?? '?')
+                                : tr.updatesNotChecked}
+                          </span>
+                        </div>
+                        <div className="updates-actions">
+                          <button
+                            className="field-btn"
+                            disabled={updatesBusy}
+                            onClick={() => void handleCheckRemoteCli(conn.id)}
+                          >
+                            {tr.updatesCheckButton}
+                          </button>
+                          <button
+                            className="action-btn"
+                            disabled={
+                              updatesBusy || !info || info === 'checking' || !info.updateAvailable
+                            }
+                            onClick={() => void handleUpdateCliNow(conn.id)}
+                          >
+                            {tr.updatesUpdateButton}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </>
             ) : (
               <div className="remote-editor">

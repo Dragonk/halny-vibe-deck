@@ -4,8 +4,9 @@
 import { loadConfig, type RemoteConnection } from "./config";
 import { shq, sshRun } from "./remote";
 import { parse, stringify } from "smol-toml";
+import { agentFileData, type VibeAgentFileConfig } from "./vibeConfig";
+import { buildSessionPreview, type SessionPreview } from "./vibeStats";
 import type {
-  VibeAgentFileConfig,
   VibeConfig,
   VibePrompt,
   VibeSkill,
@@ -128,11 +129,21 @@ export async function getRemoteAgents(remoteId: string): Promise<VibeAgentFileCo
       continue;
     }
     const base = file.split("/").pop() ?? file;
+    const stem = base.endsWith(".toml") ? base.slice(0, -5) : base;
+    const rawTools = (raw["tools"] as Record<string, unknown> | undefined) ?? {};
+    const tools: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rawTools)) {
+      tools["tools." + k] = v;
+    }
     agents.push({
-      name: (raw["name"] as string) ?? (base.endsWith(".toml") ? base.slice(0, -5) : base),
+      name: stem,
       agent_type: raw["agent_type"] as VibeAgentFileConfig["agent_type"],
       active_model: raw["active_model"] as string | undefined,
       system_prompt_id: raw["system_prompt_id"] as string | undefined,
+      display_name: raw["display_name"] as string | undefined,
+      description: raw["description"] as string | undefined,
+      instructions: raw["instructions"] as string | undefined,
+      tools,
       disabled_tools: raw["disabled_tools"] as string[] | undefined,
       enabled_tools: raw["enabled_tools"] as string[] | undefined,
     });
@@ -145,7 +156,7 @@ export async function saveRemoteAgent(
   config: VibeAgentFileConfig,
   remoteId: string,
 ): Promise<void> {
-  const data: Record<string, unknown> = { ...config, name };
+  const data = agentFileData(config);
   await remoteWrite(
     remoteId,
     HOME_VIBE + "/agents",
@@ -384,4 +395,76 @@ export async function deleteRemoteSkillFile(
 
 export async function importRemoteSkill(): Promise<string | null> {
   return "Importing skills is not supported for remote connections";
+}
+
+// v0.9.0: lazy session preview over SSH - reads the unified session store on
+// the remote host without starting vibe-acp there (lazy resume).
+export async function loadRemoteSessionPreview(
+  remoteId: string,
+  sessionId: string,
+): Promise<SessionPreview | null> {
+  const sid = shq(sessionId);
+  const L = String.fromCharCode(10);
+  const phase1 =
+    'D="$HOME"/.vibe/logs/session/unified/' + sid + L +
+    'if [ ! -f "$D/CURRENT" ]; then' + L +
+    '  for d in "$HOME"/.vibe/logs/session/unified/*/; do' + L +
+    '    if [ -f "$d/CURRENT" ] && grep -q ' + sid + ' "$d/meta.json" 2>/dev/null; then D="${d%/}"; break; fi' + L +
+    '  done' + L +
+    'fi' + L +
+    'if [ ! -f "$D/CURRENT" ]; then echo "@@@NONE"; exit 0; fi' + L +
+    'echo "@@@DIR:$D"' + L +
+    'GEN=$(ls -1 "$D/generations" 2>/dev/null | sort -n | tail -1)' + L +
+    'if [ -z "$GEN" ] || [ ! -f "$D/generations/$GEN/manifest.json" ]; then echo "@@@NONE"; exit 0; fi' + L +
+    'echo "@@@MANIFEST"' + L +
+    'cat "$D/generations/$GEN/manifest.json"' + L +
+    'echo' + L +
+    'echo "@@@INDEX"' + L +
+    'cat "$HOME"/.vibe/logs/session/unified/.session-index.json 2>/dev/null';
+  const out = await runSoft(remoteId, phase1, 25000);
+  if (!out || out.indexOf('@@@NONE') >= 0) return null;
+  const dirPos = out.indexOf('@@@DIR:');
+  const manifestPos = out.indexOf('@@@MANIFEST');
+  const indexPos = out.indexOf('@@@INDEX');
+  if (dirPos < 0 || manifestPos < 0 || indexPos < 0) return null;
+  const dirLine = out.slice(dirPos + 7);
+  const dir = dirLine.slice(0, dirLine.indexOf(L)).trim();
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(out.slice(manifestPos + 11, indexPos).trim()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const ps = (manifest['projection_state'] as Record<string, unknown> | undefined) ?? {};
+  const shasAll = Array.isArray(ps['chunks']) ? (ps['chunks'] as string[]) : [];
+  const shas = shasAll.length > 48 ? shasAll.slice(shasAll.length - 48) : shasAll;
+  if (shas.length === 0 || !dir) return null;
+  const cmds: string[] = [];
+  for (const sha of shas) {
+    if (!/^[0-9a-f]+$/.test(sha)) continue;
+    cmds.push('echo "@@@CHUNK:' + sha + '"; cat ' + shq(dir + '/chunks/' + sha + '.json') + '; echo');
+  }
+  const out2 = await runSoft(remoteId, cmds.join(L), 60000);
+  const entries: Record<string, unknown>[] = [];
+  for (const block of out2.split('@@@CHUNK:')) {
+    const nl = block.indexOf(L);
+    if (nl < 0) continue;
+    try {
+      const data = JSON.parse(block.slice(nl + 1).trim()) as unknown;
+      if (Array.isArray(data)) entries.push(...(data as Record<string, unknown>[]));
+    } catch {}
+  }
+  let indexEntry: Record<string, unknown> | null = null;
+  try {
+    const idxRaw = out.slice(indexPos + 9).trim();
+    const idx = idxRaw ? (JSON.parse(idxRaw) as Record<string, unknown>) : null;
+    const ents = idx && Array.isArray(idx['entries']) ? (idx['entries'] as Array<Record<string, unknown>>) : [];
+    indexEntry =
+      ents.find((e) => {
+        const ident = (e['identity'] as Record<string, unknown> | undefined) ?? {};
+        return ident['session_id'] === sessionId || e['session_id'] === sessionId;
+      }) ?? null;
+  } catch {}
+  if (entries.length === 0 && !indexEntry) return null;
+  return buildSessionPreview(entries, indexEntry);
 }
