@@ -1,0 +1,45 @@
+name: tag-on-marker
+
+# Convenience tagger: push a commit to dioxus whose message contains a
+# marker `[tag vX.Y.Z-dioxus.N]` and this workflow creates that tag on the
+# pushed commit (if it does not exist yet). The tag push then triggers the
+# release-dioxus workflow (test -> bundles -> release).
+# Allows cutting a release without a local git checkout / gh CLI.
+
+on:
+  push:
+    branches:
+      - dioxus
+
+permissions:
+  contents: write
+
+jobs:
+  maybe-tag:
+    name: Create tag from commit marker
+    runs-on: ubuntu-latest
+    if: ${{ contains(github.event.head_commit.message, '[tag ') }}
+    steps:
+      - name: Extract tag name and create tag
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.after }}
+        run: |
+          TAG="$(printf '%s' "$COMMIT_MSG" | grep -oP '\[tag \K[^\]]+' | head -n1 || true)"
+          if [ -z "$TAG" ]; then
+            echo "No [tag ...] marker found; nothing to do."
+            exit 0
+          fi
+          if git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/tags/${TAG}" | grep -q .; then
+            echo "Tag ${TAG} already exists; skipping."
+            exit 0
+          fi
+          echo "Creating tag ${TAG} on ${SHA}"
+          curl -sSf -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/git/refs" \
+            -d "{\"ref\": \"refs/tags/${TAG}\", \"sha\": \"${SHA}\"}"
+          echo "Tagged ${TAG}."

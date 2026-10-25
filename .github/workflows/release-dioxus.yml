@@ -76,6 +76,7 @@ jobs:
         run: |
           cargo build --profile server-release -p vibedeck-web --features server,gui --target x86_64-pc-windows-gnu --locked
           x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe"
+          x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
 
       - name: Fetch pdfium binaries
         run: |
@@ -150,6 +151,12 @@ jobs:
             - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
             - Bundled `WebView2Loader.dll` next to `vibedeck.exe` — required by the Windows webview (fixes the “WebView2Loader.dll not found” system error).
             - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
+
+            ## M9 fixes (v0.8.3-dioxus.5)
+
+            - Fixed: the Windows GUI window now actually opens — the tao event loop is created with `any_thread` (previously the gui thread panicked silently and double-clicking showed no window at all).
+            - `vibedeck.exe` now embeds the mistral-vibe-nexus application icon (Explorer, taskbar).
+            - Closing the desktop window quits the whole app; on Windows panics are written to `vibedeck.log` next to the exe for diagnosis.
 
             ## Requirements
 

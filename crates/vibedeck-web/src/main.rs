@@ -25,6 +25,31 @@ pub mod setup;
 pub mod state;
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    {
+        // With windows_subsystem = "windows" there is no console, so a
+        // panic anywhere in the process is completely invisible (this is
+        // exactly how the GUI thread used to die silently). Write every
+        // panic to vibedeck.log next to the exe so failures can be
+        // diagnosed after the fact.
+        let log_path = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("vibedeck.log")))
+            .unwrap_or_else(|| std::path::PathBuf::from("vibedeck.log"));
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                use std::io::Write;
+                let _ = writeln!(f, "panic: {info}");
+            }
+            prev_hook(info);
+        }));
+    }
+
     #[cfg(feature = "server")]
     {
         // ---- CLI configuration (headless / remote-control mode) ----
@@ -100,10 +125,18 @@ fn main() {
                             }
                             std::thread::sleep(std::time::Duration::from_millis(100));
                         }
-                        if let Err(e) = open_webview(&url) {
-                            eprintln!(
-                                "vibedeck: GUI unavailable ({e}); the server keeps running at {url}"
-                            );
+                        match open_webview(&url) {
+                            Ok(()) => {
+                                // Window closed -> quit the whole app
+                                // (embedded server included). Otherwise the
+                                // process would keep running invisibly.
+                                std::process::exit(0);
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "vibedeck: GUI unavailable ({e}); the server keeps running at {url}"
+                                );
+                            }
                         }
                     })
                     .ok();
@@ -150,14 +183,22 @@ fn open_webview(url: &str) -> Result<(), String> {
     };
     use wry::WebViewBuilder;
 
-    // tao panics when the event loop is created off the main thread on
-    // unix; the gui thread is a worker, so use the any-thread constructor.
+    // tao panics when the event loop is created off the main thread; the
+    // gui thread is a worker, so use the any-thread constructors. On
+    // Windows the plain EventLoop::new() panicked on the worker thread and
+    // silently killed the GUI (no console with windows_subsystem), which
+    // is why double-clicking the exe showed no window at all.
     #[cfg(target_os = "linux")]
     let event_loop = {
         use tao::platform::unix::EventLoopBuilderExtUnix;
         tao::event_loop::EventLoopBuilder::new().with_any_thread(true).build()
     };
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    let event_loop = {
+        use tao::platform::windows::EventLoopBuilderExtWindows;
+        tao::event_loop::EventLoopBuilder::new().with_any_thread(true).build()
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     let event_loop = tao::event_loop::EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("VibeDeck")
