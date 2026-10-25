@@ -323,7 +323,7 @@ pub fn Dock() -> Element {
                             }
                         });
                     },
-                    "{tr(&lang, "filesTab")}"
+                    "{tr(&lang, \"filesTab\")}"
                 }
                 button {
                     class: "{git_cls}",
@@ -336,7 +336,7 @@ pub fn Dock() -> Element {
                             }
                         });
                     },
-                    "{tr(&lang, "gitTab")}"
+                    "{tr(&lang, \"gitTab\")}"
                 }
                 span { class: "dock-tab-sep" }
                 {preview_tab_els.iter().cloned()}
@@ -443,7 +443,7 @@ fn files_panel(
         .collect();
 
     let empty_el: Element = if list.is_empty() && msg.is_empty() {
-        rsx! { div { class: "filetree-empty", "{tr(&lang, "fileTreeEmpty")}" } }
+        rsx! { div { class: "filetree-empty", "{tr(&lang, \"fileTreeEmpty\")}" } }
     } else {
         VNode::empty()
     };
@@ -554,7 +554,7 @@ fn FilePreviewTab(
     let err_txt = save_err.read().clone();
 
     let body_el: Element = match tab.data.as_ref() {
-        None => rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } },
+        None => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
         Some(data) => {
             let dirty = is_editing && *content.read() != data.text;
             let is_editing_c = is_editing;
@@ -567,11 +567,11 @@ fn FilePreviewTab(
                 }
             } else {
                 match data.kind.as_str() {
-                    "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } },
+                    "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
                     "error" => rsx! { div { class: "preview-error-box", "{data.text}" } },
                     "binary" => rsx! {
                         div { class: "preview-loading",
-                            "{tr(&lang, "binaryPreviewHint")} ({name}, {size})"
+                            "{tr(&lang, \"binaryPreviewHint\")} ({name}, {size})"
                         }
                     },
                     "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
@@ -582,7 +582,7 @@ fn FilePreviewTab(
                     "csv" => sheet_table(&parse_csv(&data.text)),
                     "xlsx" => {
                         if data.sheets.is_empty() {
-                            rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } }
+                            rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } }
                         } else {
                             let idx = (*active_sheet.read()).min(data.sheets.len() - 1);
                             let tab_el_tabs: Vec<Element> = data
@@ -649,7 +649,7 @@ fn FilePreviewTab(
                     rsx! {
                         button {
                             class: "file-preview-btn",
-                            title: "{tr(&lang, "previewEdit")}",
+                            title: "{tr(&lang, \"previewEdit\")}",
                             onclick: move |_| editing.set(false),
                             "✎"
                         }
@@ -660,7 +660,7 @@ fn FilePreviewTab(
                     rsx! {
                         button {
                             class: "file-preview-btn",
-                            title: "{tr(&lang, "previewEdit")}",
+                            title: "{tr(&lang, \"previewEdit\")}",
                             onclick: move |_| {
                                 content.set(data_text.clone());
                                 editing.set(true);
@@ -715,7 +715,7 @@ fn FilePreviewTab(
                                 });
                             }
                         },
-                        if is_saving { "{tr(&lang, "previewSaving")}" } else { "{tr(&lang, "previewSave")}" }
+                        if is_saving { "{tr(&lang, \"previewSaving\")}" } else { "{tr(&lang, \"previewSave\")}" }
                     }
                 }
             } else {
@@ -726,7 +726,7 @@ fn FilePreviewTab(
                 if !err_txt.is_empty() {
                     rsx! { span { class: "preview-save-status error", "{err_txt}" } }
                 } else if is_saved && !dirty {
-                    rsx! { span { class: "preview-save-status ok", "✓ {tr(&lang, "previewSaved")}" } }
+                    rsx! { span { class: "preview-save-status ok", "✓ {tr(&lang, \"previewSaved\")}" } }
                 } else {
                     VNode::empty()
                 }
@@ -807,7 +807,7 @@ fn DiffPanel(
     active: Signal<Option<u64>>,
 ) -> Element {
     if !tab.loaded {
-        return rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } };
+        return rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } };
     }
 
     let line_els: Vec<Element> = tab
@@ -930,7 +930,7 @@ fn git_panel(
 
     let list_el: Element = if entries.is_empty() {
         if err.is_empty() {
-            rsx! { div { class: "git-empty", "{tr(&lang, "gitNoChanges")}" } }
+            rsx! { div { class: "git-empty", "{tr(&lang, \"gitNoChanges\")}" } }
         } else {
             rsx! { div { class: "git-error", "{err}" } }
         }

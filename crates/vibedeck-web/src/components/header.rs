@@ -152,7 +152,7 @@ pub fn Header() -> Element {
                         onclick: {
                             let state = state.clone();
                             move |_| {
-                                let state = state.clone();
+                                let mut state = state.clone();
                                 async move {
                                     state.write().token = None;
                                     state.write().loaded = false;

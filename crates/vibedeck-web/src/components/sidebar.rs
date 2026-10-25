@@ -368,10 +368,10 @@ fn group_el(
                     let wd = g.wd.clone();
                     move |e| {
                         e.prevent_default();
-                        let (x, y) = e.data().client_coordinates();
+                        let p = e.data().client_coordinates();
                         ctx.set(Some(CtxMenu {
-                            x,
-                            y,
+                            x: p.x,
+                            y: p.y,
                             target: ConfirmTarget {
                                 is_project: true,
                                 label: label.clone(),
@@ -445,10 +445,10 @@ fn session_row(
                 let key = key.clone();
                 move |e| {
                     e.prevent_default();
-                    let (x, y) = e.data().client_coordinates();
+                    let p = e.data().client_coordinates();
                     ctx.set(Some(CtxMenu {
-                        x,
-                        y,
+                        x: p.x,
+                        y: p.y,
                         target: ConfirmTarget {
                             is_project: false,
                             label: name.clone(),
@@ -487,10 +487,10 @@ fn session_row(
                             });
                         } else {
                             // idle: open the context menu (hide -> confirm)
-                            let (x, y) = e.data().client_coordinates();
+                            let p = e.data().client_coordinates();
                             ctx.set(Some(CtxMenu {
-                                x,
-                                y,
+                                x: p.x,
+                                y: p.y,
                                 target: ConfirmTarget {
                                     is_project: false,
                                     label: name.clone(),
