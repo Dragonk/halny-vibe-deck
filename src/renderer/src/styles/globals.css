@@ -5782,3 +5782,12 @@ code {
 .serve-lan-urls { margin-top: 6px; }
 .serve-lan-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
 .serve-lan-url { font-size: 13px; color: var(--text); opacity: 0.9; word-break: break-all; }
+
+/* v0.8.1: per-project new-session buttons */
+.pgh-plus { margin-left: 6px; padding: 0 5px; border-radius: 6px; font-size: 14px; font-weight: 400; opacity: 0.55; cursor: pointer; }
+.pgh-plus:hover { opacity: 1; background: var(--panel-hover); }
+.nsd-folder-pick { display: block; width: calc(100% - 22px); margin: 6px 2px 2px 20px; padding: 6px 10px; background: none; border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); font-size: 12px; text-align: left; cursor: pointer; }
+.nsd-folder-pick:hover { color: var(--text); border-color: var(--text-muted); background: var(--panel-hover); }
+
+.history-load-more { padding: 10px 0 4px; text-align: center; font-size: 12px; opacity: 0.65; }
+.history-remote-marker { opacity: 0.85; }

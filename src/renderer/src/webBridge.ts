@@ -120,7 +120,7 @@ export async function initWebApi(): Promise<void> {
 }
 
 function buildApi(): AppAPI {
-  const scopeArgs = (scope?: string, cwd?: string): unknown[] => [scope ?? 'global', cwd ?? '']
+  const scopeArgs = (scope?: string, cwd?: string, remoteId?: string): unknown[] => [scope ?? 'global', cwd ?? '', remoteId ?? '']
   return {
     window: {
       minimize: (): Promise<void> => invoke('window:minimize', []).then(() => undefined),
@@ -226,34 +226,34 @@ function buildApi(): AppAPI {
       openPath: (path: string): Promise<string> => invoke('shell:open-path', [path]) as Promise<string>
     },
     vibe: {
-      getConfig: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-config', scopeArgs(scope, cwd)),
-      saveConfig: (config: unknown, scope?: string, cwd?: string): Promise<void> =>
-        invoke('vibe:save-config', [config, ...scopeArgs(scope, cwd)]).then(() => undefined),
-      getRawConfig: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-raw-config', scopeArgs(scope, cwd)),
-      saveRawConfig: (content: string, scope?: string, cwd?: string): Promise<unknown> =>
-        invoke('vibe:save-raw-config', [content, ...scopeArgs(scope, cwd)]),
-      getAgents: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-agents', scopeArgs(scope, cwd)),
-      saveAgent: (name: string, config: unknown, scope?: string, cwd?: string): Promise<void> =>
-        invoke('vibe:save-agent', [name, config, ...scopeArgs(scope, cwd)]).then(() => undefined),
-      deleteAgent: (name: string, scope?: string, cwd?: string): Promise<void> =>
-        invoke('vibe:delete-agent', [name, ...scopeArgs(scope, cwd)]).then(() => undefined),
-      getPrompts: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-prompts', scopeArgs(scope, cwd)),
-      savePrompt: (name: string, content: string, scope?: string, cwd?: string): Promise<void> =>
-        invoke('vibe:save-prompt', [name, content, ...scopeArgs(scope, cwd)]).then(() => undefined),
-      deletePrompt: (name: string, scope?: string, cwd?: string): Promise<void> =>
-        invoke('vibe:delete-prompt', [name, ...scopeArgs(scope, cwd)]).then(() => undefined),
-      getSkills: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-skills', scopeArgs(scope, cwd)),
-      getDir: (scope?: string, cwd?: string): Promise<string> =>
-        invoke('vibe:get-dir', scopeArgs(scope, cwd)) as Promise<string>,
-      listConfigFiles: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:list-config-files', scopeArgs(scope, cwd)),
-      createSkill: (name: string, scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:create-skill', [name, ...scopeArgs(scope, cwd)]),
-      deleteSkill: (name: string, scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:delete-skill', [name, ...scopeArgs(scope, cwd)]),
-      writeSkillFile: (name: string, relPath: string, content: string, scope?: string, cwd?: string): Promise<unknown> =>
-        invoke('vibe:write-skill-file', [name, relPath, content, ...scopeArgs(scope, cwd)]),
-      deleteSkillFile: (name: string, relPath: string, scope?: string, cwd?: string): Promise<unknown> =>
-        invoke('vibe:delete-skill-file', [name, relPath, ...scopeArgs(scope, cwd)]),
-      importSkill: (src: string, isZip: boolean, scope?: string, cwd?: string): Promise<unknown> =>
-        invoke('vibe:import-skill', [src, isZip, ...scopeArgs(scope, cwd)])
+      getConfig: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-config', scopeArgs(scope, cwd, remoteId)),
+      saveConfig: (config: unknown, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:save-config', [config, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
+      getRawConfig: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-raw-config', scopeArgs(scope, cwd, remoteId)),
+      saveRawConfig: (content: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> =>
+        invoke('vibe:save-raw-config', [content, ...scopeArgs(scope, cwd, remoteId)]),
+      getAgents: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-agents', scopeArgs(scope, cwd, remoteId)),
+      saveAgent: (name: string, config: unknown, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:save-agent', [name, config, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
+      deleteAgent: (name: string, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:delete-agent', [name, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
+      getPrompts: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-prompts', scopeArgs(scope, cwd, remoteId)),
+      savePrompt: (name: string, content: string, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:save-prompt', [name, content, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
+      deletePrompt: (name: string, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:delete-prompt', [name, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
+      getSkills: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-skills', scopeArgs(scope, cwd, remoteId)),
+      getDir: (scope?: string, cwd?: string, remoteId?: string): Promise<string> =>
+        invoke('vibe:get-dir', scopeArgs(scope, cwd, remoteId)) as Promise<string>,
+      listConfigFiles: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:list-config-files', scopeArgs(scope, cwd, remoteId)),
+      createSkill: (name: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:create-skill', [name, ...scopeArgs(scope, cwd, remoteId)]),
+      deleteSkill: (name: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:delete-skill', [name, ...scopeArgs(scope, cwd, remoteId)]),
+      writeSkillFile: (name: string, relPath: string, content: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> =>
+        invoke('vibe:write-skill-file', [name, relPath, content, ...scopeArgs(scope, cwd, remoteId)]),
+      deleteSkillFile: (name: string, relPath: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> =>
+        invoke('vibe:delete-skill-file', [name, relPath, ...scopeArgs(scope, cwd, remoteId)]),
+      importSkill: (src: string, isZip: boolean, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> =>
+        invoke('vibe:import-skill', [src, isZip, ...scopeArgs(scope, cwd, remoteId)])
     },
     serve: {
       status: (): Promise<unknown> => invoke('serve:status', []),

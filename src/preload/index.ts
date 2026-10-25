@@ -47,7 +47,7 @@ export interface GitCommit {
 }
 
 /** Config scope for vibe settings: global (~/.vibe) or project (<cwd>/.vibe). */
-export type VibeScope = 'global' | 'project'
+export type VibeScope = 'global' | 'project' | 'remote'
 
 /** Serve (HTTPS web hosting) status */
 export interface ServeStatus {
@@ -221,42 +221,42 @@ const api = {
   vibe: {
     // scope/cwd select the global (~/.vibe) or the project (<cwd>/.vibe) config;
     // they default to the global scope so legacy no-argument calls keep working
-    getConfig: (scope?: VibeScope, cwd?: string): Promise<unknown> =>
-      ipcRenderer.invoke('vibe:get-config', scope ?? 'global', cwd ?? ''),
-    saveConfig: (config: unknown, scope?: VibeScope, cwd?: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:save-config', config, scope ?? 'global', cwd ?? ''),
-    getRawConfig: (scope?: VibeScope, cwd?: string): Promise<{ content: string; error: string | null }> =>
-      ipcRenderer.invoke('vibe:get-raw-config', scope ?? 'global', cwd ?? ''),
-    saveRawConfig: (content: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:save-raw-config', content, scope ?? 'global', cwd ?? ''),
-    getAgents: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('vibe:get-agents', scope ?? 'global', cwd ?? ''),
-    saveAgent: (name: string, config: unknown, scope?: VibeScope, cwd?: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:save-agent', name, config, scope ?? 'global', cwd ?? ''),
-    deleteAgent: (name: string, scope?: VibeScope, cwd?: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:delete-agent', name, scope ?? 'global', cwd ?? ''),
-    getPrompts: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('vibe:get-prompts', scope ?? 'global', cwd ?? ''),
-    savePrompt: (name: string, content: string, scope?: VibeScope, cwd?: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:save-prompt', name, content, scope ?? 'global', cwd ?? ''),
-    deletePrompt: (name: string, scope?: VibeScope, cwd?: string): Promise<void> =>
-      ipcRenderer.invoke('vibe:delete-prompt', name, scope ?? 'global', cwd ?? ''),
-    getSkills: (scope?: VibeScope, cwd?: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('vibe:get-skills', scope ?? 'global', cwd ?? ''),
-    getDir: (scope?: VibeScope, cwd?: string): Promise<string> =>
-      ipcRenderer.invoke('vibe:get-dir', scope ?? 'global', cwd ?? ''),
-    listConfigFiles: (scope?: VibeScope, cwd?: string): Promise<Array<{ path: string; full: string }>> =>
-      ipcRenderer.invoke('vibe:list-config-files', scope ?? 'global', cwd ?? ''),
-    createSkill: (name: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:create-skill', name, scope ?? 'global', cwd ?? ''),
-    deleteSkill: (name: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:delete-skill', name, scope ?? 'global', cwd ?? ''),
-    writeSkillFile: (name: string, relPath: string, content: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:write-skill-file', name, relPath, content, scope ?? 'global', cwd ?? ''),
-    deleteSkillFile: (name: string, relPath: string, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:delete-skill-file', name, relPath, scope ?? 'global', cwd ?? ''),
-    importSkill: (src: string, isZip: boolean, scope?: VibeScope, cwd?: string): Promise<string | null> =>
-      ipcRenderer.invoke('vibe:import-skill', src, isZip, scope ?? 'global', cwd ?? '')
+    getConfig: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<unknown> =>
+      ipcRenderer.invoke('vibe:get-config', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    saveConfig: (config: unknown, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-config', config, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    getRawConfig: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<{ content: string; error: string | null }> =>
+      ipcRenderer.invoke('vibe:get-raw-config', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    saveRawConfig: (content: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:save-raw-config', content, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    getAgents: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-agents', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    saveAgent: (name: string, config: unknown, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-agent', name, config, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    deleteAgent: (name: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:delete-agent', name, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    getPrompts: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-prompts', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    savePrompt: (name: string, content: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:save-prompt', name, content, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    deletePrompt: (name: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:delete-prompt', name, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    getSkills: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<unknown[]> =>
+      ipcRenderer.invoke('vibe:get-skills', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    getDir: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string> =>
+      ipcRenderer.invoke('vibe:get-dir', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    listConfigFiles: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<Array<{ path: string; full: string }>> =>
+      ipcRenderer.invoke('vibe:list-config-files', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    createSkill: (name: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:create-skill', name, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    deleteSkill: (name: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:delete-skill', name, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    writeSkillFile: (name: string, relPath: string, content: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:write-skill-file', name, relPath, content, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    deleteSkillFile: (name: string, relPath: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:delete-skill-file', name, relPath, scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    importSkill: (src: string, isZip: boolean, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('vibe:import-skill', src, isZip, scope ?? 'global', cwd ?? '', remoteId ?? '')
   },
   serve: {
     status: (): Promise<ServeStatus> => ipcRenderer.invoke('serve:status'),

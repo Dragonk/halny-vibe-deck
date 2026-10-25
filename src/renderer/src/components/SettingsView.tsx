@@ -271,19 +271,24 @@ export default function SettingsView(): React.JSX.Element {
   const [mcpJsonMode, setMcpJsonMode] = useState(false)
   const [mcpJsonText, setMcpJsonText] = useState('')
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
-  const [scope, setScope] = useState<'global' | 'project'>('global')
+  const [scope, setScope] = useState<'global' | 'project' | 'remote'>('global')
   const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+  const [remoteScopeId, setRemoteScopeId] = useState<string | null>(null)
+  const effectiveRemoteId =
+    remoteScopeId ?? (config.remoteConnections ?? []).find((c) => c.enabled)?.id ?? null
+  const vibeRemoteId = scope === 'remote' ? (effectiveRemoteId ?? undefined) : undefined
 
   useEffect(() => {
     setLocal({ ...config })
   }, [config])
 
-  const loadVibeData = useCallback(async (targetScope: 'global' | 'project' = scope, targetCwd: string = projectCwd): Promise<void> => {
+  const loadVibeData = useCallback(async (targetScope: 'global' | 'project' | 'remote' = scope, targetCwd: string = projectCwd): Promise<void> => {
+    const targetRemoteId = targetScope === 'remote' ? (effectiveRemoteId ?? undefined) : undefined
     const [cfg, agents, prompts, skills] = await Promise.all([
-      window.api.vibe.getConfig(targetScope, targetCwd),
-      window.api.vibe.getAgents(targetScope, targetCwd),
-      window.api.vibe.getPrompts(targetScope, targetCwd),
-      window.api.vibe.getSkills(targetScope, targetCwd)
+      window.api.vibe.getConfig(targetScope, targetCwd, targetRemoteId),
+      window.api.vibe.getAgents(targetScope, targetCwd, targetRemoteId),
+      window.api.vibe.getPrompts(targetScope, targetCwd, targetRemoteId),
+      window.api.vibe.getSkills(targetScope, targetCwd, targetRemoteId)
     ])
     setVibeConfig(cfg as VibeConfig)
     setVibeAgents(agents as VibeAgentConfig[])
@@ -297,7 +302,7 @@ export default function SettingsView(): React.JSX.Element {
       setGlobalModels([])
     }
     setLoaded(true)
-  }, [scope, projectCwd])
+  }, [scope, projectCwd, effectiveRemoteId])
 
   useEffect(() => {
     loadVibeData()
@@ -308,9 +313,9 @@ export default function SettingsView(): React.JSX.Element {
     setConfig(local)
     setWorkingDirectory(local.workingDirectory)
     setSandboxEnabled(local.sandboxEnabled)
-    await window.api.vibe.saveConfig(vibeConfig, scope, projectCwd)
+    await window.api.vibe.saveConfig(vibeConfig, scope, projectCwd, vibeRemoteId)
     
-    if (tab !== 'general' && tab !== 'acp' && acpStatus === 'connected') {
+    if (tab !== 'general' && acpStatus === 'connected') {
       await window.api.acp.stop()
       await new Promise(resolve => setTimeout(resolve, 1000))
       if (local.acpPath) {
@@ -492,7 +497,7 @@ export default function SettingsView(): React.JSX.Element {
     if (!selectedSkillFile || selectedSkillFile.isDir) return
     let cancelled = false
     setSkillFileReady(null)
-    window.api.fs.readText(selectedSkillFile.full).then((res) => {
+    window.api.fs.readText(selectedSkillFile.full, vibeRemoteId).then((res) => {
       if (cancelled) return
       setSkillFileDraft(res.error ? '' : res.content)
       setSkillFileReady(selectedSkillFile.full)
@@ -508,7 +513,7 @@ export default function SettingsView(): React.JSX.Element {
   const handleCreateSkill = async (): Promise<void> => {
     const name = newSkillName.trim()
     if (!name) return
-    const err = await window.api.vibe.createSkill(name, scope, projectCwd)
+    const err = await window.api.vibe.createSkill(name, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     setNewSkillName('')
     await loadVibeData()
@@ -519,14 +524,14 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleDeleteSkill = async (skill: VibeSkill): Promise<void> => {
     if (!window.confirm(tr.deleteSkillConfirm.replace('{{name}}', skill.name))) return
-    const err = await window.api.vibe.deleteSkill(skill.name, scope, projectCwd)
+    const err = await window.api.vibe.deleteSkill(skill.name, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     setSelectedSkillIdx(null)
     await loadVibeData()
   }
 
   const handleSaveSkillMd = async (skill: VibeSkill): Promise<void> => {
-    const err = await window.api.vibe.writeSkillFile(skill.name, 'SKILL.md', skillMdDraft, scope, projectCwd)
+    const err = await window.api.vibe.writeSkillFile(skill.name, 'SKILL.md', skillMdDraft, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     await loadVibeData()
   }
@@ -534,7 +539,7 @@ export default function SettingsView(): React.JSX.Element {
   const handleAddSkillFile = async (skill: VibeSkill): Promise<void> => {
     const rel = newSkillFileName.trim()
     if (!rel) return
-    const err = await window.api.vibe.writeSkillFile(skill.name, rel, '', scope, projectCwd)
+    const err = await window.api.vibe.writeSkillFile(skill.name, rel, '', scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     setNewSkillFileName('')
     await loadVibeData()
@@ -543,14 +548,14 @@ export default function SettingsView(): React.JSX.Element {
   const handleSaveSkillFile = async (skill: VibeSkill): Promise<void> => {
     if (!selectedSkillFile) return
     const content = skillDocRef.current?.() ?? skillFileDraft
-    const err = await window.api.vibe.writeSkillFile(skill.name, selectedSkillFile.path, content, scope, projectCwd)
+    const err = await window.api.vibe.writeSkillFile(skill.name, selectedSkillFile.path, content, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     await loadVibeData()
   }
 
   const handleDeleteSkillFileBtn = async (skill: VibeSkill, relPath: string): Promise<void> => {
     if (!window.confirm(tr.deleteFileConfirm.replace('{{path}}', relPath))) return
-    const err = await window.api.vibe.deleteSkillFile(skill.name, relPath, scope, projectCwd)
+    const err = await window.api.vibe.deleteSkillFile(skill.name, relPath, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     if (selectedSkillFile?.path === relPath) setSelectedSkillFile(null)
     await loadVibeData()
@@ -559,7 +564,7 @@ export default function SettingsView(): React.JSX.Element {
   const handleImportSkillFolder = async (): Promise<void> => {
     const folder = await window.api.dialog.openFolder()
     if (!folder) return
-    const err = await window.api.vibe.importSkill(folder, false, scope, projectCwd)
+    const err = await window.api.vibe.importSkill(folder, false, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     await loadVibeData()
   }
@@ -567,13 +572,14 @@ export default function SettingsView(): React.JSX.Element {
   const handleImportSkillZip = async (): Promise<void> => {
     const file = await window.api.dialog.openFile()
     if (!file) return
-    const err = await window.api.vibe.importSkill(file, true, scope, projectCwd)
+    const err = await window.api.vibe.importSkill(file, true, scope, projectCwd, vibeRemoteId)
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     await loadVibeData()
   }
 
   const handleOpenSkillsFolder = async (): Promise<void> => {
-    const dir = await window.api.vibe.getDir(scope, projectCwd)
+    const dir = await window.api.vibe.getDir(scope, projectCwd, vibeRemoteId)
+    if (scope === 'remote') return
     const skillsDir = `${dir}/skills`
     await window.api.shell.openPath(skillsDir)
   }
@@ -581,12 +587,12 @@ export default function SettingsView(): React.JSX.Element {
   const loadRawToml = useCallback(async (): Promise<void> => {
     setRawTomlError(null)
     setRawReadyFile(null)
-    const res = await window.api.vibe.getRawConfig(scope, projectCwd)
+    const res = await window.api.vibe.getRawConfig(scope, projectCwd, vibeRemoteId)
     if (res.error) setRawTomlError(res.error)
     else setRawTomlError(null)
     setRawToml(res.content)
     setRawReadyFile('__config__')
-  }, [scope, projectCwd])
+  }, [scope, projectCwd, vibeRemoteId])
 
   // Reload the raw TOML whenever the scope (or project cwd) changes —
   // the textarea must always show the config of the current scope.
@@ -597,13 +603,13 @@ export default function SettingsView(): React.JSX.Element {
     setRawToml(null)
     setRawReadyFile(null)
     void loadRawToml()
-  }, [scope, projectCwd])
+  }, [scope, projectCwd, vibeRemoteId])
 
   // Show the .vibe directory tree of the current scope next to the editor.
   useEffect(() => {
     if (tab !== 'raw') return
     window.api.vibe
-      .getDir(scope, projectCwd)
+      .getDir(scope, projectCwd, vibeRemoteId)
       .then((dir) => setVibeCfgDir(dir))
       .catch(console.error)
   }, [tab, scope, projectCwd])
@@ -620,7 +626,7 @@ export default function SettingsView(): React.JSX.Element {
     const target = full ?? configFiles.find((x) => x.path === rel)?.full ?? null
     if (!target) return
     setSelectedCfgFileFull(target)
-    const res = await window.api.fs.readText(target)
+    const res = await window.api.fs.readText(target, vibeRemoteId)
     if (res.error) {
       setRawTomlError(res.error)
       return
@@ -635,9 +641,9 @@ export default function SettingsView(): React.JSX.Element {
     let err: string | null = null
     if (selectedCfgFile !== null) {
       const target = selectedCfgFileFull ?? configFiles.find((x) => x.path === selectedCfgFile)?.full ?? null
-      if (target) err = (await window.api.fs.writeText(target, content)).error
+      if (target) err = (await window.api.fs.writeText(target, content, vibeRemoteId)).error
     } else {
-      err = await window.api.vibe.saveRawConfig(content, scope, projectCwd)
+      err = await window.api.vibe.saveRawConfig(content, scope, projectCwd, vibeRemoteId)
     }
     if (err) {
       setRawTomlError(err)
@@ -651,20 +657,20 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleRenameAgent = async (oldName: string, newName: string, agentConfig: VibeAgentConfig): Promise<void> => {
     if (newName && newName !== oldName) {
-      await window.api.vibe.deleteAgent(oldName, scope, projectCwd)
+      await window.api.vibe.deleteAgent(oldName, scope, projectCwd, vibeRemoteId)
       const { name: _, ...configWithoutName } = agentConfig
-      await window.api.vibe.saveAgent(newName, { ...configWithoutName, name: newName }, scope, projectCwd)
+      await window.api.vibe.saveAgent(newName, { ...configWithoutName, name: newName }, scope, projectCwd, vibeRemoteId)
       await loadVibeData()
     }
   }
 
   const handleSaveAgent = async (name: string, agentConfig: VibeAgentConfig): Promise<void> => {
-    await window.api.vibe.saveAgent(name, agentConfig, scope, projectCwd)
+    await window.api.vibe.saveAgent(name, agentConfig, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
   const handleDeleteAgent = async (name: string): Promise<void> => {
-    await window.api.vibe.deleteAgent(name, scope, projectCwd)
+    await window.api.vibe.deleteAgent(name, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
@@ -678,7 +684,7 @@ export default function SettingsView(): React.JSX.Element {
       disabled_tools: [],
       enabled_tools: []
     }
-    await window.api.vibe.saveAgent(name, newAgent, scope, projectCwd)
+    await window.api.vibe.saveAgent(name, newAgent, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
@@ -731,20 +737,20 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleSavePrompt = async (oldName: string, newName: string, content: string): Promise<void> => {
     if (newName !== oldName) {
-      await window.api.vibe.deletePrompt(oldName, scope, projectCwd)
+      await window.api.vibe.deletePrompt(oldName, scope, projectCwd, vibeRemoteId)
     }
-    await window.api.vibe.savePrompt(newName, content, scope, projectCwd)
+    await window.api.vibe.savePrompt(newName, content, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
   const handleDeletePrompt = async (name: string): Promise<void> => {
-    await window.api.vibe.deletePrompt(name, scope, projectCwd)
+    await window.api.vibe.deletePrompt(name, scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
   const handleAddPrompt = async (): Promise<void> => {
     const name = `prompt-${Date.now()}`
-    await window.api.vibe.savePrompt(name, '# New Prompt\n\nWrite your prompt here with {{variables}}.', scope, projectCwd)
+    await window.api.vibe.savePrompt(name, '# New Prompt\n\nWrite your prompt here with {{variables}}.', scope, projectCwd, vibeRemoteId)
     await loadVibeData()
   }
 
@@ -964,6 +970,15 @@ export default function SettingsView(): React.JSX.Element {
               >
                 {tr.settingsScopeGlobal}
               </button>
+              {(config.remoteConnections ?? []).filter((c) => c.enabled).map((c) => (
+                <button
+                  key={'scp-' + c.id}
+                  className={`scope-pill ${scope === 'remote' && effectiveRemoteId === c.id ? 'active' : ''}`}
+                  onClick={() => { setScope('remote'); setRemoteScopeId(c.id); setRawToml(null) }}
+                >
+                  📍 {c.name}
+                </button>
+              ))}
               <button
                 className={`scope-pill ${scope === 'project' ? 'active' : ''}`}
                 disabled={!projectCwd}
@@ -975,7 +990,13 @@ export default function SettingsView(): React.JSX.Element {
             </div>
           )}
           {CLI_SCOPED_TABS.has(tab) && (
-            <span className="scope-path">{scope === 'project' ? projectCwd + '/.vibe' : '~/.vibe'}</span>
+            <span className="scope-path">
+              {scope === 'project'
+                ? projectCwd + '/.vibe'
+                : scope === 'remote'
+                  ? ((config.remoteConnections ?? []).find((c) => c.id === effectiveRemoteId)?.name ?? 'remote') + ': ~/.vibe'
+                  : '~/.vibe'}
+            </span>
           )}
         </div>
         <div className="settings-tabs">
@@ -985,17 +1006,19 @@ export default function SettingsView(): React.JSX.Element {
           >
             {tr.general}
           </button>
+          {!web && (
+            <button
+              className={`settings-tab ${tab === 'serve' ? 'active' : ''}`}
+              onClick={() => setTab('serve')}
+            >
+              {tr.serveTab}
+            </button>
+          )}
           <button
-            className={`settings-tab ${tab === 'acp' ? 'active' : ''}`}
-            onClick={() => setTab('acp')}
+            className={`settings-tab ${tab === 'remote' ? 'active' : ''}`}
+            onClick={() => setTab('remote')}
           >
-            {tr.acpAgent}
-          </button>
-          <button
-            className={`settings-tab ${tab === 'sandbox' ? 'active' : ''}`}
-            onClick={() => setTab('sandbox')}
-          >
-            {tr.sandbox}
+            {tr.remoteTab}
           </button>
           <button
             className={`settings-tab ${tab === 'agents' ? 'active' : ''}`}
@@ -1047,20 +1070,6 @@ export default function SettingsView(): React.JSX.Element {
             }}
           >
             {tr.rawConfig}
-          </button>
-          {!web && (
-            <button
-              className={`settings-tab ${tab === 'serve' ? 'active' : ''}`}
-              onClick={() => setTab('serve')}
-            >
-              {tr.serveTab}
-            </button>
-          )}
-          <button
-            className={`settings-tab ${tab === 'remote' ? 'active' : ''}`}
-            onClick={() => setTab('remote')}
-          >
-            {tr.remoteTab}
           </button>
         </div>
       </div>
@@ -1140,7 +1149,7 @@ export default function SettingsView(): React.JSX.Element {
           </div>
         )}
 
-        {tab === 'acp' && (
+        {tab === 'general' && (
           <div className="settings-section">
             <div className="field">
               <label className="field-label">{tr.vibeAcpPath}</label>
@@ -1174,7 +1183,7 @@ export default function SettingsView(): React.JSX.Element {
           </div>
         )}
 
-        {tab === 'sandbox' && (
+        {tab === 'general' && (
           <div className="settings-section">
             <div className="sandbox-planned-card">
               <span className="sandbox-planned-badge">{tr.sandboxPlannedBadge}</span>
@@ -1923,6 +1932,7 @@ export default function SettingsView(): React.JSX.Element {
                             {skill.dir ? (
                               <DirTree
                                 rootDir={skill.dir}
+                                remoteId={vibeRemoteId}
                                 selectedFull={selectedSkillFile?.full ?? null}
                                 onSelect={(sel) => {
                                   if (!sel.isDir) setSelectedSkillFile({ path: sel.rel, full: sel.full, isDir: false })
@@ -2370,6 +2380,7 @@ export default function SettingsView(): React.JSX.Element {
               {vibeCfgDir ? (
                 <DirTree
                   rootDir={vibeCfgDir}
+                  remoteId={vibeRemoteId}
                   selectedFull={selectedCfgFileFull}
                   onSelect={(sel) => {
                     if (sel.isDir) return

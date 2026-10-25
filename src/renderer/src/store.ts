@@ -153,6 +153,7 @@ interface AppStore {
   unhideSessions: (keys: string[]) => void;
   unhideProject: (workingDirectory: string) => void;
   reactivateHistorySession: (vibe: VibeSession) => Promise<void>;
+  reactivateRemoteSession: (remoteId: string, acpSessionId: string, cwd: string, title: string | null) => Promise<void>;
 
   // Projects (sidebar grouping)
   collapsedProjects: string[];
@@ -580,6 +581,25 @@ export const useStore = create<AppStore>((set, get) => ({
         acpSessionId: vibe.sessionId,
         name: vibe.title ?? created.name,
         workingDirectory: vibe.environment?.workingDirectory || created.workingDirectory,
+      });
+    }
+    get().setCurrentView("chat");
+    await get().loadAcpSession(localId);
+  },
+
+  reactivateRemoteSession: async (remoteId, acpSessionId, cwd, title) => {
+    const existing = get().sessions.find(
+      (s) => s.acpSessionId === acpSessionId && s.remoteId === remoteId,
+    );
+    let localId = existing?.id;
+    if (!localId) {
+      const created = get().addSession(cwd || "");
+      localId = created.id;
+      get().updateSession(localId, {
+        acpSessionId,
+        remoteId,
+        name: title ?? created.name,
+        workingDirectory: cwd || created.workingDirectory,
       });
     }
     get().setCurrentView("chat");

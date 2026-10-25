@@ -17,6 +17,7 @@ interface Props {
   onDeleteFile?: (sel: DirTreeSelection) => void
   deleteTitle?: string
   refreshKey?: string | number
+  remoteId?: string | null
 }
 
 export default function DirTree({
@@ -26,13 +27,14 @@ export default function DirTree({
   onDeleteFile,
   deleteTitle,
   refreshKey,
+  remoteId,
 }: Props): React.JSX.Element {
   const [entriesByDir, setEntriesByDir] = useState<Record<string, Array<{ name: string; isDir: boolean }>>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const loadDir = useCallback(async (dir: string): Promise<void> => {
     try {
-      const res = await window.api.fs.listDir(dir)
+      const res = await window.api.fs.listDir(dir, remoteId ?? undefined)
       const sorted = [...(res ?? [])].sort((a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
         return a.name.localeCompare(b.name)

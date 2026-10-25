@@ -154,6 +154,18 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
     const sessions: RemoteSessionInfo[] = []
     let initId = ""
     let listId = ""
+    let cursor = ""
+    let pages = 0
+    // The wire layer can paginate session/list (next_cursor); follow every
+    // page so remote history is never truncated to the first page.
+    const requestList = (): void => {
+      listId = randomUUID()
+      const params: Record<string, unknown> = {}
+      if (cursor !== "") params["cursor"] = cursor
+      proc.stdin?.write(
+        JSON.stringify({ jsonrpc: "2.0", id: listId, method: "session/list", params }) + "\n",
+      )
+    }
     let done = false
     const finish = (): void => {
       if (done) return
@@ -175,8 +187,7 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
       if (!id) return
       const result = (msg.result ?? {}) as Record<string, unknown>
       if (id === initId) {
-        listId = randomUUID()
-        proc.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id: listId, method: "session/list", params: {} }) + "\n")
+        requestList()
       } else if (id === listId) {
         const raw = (result.sessions ?? result.items ?? []) as Array<Record<string, unknown>>
         for (const s of raw) {
@@ -189,7 +200,14 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
             updatedAt: (s.updatedAt ?? s.updated_at ?? s.startTime ?? "") as string,
           })
         }
-        finish()
+        const nextCursor = (result.next_cursor ?? result.nextCursor ?? null) as string | null
+        if (nextCursor && nextCursor !== "" && pages < 20) {
+          pages += 1
+          cursor = nextCursor
+          requestList()
+        } else {
+          finish()
+        }
       }
     })
     proc.on("error", finish)
@@ -205,9 +223,8 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
     )
     setTimeout(() => {
       if (!done && listId === "") {
-        listId = randomUUID()
         try {
-          proc.stdin?.write(JSON.stringify({ jsonrpc: "2.0", id: listId, method: "session/list", params: {} }) + "\n")
+          requestList()
         } catch { finish() }
       }
     }, 15000)

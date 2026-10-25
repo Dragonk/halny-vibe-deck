@@ -889,9 +889,27 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   const handleStop = useCallback(() => {
     const sess = currentSession()
     const acpSessId = sess?.acpSessionId
-    if (acpSessId) {
-      window.api.acp.cancelSession(acpSessId, sess?.remoteId ?? undefined).catch(console.error)
-    }
+    if (!acpSessId || !sess?.id) return
+    window.api.acp.cancelSession(acpSessId, sess?.remoteId ?? undefined).catch(console.error)
+    // v0.8.1: a stuck turn (e.g. the remote CLI waiting for an MCP OAuth
+    // login) never emits a turn end, so the session stays busy forever and
+    // nothing can be sent. Give the CLI 4 s to acknowledge session/cancel,
+    // then force-release the UI; for remote sessions also restart the stuck
+    // worker when no other session on that host is busy, so the next
+    // prompt gets a fresh transport.
+    const localId = sess.id
+    const rid = sess.remoteId ?? null
+    window.setTimeout(() => {
+      const st = useStore.getState()
+      if (!st.busySessions.includes(localId)) return
+      st.markSessionIdle(localId)
+      if (rid) {
+        const othersBusy = st.sessions.some(
+          (s) => s.remoteId === rid && s.id !== localId && st.busySessions.includes(s.id),
+        )
+        if (!othersBusy) window.api.acp.stopWorker(rid).catch(console.error)
+      }
+    }, 4000)
   }, [currentSession])
 
   const currentWd = currentSessionWorkingDirectory()
