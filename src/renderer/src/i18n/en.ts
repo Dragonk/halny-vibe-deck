@@ -60,6 +60,7 @@ export const en = {
   agentModeHint: 'Agents of type "agent" appear as selectable modes in the session mode picker',
   agentTypeHint: 'Agents appear as modes in the session mode picker; subagents are offered to the model via the task tool',
   agentSafetyLabel: 'Safety',
+  closePanelLabel: 'Close panel',
   agentSafetyHint: 'Permission behavior when this agent is the active mode. yolo auto-approves every tool call and requires enable_auto_approve',
   agentSystemPromptHint: 'Built-in prompt or a .md file from the Prompts tab. For subagents it is the base system prompt unless inline instructions are set',
   agentInstructionsHint: 'Inline system prompt of the spawned subagent - it replaces the entire system prompt. Leave empty to use the selected prompt above',

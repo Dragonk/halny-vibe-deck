@@ -60,6 +60,7 @@ export const fr = {
   agentModeHint: 'Les agents de type "agent" apparaissent comme modes sélectionnables dans le sélecteur de mode de session',
   agentTypeHint: 'Les agents apparaissent comme modes dans le sélecteur de mode de session ; les sous-agents sont proposés au modèle via l\'outil task',
   agentSafetyLabel: 'Sécurité',
+  closePanelLabel: 'Fermer le panneau',
   agentSafetyHint: 'Comportement des autorisations quand cet agent est le mode actif. yolo approuve automatiquement chaque appel d\'outil et nécessite enable_auto_approve',
   agentSystemPromptHint: 'Prompt intégré ou fichier .md de l\'onglet Prompts. Pour un sous-agent, c\'est le prompt système de base sauf si des instructions sont définies ci-dessous',
   agentInstructionsHint: 'Prompt système du sous-agent créé - il remplace tout le prompt système. Laisser vide pour utiliser le prompt sélectionné ci-dessus',

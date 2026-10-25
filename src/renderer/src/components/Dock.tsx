@@ -80,6 +80,13 @@ export default function Dock(): React.JSX.Element | null {
       style={{ width: dockWidth }}
     >
       <div className="dock-resize-handle" onMouseDown={handleMouseDown} />
+      <button
+        className="mobile-panel-close"
+        title={tr.closePanelLabel}
+        onClick={() => useStore.getState().setDockOpen(false)}
+      >
+        ✕
+      </button>
       <div className="dock-tabs">
         <button
           className={`dock-tab ${activeTabKind === 'files' ? 'active' : ''}`}

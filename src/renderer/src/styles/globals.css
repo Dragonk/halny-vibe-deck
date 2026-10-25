@@ -5681,25 +5681,31 @@ code {
     background: rgba(0, 0, 0, 0.45);
     z-index: 38;
 }
+/* v0.10.4: explicit close button for the fullscreen mobile panels */
+.mobile-panel-close { display: none; }
 .header-menu-btn { display: none; }
 .session-item { -webkit-touch-callout: none; }
 
 @media (max-width: 768px) {
     /* ===== v0.7.2: mobile refinements (PWA / serve mode) ===== */
-    /* dvh: the URL bar must not eat the input card on mobile browsers */
-    .app-root { height: 100dvh; }
+    /* dvh: the URL bar must not eat the input card on mobile browsers.
+       --vv-h (visual viewport height, kept in sync from App.tsx) also keeps
+       the input card above the on-screen keyboard. */
+    .app-root { height: var(--vv-h, 100dvh); }
 
     .header-menu-btn { display: flex; }
     /* the text does not fit next to the brand on a narrow bar; the dot stays */
     .activity-text { display: none; }
 
+    /* v0.10.4: panels go full-screen on phones - the screen is too small
+       to keep any free space beside them */
     .sidebar {
         position: fixed;
-        top: 40px;
+        top: 0;
         left: 0;
         bottom: 0;
         z-index: 40;
-        width: min(78vw, 300px) !important;
+        width: 100vw !important;
         transform: translateX(-105%);
         transition: transform 0.22s ease;
         box-shadow: 8px 0 24px rgba(0, 0, 0, 0.25);
@@ -5708,15 +5714,33 @@ code {
     .sidebar-resize-handle { display: none; }
     .dock {
         position: fixed;
-        top: 40px;
+        top: 0;
         right: 0;
         bottom: 0;
         z-index: 39;
-        width: min(92vw, 480px) !important;
+        width: 100vw !important;
         box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
     }
+    .mobile-scrim { top: 0; }
+    .mobile-panel-close {
+        display: flex;
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        z-index: 5;
+        width: 34px;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 8px;
+        background: var(--panel-hover);
+        color: var(--text);
+        font-size: 16px;
+        cursor: pointer;
+    }
     .dock-resize-handle { display: none; }
-    .dock-tabs { overflow-x: auto; }
+    .dock-tabs { overflow-x: auto; padding-right: 46px; }
     .dock-tab-name {
         max-width: 90px;
         overflow: hidden;

@@ -60,6 +60,7 @@ export const de = {
   agentModeHint: 'Agenten vom Typ "agent" erscheinen als auswählbare Modi in der Modusauswahl der Sitzung',
   agentTypeHint: 'Agenten erscheinen als Modi in der Modusauswahl der Sitzung; Subagenten werden dem Modell über das task-Werkzeug angeboten',
   agentSafetyLabel: 'Sicherheit',
+  closePanelLabel: 'Panel schließen',
   agentSafetyHint: 'Berechtigungsverhalten, wenn dieser Agent der aktive Modus ist. yolo genehmigt jeden Werkzeugaufruf automatisch und erfordert enable_auto_approve',
   agentSystemPromptHint: 'Eingebauter Prompt oder .md-Datei aus dem Tab Prompts. Für Subagenten der Basis-System-Prompt, sofern keine Inline-Anweisungen gesetzt sind',
   agentInstructionsHint: 'Inline-System-Prompt des erzeugten Subagenten - er ersetzt den gesamten System-Prompt. Leer lassen, um den oben gewählten Prompt zu verwenden',

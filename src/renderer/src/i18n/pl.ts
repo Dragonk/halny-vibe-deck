@@ -60,6 +60,7 @@ export const pl = {
   agentModeHint: 'Agenci typu "agent" pojawiają się jako tryby w wyborze trybu sesji',
   agentTypeHint: 'Agenci są widoczni jako tryby w wyborze trybu sesji; subagenci są proponowani modelowi przez narzędzie task',
   agentSafetyLabel: 'Zabezpieczenia',
+  closePanelLabel: 'Zamknij panel',
   agentSafetyHint: 'Zachowanie uprawnień, gdy ten agent jest aktywnym trybem. yolo zatwierdza automatycznie każde wywołanie narzędzia i wymaga enable_auto_approve',
   agentSystemPromptHint: 'Wbudowany prompt lub plik .md z zakładki Prompty. Dla subagenta to bazowy system prompt, chyba że podasz instrukcje poniżej',
   agentInstructionsHint: 'Wbudowany system prompt tworzonego subagenta - zastępuje cały system prompt. Pozostaw puste, aby użyć promptu wybranego powyżej',

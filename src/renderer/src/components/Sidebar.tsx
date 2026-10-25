@@ -361,6 +361,13 @@ export default function Sidebar(): React.JSX.Element {
       className={`sidebar ${isResizing ? 'sidebar-resizing' : ''} ${mobileSidebarOpen ? 'mobile-open' : ''}`}
       style={{ width: sidebarWidth }}
     >
+      <button
+        className="mobile-panel-close"
+        title={tr.closePanelLabel}
+        onClick={() => setMobileSidebarOpen(false)}
+      >
+        ✕
+      </button>
 
       <div className="sidebar-sessions-label">{tr.sessions}</div>
 

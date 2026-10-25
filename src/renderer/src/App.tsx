@@ -655,36 +655,81 @@ export default function App(): React.JSX.Element {
     return () => window.clearInterval(iv)
   }, [remoteConnIds])
 
-  // v0.6.0: mobile gestures — swipe from the left edge reveals the sidebar,
-  // swipe from the right edge opens the dock (touch devices / PWA).
+  // v0.10.4: mobile gestures — swipes work anywhere on the screen, not just
+  // at the edges. Swipe right reveals the sidebar, swipe left reveals the
+  // dock; when a panel is on top the opposite swipe hides it (left hides the
+  // session list, right hides the previews). Touch devices / PWA.
   useEffect(() => {
     let startX = 0
     let startY = 0
-    let viewW = window.innerWidth
-    let fromEdge = false
+    let gestureOk = false
     const onTouchStart = (e: TouchEvent): void => {
       if (e.touches.length !== 1) return
+      if (!window.matchMedia('(max-width: 768px)').matches) {
+        gestureOk = false
+        return
+      }
       const t = e.touches[0]
       startX = t.clientX
       startY = t.clientY
-      viewW = window.innerWidth
-      fromEdge = startX <= 36 || startX >= viewW - 36
+      const el = e.target as HTMLElement | null
+      // Swipes start anywhere; skip touches that begin in text controls or
+      // horizontally scrollable strips so typing and tab swiping are never
+      // misread as gestures.
+      gestureOk =
+        !!el &&
+        !el.closest(
+          'input, textarea, [contenteditable="true"], pre, code, table, .dock-tabs',
+        )
     }
     const onTouchEnd = (e: TouchEvent): void => {
-      if (!fromEdge) return
-      fromEdge = false
+      if (!gestureOk || e.changedTouches.length !== 1) return
+      gestureOk = false
       const t = e.changedTouches[0]
       const dx = t.clientX - startX
-      const dy = Math.abs(t.clientY - startY)
-      if (dy > 80) return
-      if (startX <= 36 && dx > 60) useStore.getState().setMobileSidebarOpen(true)
-      else if (startX >= viewW - 36 && dx < -60) useStore.getState().ensureDockOpen()
+      const dy = t.clientY - startY
+      // A deliberate swipe: long enough and clearly horizontal (vertical
+      // scrolling must not trigger it).
+      if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return
+      const st = useStore.getState()
+      const sidebarOpen = st.mobileSidebarOpen
+      const dockVisible = st.dockOpen && st.currentView === 'chat'
+      if (dx > 0) {
+        // Swipe right: push the dock away, otherwise reveal the sidebar.
+        if (dockVisible) st.setDockOpen(false)
+        else if (!sidebarOpen) st.setMobileSidebarOpen(true)
+      } else {
+        // Swipe left: hide the session list, otherwise reveal the dock.
+        if (sidebarOpen) st.setMobileSidebarOpen(false)
+        else if (st.currentView === 'chat') st.ensureDockOpen()
+      }
     }
     window.addEventListener('touchstart', onTouchStart, { passive: true })
     window.addEventListener('touchend', onTouchEnd, { passive: true })
     return () => {
       window.removeEventListener('touchstart', onTouchStart)
       window.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
+
+  // v0.10.4: keep the input card above the on-screen keyboard. The layout
+  // height tracks the visual viewport (--vv-h, set here in JS), so when the
+  // keyboard appears the whole app - including the input card - shrinks to
+  // the visible area and the user sees what they are typing. The viewport
+  // meta (interactive-widget=resizes-content) covers browsers that resize
+  // the layout viewport natively; this handles the rest (e.g. iOS Safari).
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const onVv = (): void => {
+      document.documentElement.style.setProperty('--vv-h', Math.round(vv.height) + 'px')
+    }
+    vv.addEventListener('resize', onVv)
+    vv.addEventListener('scroll', onVv)
+    onVv()
+    return () => {
+      vv.removeEventListener('resize', onVv)
+      vv.removeEventListener('scroll', onVv)
     }
   }, [])
 
