@@ -2,11 +2,10 @@ import React, { useEffect, useRef } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 import MessageBubble from './MessageBubble'
-import MessageQueue from './MessageQueue'
 import InputBar from './InputBar'
 
 export default function ChatView(): React.JSX.Element {
-  const { currentSession, streamingSessions, busySessions, currentSessionId, acpStatus, acpError, config, pendingNewSession, messageQueue, pendingLoadSessionId, sessionLoadProgress } =
+  const { currentSession, streamingSessions, busySessions, stoppingSessions, currentSessionId, acpStatus, acpError, config, pendingNewSession, pendingLoadSessionId, sessionLoadProgress } =
     useStore()
   const tr = useTranslation(config.language)
   const session = pendingNewSession ? null : currentSession()
@@ -17,6 +16,8 @@ export default function ChatView(): React.JSX.Element {
   const isResuming = !!session && (session.loading || (!!session.acpSessionId && pendingLoadSessionId === session.acpSessionId))
   const resumeCount = session && sessionLoadProgress && session.acpSessionId === sessionLoadProgress.acpSessionId ? sessionLoadProgress.count : null
   const showAgentBusy = isCurrentSessionBusy && !isCurrentSessionStreaming
+  // v0.10.5: stop request in flight - say Stopping... instead of Agent working.
+  const isCurrentSessionStopping = currentSessionId != null && stoppingSessions.includes(currentSessionId)
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -26,7 +27,6 @@ export default function ChatView(): React.JSX.Element {
 
   return (
     <div className="chat-view-wrap">
-      <MessageQueue config={config} />
       <div className="chat-messages" ref={scrollRef}>
         <div className="chat-inner">
           {!session || (session.messages.length === 0 && !isResuming) ? (
@@ -79,7 +79,9 @@ export default function ChatView(): React.JSX.Element {
               {showAgentBusy && !isResuming && (
                 <div className="agent-busy-row">
                   <span className="agent-busy-dots"><span /><span /><span /></span>
-                  <span className="steps-shimmer">{tr.agentWorkingLabel}</span>
+                  <span className="steps-shimmer">
+                    {isCurrentSessionStopping ? tr.stoppingLabel : tr.agentWorkingLabel}
+                  </span>
                 </div>
               )}
             </div>

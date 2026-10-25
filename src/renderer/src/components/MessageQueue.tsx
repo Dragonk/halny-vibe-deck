@@ -1,25 +1,47 @@
 import React, { useState } from "react";
 import { useStore } from "../store";
-import { useTranslation } from "../i18n";
+import { useTranslation, t } from "../i18n";
 
 interface Props {
   config: import("../types").AppConfig;
 }
 
+const PencilIcon = (): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+    <path d="M8 21L21.5 7.5L16.5 2.5L3 16L3 21L8 21Z" stroke="currentColor" strokeWidth="2" strokeLinecap="square" fill="none" />
+  </svg>
+);
+
+const XIcon = (): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+    <path d="M20 4L4 20" stroke="currentColor" strokeWidth="2" strokeLinecap="square" fill="none" />
+    <path d="M4 4L20 20" stroke="currentColor" strokeWidth="2" strokeLinecap="square" fill="none" />
+  </svg>
+);
+
+const CheckIcon = (): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+    <path d="M20 6L9 17L4 12" stroke="currentColor" strokeWidth="2" strokeLinecap="square" fill="none" />
+  </svg>
+);
+
 export default function MessageQueue({ config }: Props): React.JSX.Element | null {
-  const { messageQueue, removeFromMessageQueue, updateQueueMessage, getNextQueuedMessage } = useStore();
+  const { messageQueue, removeFromMessageQueue, clearMessageQueue, updateQueueMessage } = useStore();
   const tr = useTranslation(config.language);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
 
   if (messageQueue.length === 0) return null;
 
-  const handleEdit = (id: string, content: string) => {
+  const count = messageQueue.length;
+  const title = t(tr, count === 1 ? "messageInQueueOne" : "messagesInQueue", { count });
+
+  const startEdit = (id: string, content: string) => {
     setEditingId(id);
     setEditText(content);
   };
 
-  const handleSaveEdit = (id: string) => {
+  const saveEdit = (id: string) => {
     if (editText.trim()) {
       updateQueueMessage(id, editText.trim());
     } else {
@@ -29,70 +51,58 @@ export default function MessageQueue({ config }: Props): React.JSX.Element | nul
     setEditText("");
   };
 
-  const handleCancelEdit = () => {
+  const cancelEdit = () => {
     setEditingId(null);
     setEditText("");
   };
 
   return (
-    <div className="message-queue-panel">
-      <div className="mq-header">
-        <span className="mq-title">{tr.messageQueue} ({messageQueue.length})</span>
-        <span className="mq-hint">{tr.messageQueueHint}</span>
+    <div className="msg-queue" role="list">
+      <div className="msg-queue-header">
+        <p className="msg-queue-title">{title}</p>
+        <button type="button" className="msg-queue-clear" onClick={clearMessageQueue}>
+          {tr.clearQueueLabel}
+        </button>
       </div>
-      <div className="mq-list">
+      <div className="msg-queue-list">
         {messageQueue.map((msg, idx) => (
-          <div key={msg.id} className="mq-item">
-            <div className="mq-item-header">
-              <span className="mq-item-num">#{idx + 1}</span>
-              <div className="mq-item-actions">
-                {editingId === msg.id ? (
-                  <>
-                    <button
-                      className="mq-btn mq-btn-save"
-                      onClick={() => handleSaveEdit(msg.id)}
-                      title={tr.mqSave}
-                    >
-                      ✓
-                    </button>
-                    <button
-                      className="mq-btn mq-btn-cancel"
-                      onClick={handleCancelEdit}
-                      title={tr.mqCancel}
-                    >
-                      ✕
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className="mq-btn mq-btn-edit"
-                      onClick={() => handleEdit(msg.id, msg.content)}
-                      title={tr.mqEdit}
-                    >
-                      ✎
-                    </button>
-                    <button
-                      className="mq-btn mq-btn-remove"
-                      onClick={() => removeFromMessageQueue(msg.id)}
-                      title={tr.mqRemove}
-                    >
-                      ×
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
+          <div key={msg.id} className="msg-queue-item" role="listitem">
+            <span className="msg-queue-num">{idx + 1}</span>
             {editingId === msg.id ? (
-              <textarea
-                className="mq-item-edit-input"
+              <input
+                className="msg-queue-edit"
                 value={editText}
                 onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveEdit(msg.id);
+                  if (e.key === "Escape") cancelEdit();
+                }}
                 autoFocus
               />
             ) : (
-              <div className="mq-item-content">{msg.content}</div>
+              <p className="msg-queue-text">{msg.content}</p>
             )}
+            <div className="msg-queue-actions">
+              {editingId === msg.id ? (
+                <>
+                  <button type="button" className="msg-queue-btn" onClick={() => saveEdit(msg.id)} title={tr.mqSave}>
+                    <CheckIcon />
+                  </button>
+                  <button type="button" className="msg-queue-btn" onClick={cancelEdit} title={tr.mqCancel}>
+                    <XIcon />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="msg-queue-btn" onClick={() => startEdit(msg.id, msg.content)} title={tr.mqEdit}>
+                    <PencilIcon />
+                  </button>
+                  <button type="button" className="msg-queue-btn" onClick={() => removeFromMessageQueue(msg.id)} title={tr.mqRemove}>
+                    <XIcon />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         ))}
       </div>

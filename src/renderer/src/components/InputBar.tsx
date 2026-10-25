@@ -5,6 +5,7 @@ import { resolveLanguage, translateModeName, translateModeDescription, translate
 import type { TermsLang } from '../i18n/terms'
 import type { AppConfig, ConfigOption, ConfigOptionChoice } from '../types'
 import UsageBar from './UsageBar'
+import MessageQueue from './MessageQueue'
 
 interface Props {
   config: AppConfig
@@ -181,6 +182,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     addRecentFolder,
     streamingSessions,
     busySessions,
+    stoppingSessions,
     addToMessageQueue,
   } = useStore()
 
@@ -955,6 +957,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
   const isSending = acpStatus === 'connecting' || isStarting
   const isCurrentSessionBusy = currentSessionId != null && busySessions.includes(currentSessionId)
+  // v0.10.5: stop request in flight - show explicit stopping feedback.
+  const isStoppingSession = currentSessionId != null && stoppingSessions.includes(currentSessionId)
   const canSend =
     (inputText.trim().length > 0 || pastedImages.length > 0) && !isSending && !isCurrentSessionBusy
 
@@ -962,7 +966,16 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     const sess = currentSession()
     const acpSessId = sess?.acpSessionId
     if (!acpSessId || !sess?.id) return
-    window.api.acp.cancelSession(acpSessId, sess?.remoteId ?? undefined).catch(console.error)
+    // v0.10.5: mark the session as stopping so the stop button and the busy
+    // row show explicit feedback while session/cancel is in flight;
+    // markSessionIdle clears the marker once the turn really ends (or when
+    // the force-release timer below fires).
+    useStore.getState().markSessionStopping(sess.id)
+    const stoppingId = sess.id
+    window.api.acp.cancelSession(acpSessId, sess?.remoteId ?? undefined).catch((err: Error) => {
+      console.error(err)
+      useStore.getState().clearSessionStopping(stoppingId)
+    })
     // v0.8.1: a stuck turn (e.g. the remote CLI waiting for an MCP OAuth
     // login) never emits a turn end, so the session stays busy forever and
     // nothing can be sent. Give the CLI 4 s to acknowledge session/cancel,
@@ -1012,6 +1025,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   return (
     <div className="input-card-wrap">
       <div className="input-card">
+        {/* v0.10.5: queued messages panel (Mistral Vibe style), attached to the card top */}
+        <MessageQueue config={config} />
         {/* Pasted image previews */}
         {pastedImages.length > 0 && (
           <div className="input-attachments">
@@ -1198,8 +1213,13 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             />
 
             {isCurrentSessionBusy ? (
-              <button className="ic-stop-btn" onClick={handleStop} title={tr.stopLabel}>
-                <StopIcon />
+              <button
+                className={'ic-stop-btn' + (isStoppingSession ? ' stopping' : '')}
+                onClick={handleStop}
+                disabled={isStoppingSession}
+                title={isStoppingSession ? tr.stoppingLabel : tr.stopLabel}
+              >
+                {isStoppingSession ? <span className="ic-stop-spinner" /> : <StopIcon />}
               </button>
             ) : (
               <button

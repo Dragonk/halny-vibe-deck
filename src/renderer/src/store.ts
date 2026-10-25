@@ -92,6 +92,10 @@ interface AppStore {
   busySessions: string[];
   markSessionBusy: (sessionId: string) => void;
   markSessionIdle: (sessionId: string) => void;
+  /** v0.10.5: sessions with a pending stop request (session/cancel in flight). */
+  stoppingSessions: string[];
+  markSessionStopping: (sessionId: string) => void;
+  clearSessionStopping: (sessionId: string) => void;
   /** v0.9.0: local session ids with a live ACP session in a worker (runtime only). */
   liveSessions: string[];
   markSessionLive: (sessionId: string) => void;
@@ -312,14 +316,28 @@ export const useStore = create<AppStore>((set, get) => ({
   markSessionBusy: (sessionId) =>
     set((s) => ({
       busySessions: s.busySessions.includes(sessionId) ? s.busySessions : [...s.busySessions, sessionId],
+      // v0.10.5: a new turn clears any stale stop request for the session.
+      stoppingSessions: s.stoppingSessions.filter((id) => id !== sessionId),
       sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
     })),
 
   markSessionIdle: (sessionId) =>
     set((s) => ({
       busySessions: s.busySessions.filter((id) => id !== sessionId),
+      // v0.10.5: the turn really ended - clear the stopping marker too.
+      stoppingSessions: s.stoppingSessions.filter((id) => id !== sessionId),
       sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
     })),
+
+  stoppingSessions: [],
+  markSessionStopping: (sessionId) =>
+    set((s) => ({
+      stoppingSessions: s.stoppingSessions.includes(sessionId)
+        ? s.stoppingSessions
+        : [...s.stoppingSessions, sessionId],
+    })),
+  clearSessionStopping: (sessionId) =>
+    set((s) => ({ stoppingSessions: s.stoppingSessions.filter((id) => id !== sessionId) })),
 
   liveSessions: [],
   sessionActivity: {},
