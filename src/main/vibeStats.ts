@@ -644,6 +644,12 @@ export interface SessionPreview {
     cachedTokens: number
     totalTokens: number
   } | null
+  /** v0.11.1: last todo snapshot (session plan) from vibe.todo effects; null = no todos ever. */
+  plan: Array<{
+    content: string
+    status: 'pending' | 'in_progress' | 'completed'
+    priority?: string
+  }> | null
 }
 
 interface PreviewRawEntry {
@@ -660,6 +666,7 @@ export function buildSessionPreview(
   indexEntry: Record<string, unknown> | null,
 ): SessionPreview {
   const messages: SessionPreview['messages'] = []
+  let plan: SessionPreview['plan'] = null
   let curAi: SessionPreview['messages'][number] | null = null
   let pendingThinking: Array<{ id: string; content: string }> = []
   const flushAi = (): void => {
@@ -715,6 +722,28 @@ export function buildSessionPreview(
         .map((b) => String(b['text'] ?? ''))
         .join('')
       if (output.length > PREVIEW_OUTPUT_CAP) output = output.slice(0, PREVIEW_OUTPUT_CAP) + '...'
+      // v0.11.1: vibe.todo effects carry the session plan - keep the last snapshot
+      if (String(det['toolName'] ?? '') === 'vibe.todo') {
+        const tin = (det['input'] as Record<string, unknown> | undefined) ?? {}
+        let todos = Array.isArray(tin['todos']) ? (tin['todos'] as Array<Record<string, unknown>>) : null
+        if (!todos) {
+          const sc = (out['structured_content'] as Record<string, unknown> | undefined) ?? {}
+          todos = Array.isArray(sc['todos']) ? (sc['todos'] as Array<Record<string, unknown>>) : null
+        }
+        if (todos) {
+          const entries: NonNullable<SessionPreview['plan']> = []
+          for (const t of todos) {
+            const status = String(t['status'] ?? 'pending')
+            if (status === 'cancelled') continue
+            entries.push({
+              content: String(t['content'] ?? ''),
+              status: status === 'completed' || status === 'in_progress' ? status : 'pending',
+              priority: t['priority'] != null ? String(t['priority']) : undefined,
+            })
+          }
+          plan = entries
+        }
+      }
       const decision = state['decision']
       const success =
         display['success'] !== false && (decision === undefined || decision === null || decision === 'execute')
@@ -762,7 +791,7 @@ export function buildSessionPreview(
       }
     }
   }
-  return { messages, title, cwd, updatedAt, config, usage }
+  return { messages, title, cwd, updatedAt, config, usage, plan }
 }
 
 function readSessionIndexEntry(sessionId: string): Record<string, unknown> | null {

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
 import type { AcpHistoryMessage } from './store'
 import { useTranslation, t, resolveLanguage } from './i18n'
-import type { AppConfig, ConfigOption, ToolCallDiff } from './types'
+import type { AppConfig, ConfigOption, PlanEntry, ToolCallDiff } from './types'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
@@ -168,7 +168,12 @@ export default function App(): React.JSX.Element {
           }
           // Chips reflect only the session that is (or becomes) current —
           // never a background session (per-session model isolation).
-          if (configOptions.length > 0) store.setConfigOptions(configOptions)
+          // v0.11.1: also snapshot the option list per session - switching
+          // back must restore the thinking levels of this session's model.
+          if (configOptions.length > 0) {
+            store.setSessionConfigOptions(acpSessId, configOptions)
+            store.setConfigOptions(configOptions)
+          }
           store.setAvailableModes(modes)
           if (currentModeId) store.setCurrentMode(currentModeId)
 
@@ -236,6 +241,9 @@ export default function App(): React.JSX.Element {
           const title = d.title as string | undefined
           if (messages) {
             store.applySessionHistory(d.sessionId as string, messages, title)
+            // v0.11.1: the main process assembles the replayed plan state -
+            // restore it so the checklist survives a session resume.
+            store.setSessionPlan(d.sessionId as string, (d.plan as PlanEntry[] | undefined) ?? [])
           }
           break
         }
@@ -295,6 +303,8 @@ export default function App(): React.JSX.Element {
           // (switching back restores them), not only when it is the view.
           const target = updSessId ? store.getSessionByAcpId(updSessId) : cur
           if (options && options.length > 0) {
+            // v0.11.1: keep a per-session snapshot (option lists are model specific).
+            if (updSessId) store.setSessionConfigOptions(updSessId, options)
             const modelOpt = options.find((o) => o.id === 'model')
             const modeOpt = options.find((o) => o.id === 'mode')
             const thinkOpt = options.find((o) => o.id === 'thinking')
@@ -516,8 +526,14 @@ export default function App(): React.JSX.Element {
           break
         }
 
+        case 'Plan': {
+          const store = useStore.getState()
+          const entries = (d.entries as PlanEntry[] | undefined) ?? []
+          if (d.sessionId) store.setSessionPlan(d.sessionId as string, entries)
+          break
+        }
+
         case 'DebugLog':
-        case 'Plan':
           break
 
         case 'AvailableCommandsUpdate': {

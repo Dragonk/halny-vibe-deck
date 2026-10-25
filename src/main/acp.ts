@@ -36,6 +36,13 @@ export interface AcpHistoryToolCall {
   diffs?: Array<{ path: string; oldText: string | null; newText: string }>
 }
 
+/** v0.11.1: one entry of the agent plan / todo checklist (session_update "plan"). */
+export interface PlanEntry {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  priority?: string
+}
+
 export interface AcpHistoryMessage {
   role: 'user' | 'ai'
   content: string
@@ -517,9 +524,12 @@ export class AcpManager {
   // Replay assembly (real session resume)
   // ---------------------------------------------------------------------------
 
-  private assembleHistory(rawUpdates: RawUpdate[]): { messages: AcpHistoryMessage[]; title?: string } {
+  private assembleHistory(rawUpdates: RawUpdate[]): { messages: AcpHistoryMessage[]; title?: string; plan?: PlanEntry[] } {
     const messages: AcpHistoryMessage[] = []
     const toolCallsById = new Map<string, AcpHistoryToolCall>()
+    // v0.11.1: the plan is cumulative state - only the last replayed
+    // snapshot matters, messages carry no plan content of their own.
+    let plan: PlanEntry[] | undefined
     let currentAi: AcpHistoryMessage | null = null
     // v0.10.2: some CLI replays resend entries as the full accumulated text;
     // slice off the already-appended prefix instead of duplicating it.
@@ -546,6 +556,21 @@ export class AcpManager {
       const sessionUpdate = update.sessionUpdate as string | undefined
       const type = update.type as string | undefined
       const kind = sessionUpdate ?? type
+
+      if (kind === 'plan' || kind === 'plan_update') {
+        const rawEntries = (update.entries as Array<Record<string, unknown>>) ?? []
+        plan = rawEntries.map((e) => {
+          const rawStatus = String(e.status ?? 'pending')
+          const status: PlanEntry['status'] =
+            rawStatus === 'completed' || rawStatus === 'in_progress' ? rawStatus : 'pending'
+          return {
+            content: String(e.content ?? ''),
+            status,
+            priority: e.priority != null ? String(e.priority) : undefined,
+          }
+        })
+        continue
+      }
 
       if (kind === 'user_message_chunk') {
         const text = this.contentText(update.content) || this.contentText(update.chunk)
@@ -615,7 +640,7 @@ export class AcpManager {
 
     // Drop empty AI wrappers (only thinking/toolcalls present is fine, but no
     // content at all and no calls means nothing to show)
-    return { messages, title }
+    return { messages, title, plan }
   }
 
   // ---------------------------------------------------------------------------
@@ -838,7 +863,7 @@ export class AcpManager {
 
       const buffered = this._replaying.get(sessionId) ?? []
       this._replaying.delete(sessionId)
-      const { messages, title } = this.assembleHistory(buffered)
+      const { messages, title, plan } = this.assembleHistory(buffered)
 
       const { modes, currentModeId } = this.parseModes(result)
       const configOptions = this.parseConfigOptions(result.configOptions)
@@ -847,7 +872,7 @@ export class AcpManager {
 
       this.emit({
         type: 'SessionHistory',
-        data: { sessionId, messages, title }
+        data: { sessionId, messages, title, plan: plan ?? [] }
       })
       this.emit({
         type: 'SessionInitialized',

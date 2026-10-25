@@ -1,8 +1,11 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 import MessageBubble from './MessageBubble'
 import InputBar from './InputBar'
+import type { PlanEntry } from '../types'
+
+const EMPTY_PLAN: PlanEntry[] = []
 
 export default function ChatView(): React.JSX.Element {
   const { currentSession, streamingSessions, busySessions, stoppingSessions, currentSessionId, acpStatus, acpError, config, pendingNewSession, pendingLoadSessionId, sessionLoadProgress } =
@@ -18,6 +21,12 @@ export default function ChatView(): React.JSX.Element {
   const showAgentBusy = isCurrentSessionBusy && !isCurrentSessionStreaming
   // v0.10.5: stop request in flight - say Stopping... instead of Agent working.
   const isCurrentSessionStopping = currentSessionId != null && stoppingSessions.includes(currentSessionId)
+  // v0.11.1: agent plan/todo checklist for the viewed session (live + replay).
+  const sessionPlans = useStore((s) => s.sessionPlans)
+  const planEntries = useMemo(
+    () => (session?.acpSessionId ? sessionPlans[session.acpSessionId] : undefined) ?? EMPTY_PLAN,
+    [sessionPlans, session?.acpSessionId],
+  )
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -76,6 +85,24 @@ export default function ChatView(): React.JSX.Element {
                   acpSessionId={session.acpSessionId}
                 />
               ))}
+              {planEntries.length > 0 && (
+                <div className="plan-card">
+                  <div className="plan-card-header">
+                    <span className="plan-card-title">{tr.planLabel}</span>
+                    <span className="plan-card-count">
+                      {planEntries.filter((e) => e.status === 'completed').length}/{planEntries.length}
+                    </span>
+                  </div>
+                  {planEntries.map((entry, pIdx) => (
+                    <div key={pIdx} className={'plan-row plan-' + entry.status}>
+                      <span className="plan-icon">
+                        {entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '◐' : '○'}
+                      </span>
+                      <span className="plan-content">{entry.content}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {showAgentBusy && !isResuming && (
                 <div className="agent-busy-row">
                   <span className="agent-busy-dots"><span /><span /><span /></span>

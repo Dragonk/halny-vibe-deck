@@ -15,6 +15,7 @@ import type {
   VibeSession,
   PreviewTab,
   SessionPreviewData,
+  PlanEntry,
 } from "./types";
 import { defaultConfig } from "./types";
 import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, AppUpdateInfo, CliUpdateInfo } from "./types";
@@ -132,6 +133,14 @@ interface AppStore {
   patchConfigOption: (id: string, value: string) => void;
   /** Re-apply the model/mode/thinking recorded on a session after switching to it. */
   syncSessionChips: (localSessionId: string) => Promise<void>;
+  /** v0.11.1: restore chips AND the recorded option lists when switching to a session. */
+  restoreSessionChips: (localSessionId: string) => Promise<void>;
+  /** v0.11.1: last known configOptions per ACP session (option lists are model specific). */
+  sessionConfigOptions: Record<string, ConfigOption[]>;
+  setSessionConfigOptions: (acpSessionId: string, options: ConfigOption[]) => void;
+  /** v0.11.1: current agent plan (todo checklist) per ACP session. */
+  sessionPlans: Record<string, PlanEntry[]>;
+  setSessionPlan: (acpSessionId: string, entries: PlanEntry[]) => void;
   currentModel: string;
   currentMode: string;
   currentThinking: string;
@@ -324,13 +333,21 @@ export const useStore = create<AppStore>((set, get) => ({
       sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
     })),
 
-  markSessionIdle: (sessionId) =>
+  markSessionIdle: (sessionId) => {
     set((s) => ({
       busySessions: s.busySessions.filter((id) => id !== sessionId),
       // v0.10.5: the turn really ended - clear the stopping marker too.
       stoppingSessions: s.stoppingSessions.filter((id) => id !== sessionId),
       sessionActivity: { ...s.sessionActivity, [sessionId]: Date.now() },
-    })),
+    }))
+    // v0.11.1: config changes picked while busy (or right before the session
+    // was interrupted) are re-applied once the turn is over.
+    const sess = get().sessions.find((x) => x.id === sessionId)
+    if (sess?.configPendingApply) {
+      get().updateSession(sessionId, { configPendingApply: false })
+      void get().syncSessionChips(sessionId)
+    }
+  },
 
   stoppingSessions: [],
   markSessionStopping: (sessionId) =>
@@ -465,6 +482,10 @@ export const useStore = create<AppStore>((set, get) => ({
         get().updateSession(localSessionId, { loading: false });
       }
       if (preview) {
+        // v0.11.1: lazy preview carries the session plan (todo snapshot)
+        if (preview.plan !== null && preview.plan !== undefined) {
+          get().setSessionPlan(session.acpSessionId, preview.plan as PlanEntry[])
+        }
         if (preview.usage) {
           get().setUsage(localSessionId, {
             contextUsed: preview.usage.contextUsed,
@@ -571,13 +592,40 @@ export const useStore = create<AppStore>((set, get) => ({
       // v0.10.2: never send config changes mid-turn - a set_config_option
       // racing an in-flight prompt hangs the CLI turn. Display-only here;
       // the main process applies recorded config inside session/new|load.
-      if (get().busySessions.includes(localSessionId)) return;
+      // v0.11.1: remember the deferred change - the idle transition re-applies
+      // it, so a session interrupted mid-turn keeps the config the user picked.
+      if (get().busySessions.includes(localSessionId)) {
+        get().updateSession(localSessionId, { configPendingApply: true });
+        return;
+      }
+      // v0.11.1: lazy (not live) sessions have no ACP session to sync - the
+      // main process applies the recorded config inside session/new|load.
+      if (!get().liveSessions.includes(localSessionId)) return;
       window.api.acp.setConfigOption(id, value, acpSessionId, chipRid ?? undefined).catch(console.error);
     };
     apply("model", model, get().currentModel);
     apply("mode", mode, get().currentMode);
     apply("thinking", thinking, get().currentThinking);
   },
+
+  restoreSessionChips: async (localSessionId) => {
+    const session = get().sessions.find((s) => s.id === localSessionId);
+    if (!session?.acpSessionId) return;
+    // v0.11.1: option LISTS are model/agent specific - restore the ones
+    // recorded for this session, otherwise the thinking chip keeps the
+    // option list of whichever model was active in the previous view.
+    const recorded = get().sessionConfigOptions[session.acpSessionId];
+    if (recorded && recorded.length > 0) get().setConfigOptions(recorded);
+    await get().syncSessionChips(localSessionId);
+  },
+
+  sessionConfigOptions: {},
+  setSessionConfigOptions: (acpSessionId, options) =>
+    set((s) => ({ sessionConfigOptions: { ...s.sessionConfigOptions, [acpSessionId]: options } })),
+
+  sessionPlans: {},
+  setSessionPlan: (acpSessionId, entries) =>
+    set((s) => ({ sessionPlans: { ...s.sessionPlans, [acpSessionId]: entries } })),
 
   currentModel: "",
   currentMode: "",

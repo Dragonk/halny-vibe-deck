@@ -352,6 +352,7 @@ export const es = {
   hiddenBadge: 'oculta',
   agentWorkingLabel: 'El agente está trabajando…',
   resumingSessionLabel: 'Reanudando sesión…',
+  planLabel: 'Plan',
   fromGlobalScope: '(global)',
   agentModelHint: 'El modelo puede venir de la configuración del proyecto o global',
   displayName: 'Nombre visible',

@@ -69,6 +69,8 @@ export interface Session {
   lastModel?: string
   lastMode?: string
   lastThinking?: string
+  /** v0.11.1: config change deferred while the session was busy; re-applied when it goes idle. */
+  configPendingApply?: boolean
   /** set when this session runs on a remote SSH connection */
   remoteId?: string
 }
@@ -320,6 +322,8 @@ export interface SessionPreviewData {
   cwd: string | null
   updatedAt: number | null
   config: { model: string | null; mode: string | null; thinking: string | null } | null
+  /** v0.11.1: last todo snapshot from vibe.todo effects (lazy preview); null = no todos. */
+  plan: PlanEntry[] | null
   usage: {
     contextUsed: number
     promptTokens: number
@@ -344,4 +348,11 @@ export interface CliUpdateInfo {
   latestVersion: string | null
   updateAvailable: boolean
   error: string | null
+}
+
+/** v0.11.1: one entry of the agent plan / todo checklist (session_update "plan"). */
+export interface PlanEntry {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  priority?: string
 }

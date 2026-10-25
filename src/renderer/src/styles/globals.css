@@ -6264,3 +6264,17 @@ code {
 @media (width <= 768px) {
     .msg-queue-list { max-height: 110px; }
 }
+
+/* v0.11.1: agent plan / todo checklist card */
+.plan-card { margin: 4px 2px 14px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: rgba(127, 127, 127, 0.04); }
+.plan-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.plan-card-title { font-size: 11px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-muted); }
+.plan-card-count { font-size: 11px; color: var(--text-dim); }
+.plan-row { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; font-size: 13px; color: var(--text-muted); }
+.plan-icon { flex-shrink: 0; width: 16px; text-align: center; }
+.plan-content { min-width: 0; overflow-wrap: anywhere; }
+.plan-row.plan-completed .plan-icon { color: #3fb950; }
+.plan-row.plan-completed .plan-content { text-decoration: line-through; color: var(--text-dim); }
+.plan-row.plan-in_progress { color: var(--text); font-weight: 500; }
+.plan-row.plan-in_progress .plan-icon { color: var(--accent); animation: plan-pulse 1.6s ease-in-out infinite; }
+@keyframes plan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
