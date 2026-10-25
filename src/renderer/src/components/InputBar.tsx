@@ -38,21 +38,6 @@ const StopIcon = (): React.JSX.Element => (
   </svg>
 )
 
-const FolderIcon = (): React.JSX.Element => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="2"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-  </svg>
-)
-
 const ChevronIcon = (): React.JSX.Element => (
   <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
     <path d="M1 3l4 4 4-4" />
@@ -206,12 +191,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   // Pasted images
   const [pastedImages, setPastedImages] = useState<{ name: string; url: string }[]>([])
 
-  // Folder picker dropdown
-  const [showFolderPicker, setShowFolderPicker] = useState(false)
-
   const editorRef = useRef<HTMLDivElement>(null)
   const atPickerRef = useRef<HTMLDivElement>(null)
-  const folderPickerRef = useRef<HTMLDivElement>(null)
   const attachMenuRef = useRef<HTMLDivElement>(null)
   const [showAttachMenu, setShowAttachMenu] = useState(false)
 
@@ -221,9 +202,6 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       if (atPickerRef.current && !atPickerRef.current.contains(e.target as Node)) {
         setShowAtPicker(false)
         setShowSlashPicker(false)
-      }
-      if (folderPickerRef.current && !folderPickerRef.current.contains(e.target as Node)) {
-        setShowFolderPicker(false)
       }
       if (attachMenuRef.current && !attachMenuRef.current.contains(e.target as Node)) {
         setShowAttachMenu(false)
@@ -871,48 +849,6 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     }
   }
 
-  // ---- Folder picker ----
-  const canChangeFolder = (): boolean => {
-    const session = currentSession()
-    // v0.7.1: remote sessions work on the remote host - the native dialog
-    // picks local folders, which would produce a bogus remote cwd.
-    if (session?.remoteId) return false
-    return !session || session.messages.length === 0
-  }
-
-  const applyFolder = (folder: string): void => {
-    addRecentFolder(folder)
-    const session = sessions.find((s) => s.id === currentSessionId)
-    if (session) {
-      updateSession(session.id, { workingDirectory: folder })
-      // Re-bind an empty draft to a fresh ACP session with the new cwd
-      if (session.acpSessionId && session.messages.length === 0) {
-        if (acpStatus === 'connected') {
-          window.api.acp.newSession(folder, session.remoteId ?? undefined).catch((err: Error) => {
-            console.error('Failed to re-bind session folder:', err)
-          })
-        } else {
-          unlinkAcpSession(session.id)
-        }
-      }
-    } else {
-      setWorkingDirectory(folder)
-    }
-  }
-
-  const handleFolderPick = async (): Promise<void> => {
-    const folder = await window.api.dialog.openFolder()
-    if (folder) {
-      applyFolder(folder)
-      setShowFolderPicker(false)
-    }
-  }
-
-  const handleFolderSelect = (folder: string): void => {
-    applyFolder(folder)
-    setShowFolderPicker(false)
-  }
-
   // ---- Config options (model / mode / thinking) ----
   const handleConfigSelect = async (key: string, value: string): Promise<void> => {
     // v0.10.2: selecting a project agent requires exposing its file to the
@@ -996,11 +932,6 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   }, [currentSession])
 
   const currentWd = currentSessionWorkingDirectory()
-  const projectLabel = currentWd
-    ? currentWd.split(/[/\\]/).filter(Boolean).pop() ?? currentWd
-    : ''
-  const folderLocked = !canChangeFolder()
-
   const modelOption = configOptions.find((o) => o.id === 'model')
   const modeOption = configOptions.find((o) => o.id === 'mode')
   // v0.10.2: project agents join the mode dropdown; selecting one exposes
@@ -1107,35 +1038,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
         {/* Bottom toolbar */}
         <div className="input-card-toolbar">
-          {/* Left: folder chip */}
-          <div className="input-card-left" ref={folderPickerRef}>
-            <button
-              className={`ic-folder-chip ${folderLocked ? 'ic-chip-disabled' : ''}`}
-              onClick={() => canChangeFolder() && setShowFolderPicker(!showFolderPicker)}
-              title={folderLocked ? tr.folderChangeDisabled : currentWd || tr.workingDirectory}
-              disabled={folderLocked}
-            >
-              <FolderIcon />
-              <span className="ic-folder-name">{projectLabel || tr.chooseFolder}</span>
-              <ChevronIcon />
-            </button>
-            {showFolderPicker && (
-              <div className="folder-picker-dropdown">
-                <button className="folder-picker-item" onClick={handleFolderPick}>
-                  <span>📁 {tr.addNew}</span>
-                </button>
-                {config.recentFolders.map((folder) => (
-                  <button
-                    key={folder}
-                    className="folder-picker-item"
-                    onClick={() => handleFolderSelect(folder)}
-                    title={folder}
-                  >
-                    <span>📁 {folder.split(/[/\\]/).filter(Boolean).pop()}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* Left: attach menu */}
+          <div className="input-card-left">
             <div className="attach-menu-wrap" ref={attachMenuRef}>
               <button
                 className="ic-btn"
