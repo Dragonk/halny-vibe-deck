@@ -3,7 +3,7 @@ name: ci-dioxus
 on:
   push:
     branches:
-      - dioxus
+      - main
 
 permissions:
   contents: read

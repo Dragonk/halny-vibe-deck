@@ -1,6 +1,6 @@
 name: tag-on-marker
 
-# Convenience tagger: push a commit to dioxus whose message contains a
+# Convenience tagger: push a commit to main whose message contains a
 # marker and this workflow applies it:
 #   [tag vX.Y.Z]  -> create that tag on the pushed commit (if it does not
 #                    exist yet). NOTE: a tag created here with GITHUB_TOKEN
@@ -16,7 +16,7 @@ name: tag-on-marker
 on:
   push:
     branches:
-      - dioxus
+      - main
 
 permissions:
   contents: write
