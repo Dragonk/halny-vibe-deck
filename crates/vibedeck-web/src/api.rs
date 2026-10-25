@@ -1,32 +1,40 @@
 //! Server functions: the only bridge between the UI client and the engine.
-//! Every mutating call carries the auth token (checked server-side).
+//!
+//! Auth model (Nexus parity): the local server binds 127.0.0.1 and is
+//! trusted without a login; remote browser access goes through the HTTPS
+//! listener (serve.rs) whose middleware authenticates every request with a
+//! session cookie before it can reach any of these functions. The token
+//! parameters are kept for protocol compatibility and are not enforced.
 
 use dioxus::prelude::*;
 use vibedeck_core::snapshot::Snapshot;
 
 #[cfg(feature = "server")]
-fn check(token: &str) -> Result<(), ServerFnError> {
-    let engine = vibedeck_engine::Engine::global();
-    if engine.auth_enabled() && !engine.check_token(token) {
-        return Err(ServerFnError::new("unauthorized"));
-    }
+fn check(_token: &str) -> Result<(), ServerFnError> {
+    // No token enforcement: requests arrive either from the local
+    // 127.0.0.1 listener (trusted) or through the remote HTTPS listener,
+    // whose middleware already validated the session cookie.
     Ok(())
 }
 
-/// Does the server require login? (safe to call without a token)
-#[server]
-pub async fn api_auth_state() -> Result<bool, ServerFnError> {
-    Ok(vibedeck_engine::Engine::global().auth_enabled())
-}
-
-#[server]
-pub async fn api_login(username: String, password: String) -> Result<Option<String>, ServerFnError> {
-    Ok(vibedeck_engine::Engine::global().login(&username, &password))
-}
-
-#[server]
-pub async fn api_logout(token: String) -> Result<(), ServerFnError> {
-    vibedeck_engine::Engine::global().logout(&token);
+/// Local-only guard: reject requests that were routed through the remote
+/// HTTPS listener (marked `x-vd-origin: remote` by its middleware). Used
+/// for credential editing — login/password/port can only be changed from
+/// the local interface.
+#[cfg(feature = "server")]
+fn require_local() -> Result<(), ServerFnError> {
+    if let Some(ctx) = dioxus_fullstack::FullstackContext::current() {
+        let headers = ctx.parts_mut().headers.clone();
+        let origin = headers
+            .get("x-vd-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if origin == "remote" {
+            return Err(ServerFnError::new(
+                "credentials can only be edited from the local interface",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -119,9 +127,11 @@ pub async fn api_set_prefs(
     Ok(())
 }
 
-/// Configure remote-control access (login + password + port + enabled).
+/// Configure remote-access credentials (login + password + port + enabled).
 /// The password is hashed (sha256 with salt) server-side; nothing is
-/// ever displayed back to the client.
+/// ever displayed back to the client. LOCAL-ONLY: requests routed through
+/// the remote HTTPS listener are rejected (credentials must be edited
+/// from the local interface).
 #[server]
 pub async fn api_set_remote(
     token: String,
@@ -131,6 +141,7 @@ pub async fn api_set_remote(
     enable: bool,
 ) -> Result<(), ServerFnError> {
     check(&token)?;
+    require_local()?;
     if username.trim().is_empty() || password.is_empty() {
         return Err(ServerFnError::new("username and password required"));
     }

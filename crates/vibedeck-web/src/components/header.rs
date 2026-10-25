@@ -18,7 +18,6 @@ pub fn Header() -> Element {
     let dock_open = s.snapshot.config.dock_open;
     let limit = s.snapshot.config.sidebar_sessions_limit.unwrap_or(0);
     let language = s.snapshot.config.language.clone();
-    let auth_required = s.auth_required;
     drop(s);
 
     let (activity_cls, activity_text) = match status.as_str() {
@@ -142,24 +141,6 @@ pub fn Header() -> Element {
                             dioxus::document::eval("window.ipc.postMessage('vd-close')");
                         },
                         "✕"
-                    }
-                } else if auth_required {
-                    // Remote access in a browser: offer a logout (⏻) instead
-                    // of the window buttons.
-                    button {
-                        class: "header-btn",
-                        title: "{tr(&lang, \"logoutLabel\")}",
-                        onclick: {
-                            let state = state.clone();
-                            move |_| {
-                                let mut state = state.clone();
-                                async move {
-                                    state.write().token = None;
-                                    state.write().loaded = false;
-                                }
-                            }
-                        },
-                        "⏻"
                     }
                 }
             }

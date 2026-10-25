@@ -218,16 +218,33 @@ mod imp {
 }
 
 #[cfg(feature = "server")]
-fn check(token: &str) -> Result<(), ServerFnError> {
-    let engine = vibedeck_engine::Engine::global();
-    if engine.auth_enabled() && !engine.check_token(token) {
-        return Err(ServerFnError::new("unauthorized"));
+fn check(_token: &str) -> Result<(), ServerFnError> {
+    // No token enforcement (see api.rs): requests arrive from the trusted
+    // local listener or through the authenticated remote HTTPS listener.
+    Ok(())
+}
+
+/// Local-only guard (Nexus parity: setup:install is a web-blocked
+/// channel) — installing the CLI is only allowed from the local interface.
+#[cfg(feature = "server")]
+fn require_local() -> Result<(), ServerFnError> {
+    if let Some(ctx) = dioxus_fullstack::FullstackContext::current() {
+        let headers = ctx.parts_mut().headers.clone();
+        let origin = headers
+            .get("x-vd-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default();
+        if origin == "remote" {
+            return Err(ServerFnError::new(
+                "the CLI can only be installed from the local interface",
+            ));
+        }
     }
     Ok(())
 }
 
-/// Detect uv + vibe-acp (safe to call without a token, mirrors
-/// api_auth_state: needed before the login gate decides).
+/// Detect uv + vibe-acp (safe to call without a token: it only inspects
+/// local binaries, it is what decides whether SetupView shows).
 #[server]
 pub async fn api_setup_status() -> Result<SetupStatus, ServerFnError> {
     Ok(imp::check())
@@ -237,6 +254,7 @@ pub async fn api_setup_status() -> Result<SetupStatus, ServerFnError> {
 #[server]
 pub async fn api_setup_install(token: String) -> Result<(), ServerFnError> {
     check(&token)?;
+    require_local()?;
     imp::install();
     Ok(())
 }

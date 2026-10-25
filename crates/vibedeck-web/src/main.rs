@@ -16,6 +16,8 @@ pub mod events;
 pub mod fsgit;
 #[cfg(feature = "server")]
 pub mod preview;
+#[cfg(feature = "server")]
+pub mod serve;
 pub mod highlight;
 pub mod vibestats;
 pub mod vibeconfig;
@@ -111,17 +113,26 @@ fn main() {
             .and_then(|p| args.get(p + 1))
             .and_then(|v| v.parse::<u16>().ok())
             .or_else(|| std::env::var("PORT").ok().and_then(|v| v.parse::<u16>().ok()))
-            .unwrap_or(if cfg.remote_port > 0 { cfg.remote_port } else { 8080 });
-        // Remote control (or configured credentials) => bind on all
-        // interfaces so the app is reachable from a browser; otherwise
-        // stay on localhost only.
-        let remote = cfg.remote_enabled || cfg.auth.is_some();
-        if std::env::var_os("PORT").is_none() {
-            std::env::set_var("PORT", port.to_string());
+            .unwrap_or(8080);
+        // Serving model (Nexus parity):
+        // - the local app server ALWAYS binds 127.0.0.1 and never asks for
+        //   a login — starting VibeDeck locally goes straight into the UI;
+        // - remote browser access is a SEPARATE HTTPS listener (serve.rs)
+        //   with a login page, active only when remote access is enabled
+        //   AND credentials are configured.
+        let remote_on = cfg.remote_enabled && cfg.auth.is_some();
+        if cfg.remote_enabled && !remote_on {
+            eprintln!(
+                "vibedeck: remote access enabled but no credentials configured - set login & password locally (Settings → Zdalne, or --set-login). Remote listener disabled."
+            );
         }
-        if std::env::var_os("IP").is_none() {
-            std::env::set_var("IP", if remote { "0.0.0.0" } else { "127.0.0.1" });
+        let remote_port = cfg.remote_port;
+        if remote_on && remote_port == port {
+            eprintln!(
+                "vibedeck: remote port equals the local port ({port}) - pick a different port in Settings → Zdalne."
+            );
         }
+        let start_remote = remote_on && remote_port != port;
 
         if gui {
             #[cfg(feature = "gui")]
@@ -159,13 +170,40 @@ fn main() {
             );
         }
 
-        dioxus::serve(|| async {
+        // Manual serving (instead of dioxus::serve): two listeners — the
+        // local one on 127.0.0.1 without auth, the remote HTTPS one from
+        // serve.rs. Both share the same axum router + engine.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("vibedeck: failed to start the async runtime");
+        rt.block_on(async move {
             let cfg = vibedeck_engine::EngineConfig::load();
             let engine = vibedeck_engine::Engine::init(cfg);
             // Connect the agent + index CLI sessions before the first
             // snapshot request lands (Prime like Nexus does).
             engine.prime();
-            Ok(dioxus::server::router(app::App))
+            let router = dioxus::server::router(app::App);
+            // Local listener: localhost-only, no login.
+            let local = tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .unwrap_or_else(|e| panic!("vibedeck: cannot bind 127.0.0.1:{port}: {e}"));
+            println!("vibedeck: local UI at http://127.0.0.1:{port}");
+            let local_router = router.clone();
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(local, local_router).await {
+                    eprintln!("vibedeck: local server error: {e}");
+                }
+            });
+            if start_remote {
+                let remote_router = router.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = serve::run_remote(remote_router, remote_port).await {
+                        eprintln!("vibedeck: remote HTTPS server error: {e}");
+                    }
+                });
+            }
+            std::future::pending::<()>().await
         });
     }
 

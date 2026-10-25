@@ -26,6 +26,9 @@ use vibedeck_core::types::{now_ms, Attachment, ChatSession, Message, MessageSend
 
 use crate::types::{spawn_slot, SlotPurpose};
 
+/// Sliding expiry of remote HTTPS session tokens (30 days, like Nexus).
+const TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
 static ENGINE: OnceLock<Engine> = OnceLock::new();
 
 pub struct Engine {
@@ -37,8 +40,9 @@ pub struct Engine {
     state: Mutex<EngineState>,
     tx: broadcast::Sender<BusEvent>,
     config: RwLock<EngineConfig>,
-    /// auth token -> username (in-memory sessions)
-    tokens: Mutex<HashMap<String, String>>,
+    /// auth token -> (username, expires) — remote HTTPS sessions
+    /// minted by serve.rs; 30-day sliding expiry.
+    tokens: Mutex<HashMap<String, (String, std::time::Instant)>>,
 }
 
 impl Engine {
@@ -602,7 +606,9 @@ impl Engine {
         self.publish_structure();
     }
 
-    /// Verify credentials and mint a session token (None on bad login).
+    /// Verify credentials and mint a remote session token (None on a bad
+    /// login). Tokens live in memory only and expire after 30 days of
+    /// inactivity.
     pub fn login(&self, username: &str, password: &str) -> Option<String> {
         let ok = self
             .config()
@@ -614,15 +620,27 @@ impl Engine {
             return None;
         }
         let token = random_hex(32);
-        self.tokens
-            .lock()
-            .unwrap()
-            .insert(token.clone(), username.to_string());
+        self.tokens.lock().unwrap().insert(
+            token.clone(),
+            (username.to_string(), std::time::Instant::now() + TOKEN_TTL),
+        );
         Some(token)
     }
 
+    /// Valid, non-expired token? Refreshes the sliding expiry window.
     pub fn check_token(&self, token: &str) -> bool {
-        !token.is_empty() && self.tokens.lock().unwrap().contains_key(token)
+        let mut tokens = self.tokens.lock().unwrap();
+        match tokens.get_mut(token) {
+            Some(entry) if entry.1 > std::time::Instant::now() => {
+                entry.1 = std::time::Instant::now() + TOKEN_TTL;
+                true
+            }
+            Some(_) => {
+                tokens.remove(token);
+                false
+            }
+            None => false,
+        }
     }
 
     pub fn logout(&self, token: &str) {

@@ -19,7 +19,8 @@ pub enum View {
 
 #[derive(Clone, Default)]
 pub struct ClientState {
-    pub auth_required: bool,
+    /// Vestigial auth token (kept for server-fn protocol compatibility;
+    /// always None — see serve.rs for the auth model).
     pub token: Option<String>,
     pub snapshot: Snapshot,
     pub loaded: bool,
@@ -40,6 +41,15 @@ pub async fn refresh(mut state: Signal<ClientState>) {
     match crate::api::api_snapshot(token).await {
         Ok(snap) => {
             apply_theme(&snap.config.theme);
+            // Remember the UI language for the remote /login page (serve.rs)
+            // — the login page renders before the app (and its config) is
+            // available, so it reads this hint from localStorage.
+            let cfg_lang = snap.config.language.clone();
+            if !cfg_lang.is_empty() && cfg_lang != "auto" {
+                dioxus::document::eval(&format!(
+                    "try{{localStorage.setItem('vdLang','{cfg_lang}')}}catch(e){{}}"
+                ));
+            }
             let mut s = state.write();
             s.snapshot = snap;
             s.loaded = true;
@@ -190,7 +200,8 @@ fn ensure_ai_message_pub(messages: &mut Vec<Message>) -> &mut Message {
     messages.last_mut().expect("just pushed")
 }
 
-/// token() helper: the current auth token (empty when auth is off).
+/// token() helper: the current auth token (always empty — the token is
+/// vestigial; auth happens at the remote HTTPS listener, not in the API).
 pub fn token(state: &Signal<ClientState>) -> String {
     state.read().token.clone().unwrap_or_default()
 }

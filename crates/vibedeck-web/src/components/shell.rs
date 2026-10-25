@@ -23,9 +23,8 @@ pub fn Shell() -> Element {
         }
     }
 
-    // The engine event stream (mounted only when authed).
-    let tok = token(&state);
-    let mut socket = crate::events::use_engine_socket(tok);
+    // The engine event stream.
+    let mut socket = crate::events::use_engine_socket();
     use_future(move || async move {
         loop {
             match socket.recv().await {

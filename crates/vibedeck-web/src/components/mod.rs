@@ -4,7 +4,6 @@ pub mod dock;
 pub mod header;
 pub mod history;
 pub mod input;
-pub mod login;
 pub mod settings;
 pub mod setup;
 pub mod shell;

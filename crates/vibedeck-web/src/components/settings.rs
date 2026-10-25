@@ -325,6 +325,7 @@ pub fn SettingsView() -> Element {
     let remote_enabled = s.snapshot.config.remote_enabled;
     let auth_configured = s.snapshot.config.auth_configured;
     let remote_port = s.snapshot.config.remote_port;
+    let serve_url = format!("https://<host>:{remote_port}");
     let status = s.snapshot.status.clone();
     drop(s);
 
@@ -522,7 +523,10 @@ pub fn SettingsView() -> Element {
                                             saved.set(String::new());
                                             refresh_after_save(state).await;
                                         }
-                                        Err(_) => saved.set(loc(&lang, "Nie udało się zapisać.", "Failed to save.")),
+                                        Err(e) => {
+                                            let lbl = loc(&lang, "Nie udało się zapisać", "Failed to save");
+                                            saved.set(format!("{}: {e}", lbl));
+                                        }
                                     }
                                 }
                             }
@@ -536,9 +540,17 @@ pub fn SettingsView() -> Element {
                 div { class: "field",
                     div { class: "field-hint",
                         if remote_enabled || auth_configured {
-                            "{loc(&lang, \"Zdalne sterowanie aktywne — logowanie z przeglądarki wymagane.\", \"Remote control active — browser login required.\")}"
+                            span { style: "display:block;margin-bottom:4px;",
+                                "{loc(&lang, \"Dostęp zdalny aktywny —\", \"Remote access active —\")} {serve_url}"
+                            }
+                            span { style: "display:block;margin-bottom:4px;",
+                                "{loc(&lang, \"Dostęp zdalny jest szyfrowany (HTTPS z certyfikatem self-signed); przeglądarka zapyta o zaufanie certyfikatu przy pierwszym połączeniu.\", \"Remote access is encrypted (HTTPS with a self-signed certificate); the browser asks to trust the certificate on first connect.\")}"
+                            }
+                            span { style: "display:block;",
+                                "{loc(&lang, \"Dane logowania oraz port można edytować wyłącznie z lokalnego interfejsu.\", \"Credentials and the port can only be edited from the local interface.\")}"
+                            }
                         } else {
-                            "{loc(&lang, \"Zdalne sterowanie wyłączone.\", \"Remote control disabled.\")}"
+                            "{loc(&lang, \"Dostęp zdalny wyłączony — interfejs lokalny działa bez hasła na 127.0.0.1.\", \"Remote access disabled — the local interface runs without a login on 127.0.0.1.\")}"
                         }
                     }
                 }
