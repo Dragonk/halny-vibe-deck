@@ -6436,3 +6436,76 @@ code {
 .plan-card-chevron { display: inline-flex; align-items: center; color: var(--text-dim); transition: transform 0.15s ease; }
 .plan-card-chevron.open { transform: rotate(180deg); }
 .plan-card-collapsed .plan-row { margin-top: 2px; }
+
+/* ===== v0.13.0: settings rebuilt for phones =====
+   The old desktop-only layout wrapped 11 tabs into 4 rows and kept the
+   master-detail lists beside their panels: on a 390px screen the detail
+   panel was squeezed to ~120px and its selects were covered by
+   neighbouring fields, so tapping a model/thinking select did nothing.
+   Phones get single-row scrollable tabs, stacked master-detail, and
+   full-width 16px/44px form fields. */
+@media (width <= 768px) {
+    .settings-header { padding: 12px 14px 0; }
+    .settings-title { font-size: 17px; margin-bottom: 8px; }
+    .settings-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .settings-tabs::-webkit-scrollbar { display: none; }
+    .settings-tab { flex-shrink: 0; padding: 10px 14px; white-space: nowrap; }
+    .settings-content { padding: 14px; gap: 14px; }
+
+    /* 16px inputs: no iOS focus zoom, 44px: comfortable touch targets */
+    .field-input,
+    .field-select { font-size: 16px; min-height: 44px; }
+    .field-textarea { font-size: 16px; min-height: 96px; }
+    .field-btn { min-height: 40px; }
+    .field-row { flex-wrap: wrap; }
+    .config-item-header-row { flex-wrap: wrap; }
+
+    /* master-detail stacks vertically; the list caps at 30vh and the
+       detail panel becomes full-width and tappable */
+    .settings-section { gap: 14px; }
+    .settings-section.tools-section { flex-direction: column; }
+    .master-detail {
+        flex-direction: column;
+        height: auto;
+        min-height: 0;
+        gap: 12px;
+    }
+    .master-list {
+        width: 100%;
+        max-height: 30vh;
+        flex-shrink: 0;
+    }
+    .master-item { min-height: 40px; }
+    .master-detail-panel {
+        width: 100%;
+        min-width: 0;
+        max-height: none;
+        padding: 12px;
+        scroll-margin-top: 96px;
+    }
+
+    /* raw config: file tree above the editor, editor fills the rest */
+    .raw-config-section {
+        flex-direction: column;
+        min-height: 0;
+    }
+    .raw-config-section .dirtree-col {
+        width: 100%;
+        max-width: 100%;
+        max-height: 26vh;
+        overflow-y: auto;
+        border-right: none;
+        padding-right: 0;
+    }
+    .raw-editor-col { min-height: 360px; }
+    .raw-editor-col .vibe-editor-box { min-height: 260px; }
+    .skill-detail-body { min-height: 260px; }
+
+    /* dropdowns and hint rows that were fixed for the desktop width */
+    .history-project-select { max-width: 100%; }
+}

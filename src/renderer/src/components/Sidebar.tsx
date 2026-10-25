@@ -519,19 +519,28 @@ export default function Sidebar(): React.JSX.Element {
       <nav className="sidebar-nav">
         <button
           className={`sidebar-nav-item ${currentView === 'stats' ? 'active' : ''}`}
-          onClick={() => setCurrentView('stats')}
+          onClick={() => {
+            setMobileSidebarOpen(false)
+            setCurrentView('stats')
+          }}
         >
           {tr.statistics}
         </button>
         <button
           className={`sidebar-nav-item ${currentView === 'history' ? 'active' : ''}`}
-          onClick={() => setCurrentView('history')}
+          onClick={() => {
+            setMobileSidebarOpen(false)
+            setCurrentView('history')
+          }}
         >
           {tr.historyLabel}
         </button>
         <button
           className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
-          onClick={() => setCurrentView('settings')}
+          onClick={() => {
+            setMobileSidebarOpen(false)
+            setCurrentView('settings')
+          }}
         >
           {tr.settings}
         </button>
