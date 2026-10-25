@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-22.04
     needs: test
     env:
-      CARGO_TARGET_DIR: /mnt/vd-target
+      CARGO_TARGET_DIR: /home/runner/vd-target
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +49,11 @@ jobs:
           targets: wasm32-unknown-unknown,x86_64-pc-windows-gnu
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
 
       - name: Install system deps
         run: |
@@ -68,11 +73,9 @@ jobs:
           strip --strip-all "$CARGO_TARGET_DIR/server-release/vibedeck-web"
 
       - name: Build windows server binary (x86_64-pc-windows-gnu)
-        env:
-          CARGO_TARGET_DIR: /mnt/vd-target-win
         run: |
           cargo build --profile server-release -p vibedeck-web --features server,gui --target x86_64-pc-windows-gnu --locked
-          x86_64-w64-mingw32-strip --strip-all "/mnt/vd-target-win/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe"
+          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe"
 
       - name: Fetch pdfium binaries
         run: |
@@ -91,7 +94,7 @@ jobs:
       - name: Assemble windows bundle
         run: |
           mkdir -p dist/vibedeck-win
-          cp /mnt/vd-target-win/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe dist/vibedeck-win/vibedeck.exe
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe" dist/vibedeck-win/vibedeck.exe
           cp pdfium/bin/pdfium.dll dist/vibedeck-win/
           cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-win/public
           cd dist/vibedeck-win && zip -q -r "../../vibedeck-${VERSION}-windows-x64.zip" .
