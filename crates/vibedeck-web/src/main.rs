@@ -251,7 +251,7 @@ fn open_webview(url: &str) -> Result<(), String> {
         .with_ipc_handler({
             let window = window.clone();
             move |req| {
-                match req.body() {
+                match req.body().as_str() {
                     "vd-drag" => {
                         let _ = window.drag_window();
                     }
