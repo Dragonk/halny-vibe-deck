@@ -54,7 +54,8 @@
         }
       ],
       "icon": "resources/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "Mistral-Vibe-Nexus-Setup-${version}.exe"
     },
     "nsis": {
       "oneClick": false,

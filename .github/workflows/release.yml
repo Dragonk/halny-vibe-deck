@@ -39,6 +39,8 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
+            dist/*.yml
+            dist/*.blockmap
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -48,6 +50,8 @@ jobs:
           files: |
             dist/*.exe
             dist/*.zip
+            dist/*.yml
+            dist/*.blockmap
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,6 +108,7 @@ jobs:
           files: |
             dist/vibe-nexus-linux-x64.zip
             dist/*.AppImage
+            dist/*.yml
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
