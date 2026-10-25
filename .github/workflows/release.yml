@@ -82,12 +82,19 @@ jobs:
       - name: Zip user-dir bundle
         run: cd dist/linux-unpacked && zip -r ../vibe-nexus-linux-x64.zip .
 
+      - name: Package AppImage
+        run: npx electron-builder --linux AppImage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USE_HARD_LINKS: 'false'
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
           path: |
             dist/vibe-nexus-linux-x64.zip
+            dist/*.AppImage
           if-no-files-found: error
 
       - name: Add to GitHub Release
@@ -96,6 +103,7 @@ jobs:
         with:
           files: |
             dist/vibe-nexus-linux-x64.zip
+            dist/*.AppImage
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

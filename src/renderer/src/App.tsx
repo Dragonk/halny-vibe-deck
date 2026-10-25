@@ -78,6 +78,7 @@ export default function App(): React.JSX.Element {
 
   const tr = useTranslation(config.language)
   const updateInfo = useStore((s) => s.updateInfo)
+  const updateProgress = useStore((s) => s.updateProgress)
   const dismissUpdateBanner = useStore((s) => s.dismissUpdateBanner)
 
   const handleUpdateApp = useCallback(async () => {
@@ -641,6 +642,16 @@ export default function App(): React.JSX.Element {
     return () => window.clearTimeout(t)
   }, [])
 
+  // v0.11.0: app self-update download/install progress (banner + Settings).
+  useEffect(() => {
+    const off = window.api.updates.onProgress((p) => {
+      useStore.getState().setUpdateProgress(
+        p as { phase: string; received: number; total: number | null; percent: number | null },
+      )
+    })
+    return off
+  }, [])
+
   // v0.6.0: poll remote SSH connections (status dots + remote session lists).
   // The store loads the config asynchronously after mount, so the effect must
   // re-run once the enabled connections become available - and whenever they
@@ -813,6 +824,26 @@ export default function App(): React.JSX.Element {
                 </span>
               )}
               {updateError && <span className="update-banner-error">{updateError}</span>}
+              {updateBusy && updateProgress && (
+                <span className="update-banner-progress">
+                  {updateProgress.phase === 'download'
+                    ? tr.updateProgressDownload
+                        .replace('{{percent}}', String(updateProgress.percent ?? '…'))
+                        .replace('{{received}}', (updateProgress.received / 1048576).toFixed(1))
+                        .replace(
+                          '{{total}}',
+                          updateProgress.total != null ? (updateProgress.total / 1048576).toFixed(1) : '?',
+                        )
+                    : updateProgress.phase === 'install'
+                      ? tr.updateProgressInstall
+                      : tr.updateProgressRestart}
+                </span>
+              )}
+              {updateBusy && updateProgress?.phase === 'download' && (updateProgress.percent ?? 0) > 0 && (
+                <div className="update-progress-track">
+                  <div className="update-progress-fill" style={{ width: (updateProgress.percent ?? 0) + '%' }} />
+                </div>
+              )}
             </div>
             <div className="update-banner-actions">
               {updateInfo.app?.updateAvailable && (

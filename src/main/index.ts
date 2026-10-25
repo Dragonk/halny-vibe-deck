@@ -490,7 +490,16 @@ app.whenReady().then(() => {
       cfg.serve = { ...cfg.serve, enabled: true };
       saveConfig(cfg);
     }
-    return updateApp();
+    // v0.11.0: live download/install progress for the banner + Settings
+    // (win.webContents.send is mirrored to web clients by the serve bridge).
+    const win = mainWinRef;
+    return updateApp((p) => {
+      try {
+        win?.webContents.send("updates:progress", p);
+      } catch {
+        /* window may already be tearing down */
+      }
+    });
   });
 
   ipcMain.handle("acp:is-running", (_e, remoteId?: string) =>

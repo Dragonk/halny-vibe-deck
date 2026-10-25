@@ -1,6 +1,6 @@
 {
   "name": "mistral-vibe-nexus",
-  "version": "0.10.7",
+  "version": "0.11.0",
   "description": "Mistral Vibe Nexus - AI Agent Desktop App",
   "main": "out/main/index.js",
   "author": "Mistral Vibe Nexus",
@@ -85,7 +85,8 @@
         }
       ],
       "icon": "resources/icon.png",
-      "category": "Development"
+      "category": "Development",
+      "artifactName": "vibe-nexus-${version}-x64.AppImage"
     }
   },
   "dependencies": {

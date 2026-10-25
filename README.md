@@ -50,6 +50,13 @@ Installs the app into `~/.local/share/vibe-nexus/app` and adds the `vibe-nexus`
 command through `~/.local/bin`. Re-run the same command to upgrade in place
 (Settings also offers in-app self-updates on Linux).
 
+### Linux installation (AppImage)
+
+Download `vibe-nexus-<version>-x64.AppImage` from the
+[releases](https://github.com/Dragonk/mistral-vibe-nexus/releases), make it
+executable (`chmod +x vibe-nexus-*.AppImage`) and run it. In-app self-updates
+download the new AppImage and replace it in place, then relaunch the app.
+
 
 ## Development
 

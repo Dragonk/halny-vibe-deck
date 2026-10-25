@@ -221,6 +221,7 @@ function mcpOauthUpdate(
 export default function SettingsView(): React.JSX.Element {
   const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview, remoteStatuses } = useStore()
   const updateInfo = useStore((s) => s.updateInfo)
+  const updateProgress = useStore((s) => s.updateProgress)
   const tr = useTranslation(config.language)
   const [tab, setTab] = useState<Tab>('general')
   const [local, setLocal] = useState({ ...config })
@@ -1256,6 +1257,21 @@ export default function SettingsView(): React.JSX.Element {
                     ? ' · ' + tr.updatesLatestLabel.replace('{{version}}', updateInfo.app.latestVersion)
                     : ''}
                 </span>
+                {updateProgress && (
+                  <span className="updates-progress">
+                    {updateProgress.phase === 'download'
+                      ? tr.updateProgressDownload
+                          .replace('{{percent}}', String(updateProgress.percent ?? '…'))
+                          .replace('{{received}}', (updateProgress.received / 1048576).toFixed(1))
+                          .replace(
+                            '{{total}}',
+                            updateProgress.total != null ? (updateProgress.total / 1048576).toFixed(1) : '?',
+                          )
+                      : updateProgress.phase === 'install'
+                        ? tr.updateProgressInstall
+                        : tr.updateProgressRestart}
+                  </span>
+                )}
               </div>
               <div className="updates-actions">
                 <button className="field-btn" disabled={updatesBusy} onClick={() => void handleCheckUpdates()}>

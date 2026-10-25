@@ -114,6 +114,9 @@ interface AppStore {
   };
   checkAppUpdate: () => Promise<void>;
   checkCliUpdate: () => Promise<void>;
+  /** v0.11.0: app self-update download/install progress (main event). */
+  updateProgress: { phase: string; received: number; total: number | null; percent: number | null } | null;
+  setUpdateProgress: (p: { phase: string; received: number; total: number | null; percent: number | null } | null) => void;
   checkRemoteCliUpdate: (remoteId: string) => Promise<CliUpdateInfo>;
   dismissUpdateBanner: () => void;
   /** Upgrade the CLI (local or remote); stops all workers and restores live sessions. */
@@ -378,6 +381,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   updateInfo: { app: null, cli: null, checking: false, dismissed: false },
+  updateProgress: null,
 
   checkAppUpdate: async () => {
     set((s) => ({ updateInfo: { ...s.updateInfo, checking: true } }));
@@ -406,6 +410,8 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   dismissUpdateBanner: () => set((s) => ({ updateInfo: { ...s.updateInfo, dismissed: true } })),
+
+  setUpdateProgress: (p) => set({ updateProgress: p }),
 
   updateCliNow: async (remoteId) => {
     // Main stops every vibe-acp worker first; afterwards bring all previously

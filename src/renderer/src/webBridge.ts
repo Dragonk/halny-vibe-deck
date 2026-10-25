@@ -283,7 +283,9 @@ function buildApi(): AppAPI {
       checkCli: (): Promise<unknown> => invoke('updates:check-cli', []),
       checkCliRemote: (remoteId: string): Promise<unknown> => invoke('updates:check-cli-remote', [remoteId]),
       updateCli: (remoteId?: string): Promise<unknown> => invoke('updates:update-cli', [remoteId ?? null]),
-      updateApp: (): Promise<unknown> => invoke('updates:update-app', [])
+      updateApp: (): Promise<unknown> => invoke('updates:update-app', []),
+      onProgress: (cb: (p: unknown) => void): (() => void) =>
+        subscribeWebEvent('updates:progress', cb as (...args: unknown[]) => void)
     }
   } as unknown as AppAPI
 }

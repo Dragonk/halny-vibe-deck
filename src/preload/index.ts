@@ -286,7 +286,12 @@ const api = {
       ipcRenderer.invoke('updates:check-cli-remote', remoteId),
     updateCli: (remoteId?: string): Promise<unknown> =>
       ipcRenderer.invoke('updates:update-cli', remoteId ?? null),
-    updateApp: (): Promise<unknown> => ipcRenderer.invoke('updates:update-app')
+    updateApp: (): Promise<unknown> => ipcRenderer.invoke('updates:update-app'),
+    onProgress: (listener: (p: unknown) => void): (() => void) => {
+      const l = (_e: unknown, p: unknown): void => listener(p)
+      ipcRenderer.on('updates:progress', l)
+      return () => ipcRenderer.removeListener('updates:progress', l)
+    }
   },
   remote: {
     test: (draft: RemoteConnection): Promise<RemoteTestResult> => ipcRenderer.invoke('remote:test', draft),

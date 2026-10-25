@@ -6,6 +6,7 @@ import fs from "fs"
 import { app } from "electron"
 import { findBinary, tryExec } from "./setup"
 import { sshRun } from "./remote"
+import { loadConfig } from "./config"
 import type { RemoteConnection } from "./config"
 
 // v0.9.0: update system for the app itself (GitHub releases) and the
@@ -15,8 +16,18 @@ import type { RemoteConnection } from "./config"
 const GITHUB_REPO = "Dragonk/mistral-vibe-nexus"
 const PYPI_PACKAGE = "mistral-vibe"
 
+export type AppFlavor = "dev" | "installed" | "portable" | "appimage"
+
+export interface UpdateProgress {
+  phase: "download" | "install" | "relaunch"
+  received: number
+  total: number | null
+  percent: number | null
+}
+
 export interface AppUpdateInfo {
   currentVersion: string
+  flavor: AppFlavor
   latestVersion: string | null
   updateAvailable: boolean
   releaseUrl: string | null
@@ -80,8 +91,29 @@ export function isNewerVersion(latest: string, current: string): boolean {
   return false
 }
 
+/** v0.11.0: how this app was deployed - decides the self-update strategy. */
+export function appFlavor(): AppFlavor {
+  if (!app.isPackaged) return "dev"
+  if (process.platform === "linux" && process.env.APPIMAGE) return "appimage"
+  if (process.platform === "win32") {
+    try {
+      // NSIS-installed builds ship an uninstaller next to the exe; the
+      // portable zip (win-unpacked) does not.
+      const dir = path.dirname(process.execPath)
+      const entries = fs.readdirSync(dir)
+      if (entries.some((f) => /^uninstall.*\.exe$/i.test(f))) return "installed"
+    } catch {
+      /* unreadable dir - treat as portable */
+    }
+    return "portable"
+  }
+  // Linux dir layout (vibe-nexus-linux-x64.zip via install-linux.sh).
+  return "portable"
+}
+
 export async function checkAppUpdate(): Promise<AppUpdateInfo> {
   const currentVersion = app.getVersion()
+  const flavor = appFlavor()
   try {
     const rel = (await fetchJson("https://api.github.com/repos/" + GITHUB_REPO + "/releases/latest")) as {
       tag_name?: string
@@ -91,15 +123,26 @@ export async function checkAppUpdate(): Promise<AppUpdateInfo> {
     const latestVersion = rel.tag_name ? rel.tag_name.replace(/^v/, "") : null
     const assets = rel.assets ?? []
     let downloadUrl: string | null = null
-    if (process.platform === "win32") {
-      const asset = assets.find((a) => a.name.toLowerCase().endsWith(".exe") && a.name.toLowerCase().includes("setup"))
+    if (flavor === "appimage") {
+      const asset = assets.find((a) => a.name.toLowerCase().endsWith(".appimage"))
       downloadUrl = asset?.browser_download_url ?? null
+    } else if (process.platform === "win32") {
+      if (flavor === "installed") {
+        const asset = assets.find((a) => a.name.toLowerCase().endsWith(".exe") && a.name.toLowerCase().includes("setup"))
+        downloadUrl = asset?.browser_download_url ?? null
+      } else {
+        // Portable flavor: update in place with the portable zip - running
+        // the NSIS installer would install somewhere else entirely.
+        const asset = assets.find((a) => a.name.toLowerCase().endsWith("portable.zip"))
+        downloadUrl = asset?.browser_download_url ?? null
+      }
     } else if (process.platform === "linux") {
       const asset = assets.find((a) => a.name.toLowerCase().endsWith(".zip") && a.name.toLowerCase().includes("linux"))
       downloadUrl = asset?.browser_download_url ?? null
     }
     return {
       currentVersion,
+      flavor,
       latestVersion,
       updateAvailable: latestVersion ? isNewerVersion(latestVersion, currentVersion) : false,
       releaseUrl: rel.html_url ?? null,
@@ -109,6 +152,7 @@ export async function checkAppUpdate(): Promise<AppUpdateInfo> {
   } catch (err) {
     return {
       currentVersion,
+      flavor,
       latestVersion: null,
       updateAvailable: false,
       releaseUrl: null,
@@ -136,10 +180,25 @@ function extractVersion(out: string): string | null {
 }
 
 function localCliVersion(): string | null {
-  const vibe = findBinary("vibe")
-  if (vibe) {
-    const out = tryExec('"' + vibe + '" --version')
-    if (out) return extractVersion(out)
+  const candidates: string[] = []
+  const fromPath = findBinary("vibe")
+  if (fromPath) candidates.push(fromPath)
+  // v0.11.0: GUI launches often lack the user's shell PATH - the configured
+  // vibe-acp sits next to the `vibe` binary in the same uv tool bin dir.
+  try {
+    const acpPath = loadConfig().acpPath
+    if (acpPath) {
+      candidates.push(path.join(path.dirname(acpPath), process.platform === "win32" ? "vibe.exe" : "vibe"))
+    }
+  } catch {
+    /* config unavailable */
+  }
+  for (const candidate of candidates) {
+    const out = tryExec('"' + candidate + '" --version')
+    if (out) {
+      const v = extractVersion(out)
+      if (v) return v
+    }
   }
   return null
 }
@@ -156,7 +215,7 @@ export async function checkCliUpdate(): Promise<CliUpdateInfo> {
     return {
       currentVersion: current,
       latestVersion: latest,
-      updateAvailable: current ? isNewerVersion(latest, current) : true,
+      updateAvailable: current ? isNewerVersion(latest, current) : false,
       error: current ? null : "vibe CLI not found on this machine",
     }
   } catch (err) {
@@ -175,7 +234,7 @@ export async function checkRemoteCliUpdate(conn: RemoteConnection): Promise<CliU
     return {
       currentVersion: current,
       latestVersion: latest,
-      updateAvailable: current ? isNewerVersion(latest, current) : true,
+      updateAvailable: current ? isNewerVersion(latest, current) : false,
       error: null,
     }
   } catch (err) {
@@ -268,7 +327,12 @@ export async function upgradeRemoteCli(conn: RemoteConnection): Promise<CliUpgra
 // App self-update
 // ---------------------------------------------------------------------------
 
-function downloadTo(url: string, dest: string, redirects = 0): Promise<void> {
+function downloadTo(
+  url: string,
+  dest: string,
+  onProgress?: (received: number, total: number | null) => void,
+  redirects = 0
+): Promise<void> {
   return new Promise((resolve, reject) => {
     if (redirects > 5) {
       reject(new Error("Too many redirects while downloading"))
@@ -278,7 +342,7 @@ function downloadTo(url: string, dest: string, redirects = 0): Promise<void> {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
         const next = new URL(res.headers.location, url).toString()
-        void downloadTo(next, dest, redirects + 1).then(resolve, reject)
+        void downloadTo(next, dest, onProgress, redirects + 1).then(resolve, reject)
         return
       }
       if (res.statusCode !== 200) {
@@ -286,9 +350,23 @@ function downloadTo(url: string, dest: string, redirects = 0): Promise<void> {
         reject(new Error("Download failed: HTTP " + res.statusCode))
         return
       }
+      const totalHeader = res.headers["content-length"]
+      const total = totalHeader ? parseInt(String(totalHeader), 10) || null : null
+      let received = 0
+      let lastReportAt = 0
+      res.on("data", (chunk: Buffer) => {
+        received += chunk.length
+        const now = Date.now()
+        // v0.11.0: throttled progress so long downloads are visible.
+        if (onProgress && now - lastReportAt > 250) {
+          lastReportAt = now
+          onProgress(received, total)
+        }
+      })
       const f = fs.createWriteStream(dest)
       res.pipe(f)
       f.on("finish", () => {
+        if (onProgress) onProgress(received, total)
         f.close(() => resolve())
       })
       f.on("error", reject)
@@ -306,20 +384,59 @@ export interface AppUpdateResult {
   error: string | null
 }
 
-export async function updateApp(): Promise<AppUpdateResult> {
+export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promise<AppUpdateResult> {
   if (!app.isPackaged) {
     return { ok: false, error: "Self-update is only available for installed builds" }
   }
+  const flavor = appFlavor()
   const info = await checkAppUpdate()
-  if (!info.downloadUrl) {
-    return { ok: false, error: info.error ?? "No update asset available for this platform" }
+  if (!info.updateAvailable || !info.downloadUrl) {
+    // v0.11.0: never downgrade - the button is gated in the UI, but the
+    // handler must refuse on its own (a stale renderer could invoke it).
+    return {
+      ok: false,
+      error:
+        info.error ??
+        (info.updateAvailable ? "No update asset available for this platform" : "Already up to date"),
+    }
   }
+  const emit = (p: UpdateProgress): void => {
+    try {
+      onProgress?.(p)
+    } catch {
+      /* progress reporting must never break the update */
+    }
+  }
+  const dlProgress = (received: number, total: number | null): void =>
+    emit({ phase: "download", received, total, percent: total ? Math.floor((received / total) * 100) : null })
+  const q = (s: string): string => "'" + s + "'"
   const tmp = path.join(os.tmpdir(), "nexus-update-" + Date.now())
   fs.mkdirSync(tmp, { recursive: true })
   try {
-    if (process.platform === "win32") {
+    if (flavor === "appimage") {
+      const dest = path.join(tmp, "nexus.AppImage")
+      await downloadTo(info.downloadUrl, dest, dlProgress)
+      const size = fs.statSync(dest).size
+      if (size < 20 * 1024 * 1024) {
+        return { ok: false, error: "Downloaded AppImage looks invalid (" + Math.round(size / 1024 / 1024) + " MB) - aborting update" }
+      }
+      const target = process.env.APPIMAGE
+      if (!target) {
+        return { ok: false, error: "APPIMAGE env missing - cannot self-update" }
+      }
+      fs.chmodSync(dest, 0o755)
+      emit({ phase: "install", received: size, total: size, percent: 100 })
+      // Replacing the AppImage file of a running app is safe: the mount
+      // keeps the old inode mapped, the next launch uses the new file.
+      fs.renameSync(dest, target)
+      emit({ phase: "relaunch", received: size, total: size, percent: 100 })
+      app.relaunch()
+      app.exit(0)
+      return { ok: true, error: null }
+    }
+    if (process.platform === "win32" && flavor === "installed") {
       const installer = path.join(tmp, "nexus-setup.exe")
-      await downloadTo(info.downloadUrl, installer)
+      await downloadTo(info.downloadUrl, installer, dlProgress)
       const size = fs.statSync(installer).size
       if (size < 20 * 1024 * 1024) {
         return {
@@ -337,7 +454,6 @@ export async function updateApp(): Promise<AppUpdateResult> {
       const exe = process.execPath
       const logPath = path.join(os.tmpdir(), "nexus-update.log")
       const scriptPath = path.join(tmp, "nexus-update.ps1")
-      const q = (s: string): string => "'" + s + "'"
       const ps = [
         "$ErrorActionPreference = 'Continue'",
         "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
@@ -352,17 +468,79 @@ export async function updateApp(): Promise<AppUpdateResult> {
         "Log 'done'",
       ].join("\n")
       fs.writeFileSync(scriptPath, ps, "utf8")
+      emit({ phase: "install", received: fs.statSync(installer).size, total: fs.statSync(installer).size, percent: 100 })
       spawn(
         "powershell.exe",
         ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
         { detached: true, stdio: "ignore", windowsHide: true }
       ).unref()
+      emit({ phase: "relaunch", received: 0, total: null, percent: null })
+      app.quit()
+      return { ok: true, error: null }
+    }
+    if (process.platform === "win32") {
+      // v0.11.0: portable flavor - replace the app directory in place. A
+      // running exe cannot be overwritten on Windows, but it CAN be renamed:
+      // the helper waits for this process to exit, renames the old exe,
+      // copies the new files over and relaunches. (Previously this flavor
+      // ran the NSIS Setup.exe, which installed somewhere else entirely and
+      // left the portable dir - and the running app - untouched.)
+      const zipPath = path.join(tmp, "nexus-portable.zip")
+      await downloadTo(info.downloadUrl, zipPath, dlProgress)
+      const size = fs.statSync(zipPath).size
+      if (size < 20 * 1024 * 1024) {
+        return { ok: false, error: "Downloaded archive looks invalid (" + Math.round(size / 1024 / 1024) + " MB) - aborting update" }
+      }
+      emit({ phase: "install", received: size, total: size, percent: 100 })
+      const extractDir = path.join(tmp, "extracted")
+      const ex = await runAsync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          "Expand-Archive -Path " + q(zipPath) + " -DestinationPath " + q(extractDir) + " -Force",
+        ],
+        600000
+      )
+      if (ex.code !== 0) {
+        return { ok: false, error: "Extract failed: " + (ex.stderr || ex.stdout).trim().slice(0, 500) }
+      }
+      const exe = process.execPath
+      const appDir = path.dirname(exe)
+      const oldName = "nexus-old-" + Date.now() + ".exe"
+      const logPath = path.join(os.tmpdir(), "nexus-update.log")
+      const scriptPath = path.join(tmp, "nexus-update.ps1")
+      const ps = [
+        "$ErrorActionPreference = 'Continue'",
+        "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
+        "Log ('nexus portable update start, pid " + process.pid + "')",
+        "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
+        "Start-Sleep -Milliseconds 1500",
+        "Log 'renaming old exe'",
+        "try { Rename-Item -LiteralPath " + q(exe) + " -NewName " + q(oldName) + " -ErrorAction Stop } catch { Log ('rename failed: ' + $_.Exception.Message); exit 1 }",
+        "Log 'copying new files'",
+        "Copy-Item -Path " + q(path.join(extractDir, "*")) + " -Destination " + q(appDir) + " -Recurse -Force",
+        "Log 'relaunching app'",
+        "Start-Process -FilePath " + q(exe),
+        "Start-Sleep -Seconds 5",
+        "try { Remove-Item -LiteralPath " + q(path.join(appDir, oldName)) + " -Force -ErrorAction SilentlyContinue } catch {}",
+        "Log 'done'",
+      ].join("\n")
+      fs.writeFileSync(scriptPath, ps, "utf8")
+      spawn(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+        { detached: true, stdio: "ignore", windowsHide: true }
+      ).unref()
+      emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
       return { ok: true, error: null }
     }
     if (process.platform === "linux") {
       const zipPath = path.join(tmp, "nexus-linux.zip")
-      await downloadTo(info.downloadUrl, zipPath)
+      await downloadTo(info.downloadUrl, zipPath, dlProgress)
       const size = fs.statSync(zipPath).size
       if (size < 20 * 1024 * 1024) {
         return {
@@ -374,10 +552,12 @@ export async function updateApp(): Promise<AppUpdateResult> {
       // folder holding the executable. Replacing files of a running Linux
       // process is safe - the kernel keeps the old inode mapped.
       const installDir = path.dirname(process.execPath)
+      emit({ phase: "install", received: size, total: size, percent: 100 })
       const r = await runAsync("unzip", ["-o", zipPath, "-d", installDir], 180000)
       if (r.code !== 0) {
         return { ok: false, error: "unzip failed: " + (r.stderr || r.stdout).trim().slice(0, 500) }
       }
+      emit({ phase: "relaunch", received: size, total: size, percent: 100 })
       app.relaunch()
       app.exit(0)
       return { ok: true, error: null }
