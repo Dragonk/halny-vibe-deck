@@ -8067,6 +8067,7 @@ dependencies = [
 name = "vibedeck-core"
 version = "0.8.3"
 dependencies = [
+ "js-sys",
  "serde",
  "serde_json",
 ]
@@ -8113,6 +8114,7 @@ dependencies = [
  "dioxus",
  "dioxus-fullstack",
  "image",
+ "js-sys",
  "pdf-extract",
  "pdfium-render",
  "quick-xml 0.42.0",
@@ -8124,6 +8126,8 @@ dependencies = [
  "vibedeck-core",
  "vibedeck-engine",
  "vibedeck-vibe",
+ "wasm-bindgen",
+ "web-sys",
  "wry",
  "zip",
 ]
