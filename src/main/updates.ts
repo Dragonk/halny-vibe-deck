@@ -479,53 +479,77 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
       return { ok: true, error: null }
     }
     if (process.platform === "win32") {
-      // v0.11.0: portable flavor - replace the app directory in place. A
-      // running exe cannot be overwritten on Windows, but it CAN be renamed:
-      // the helper waits for this process to exit, renames the old exe,
-      // copies the new files over and relaunches. (Previously this flavor
-      // ran the NSIS Setup.exe, which installed somewhere else entirely and
-      // left the portable dir - and the running app - untouched.)
+      // v0.13.0: portable flavor - the detached helper does ALL the heavy
+      // work (extract, copy, verify, relaunch) after this process exits.
+      // v0.12.0 extracted in-process and copied with Copy-Item, whose
+      // wildcard merge semantics are unreliable when destination
+      // subdirectories (resources/, locales/) already exist; a silent
+      // copy failure left the app closed with no relaunch and no updated
+      // files. The helper now uses robocopy, verifies the new exe exists
+      // and rolls back to the renamed previous exe on any failure.
       const zipPath = path.join(tmp, "nexus-portable.zip")
       await downloadTo(info.downloadUrl, zipPath, dlProgress)
       const size = fs.statSync(zipPath).size
       if (size < 20 * 1024 * 1024) {
         return { ok: false, error: "Downloaded archive looks invalid (" + Math.round(size / 1024 / 1024) + " MB) - aborting update" }
       }
-      emit({ phase: "install", received: size, total: size, percent: 100 })
-      const extractDir = path.join(tmp, "extracted")
-      const ex = await runAsync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          "Expand-Archive -Path " + q(zipPath) + " -DestinationPath " + q(extractDir) + " -Force",
-        ],
-        600000
-      )
-      if (ex.code !== 0) {
-        return { ok: false, error: "Extract failed: " + (ex.stderr || ex.stdout).trim().slice(0, 500) }
+      // Cheap sanity check before quitting: every zip starts with the PK
+      // signature. A failed download (proxy error page, truncated body)
+      // would otherwise only surface in the helper, after the app closed.
+      const fd = fs.openSync(zipPath, "r")
+      const sig = Buffer.alloc(2)
+      fs.readSync(fd, sig, 0, 2, 0)
+      fs.closeSync(fd)
+      if (sig[0] !== 0x50 || sig[1] !== 0x4b) {
+        return { ok: false, error: "Downloaded file is not a zip archive - aborting update" }
       }
+      emit({ phase: "install", received: size, total: size, percent: 100 })
       const exe = process.execPath
+      const exeName = path.basename(exe)
       const appDir = path.dirname(exe)
-      const oldName = "nexus-old-" + Date.now() + ".exe"
+      const oldExe = path.join(appDir, "nexus-old-" + Date.now() + ".exe")
+      const extractDir = path.join(tmp, "extracted")
       const logPath = path.join(os.tmpdir(), "nexus-update.log")
       const scriptPath = path.join(tmp, "nexus-update.ps1")
       const ps = [
         "$ErrorActionPreference = 'Continue'",
         "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
+        "function Fail($m) {",
+        "  Log $m",
+        "  $relaunch = $null",
+        "  if (Test-Path -LiteralPath " + q(exe) + ") { $relaunch = " + q(exe) + " }",
+        "  elseif (Test-Path -LiteralPath " + q(oldExe) + ") { $relaunch = " + q(oldExe) + " }",
+        "  if ($relaunch) { Log ('relaunching ' + $relaunch); try { Start-Process -FilePath $relaunch -ErrorAction Stop } catch { Log ('relaunch failed: ' + $_.Exception.Message) } }",
+        "  exit 1",
+        "}",
         "Log ('nexus portable update start, pid " + process.pid + "')",
         "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
         "Start-Sleep -Milliseconds 1500",
+        "Log 'extracting archive'",
+        "try { Expand-Archive -Path " + q(zipPath) + " -DestinationPath " + q(extractDir) + " -Force -ErrorAction Stop } catch { Fail ('extract failed: ' + $_.Exception.Message) }",
+        "$src = " + q(extractDir),
+        "if (-not (Test-Path -LiteralPath (Join-Path $src " + q(exeName) + "))) {",
+        "  $sub = Get-ChildItem -LiteralPath $src -Directory | Select-Object -First 1",
+        "  if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName " + q(exeName) + "))) { $src = $sub.FullName; Log ('nested zip layout, using ' + $src) }",
+        "  else { Fail 'extracted archive does not contain the app executable' }",
+        "}",
         "Log 'renaming old exe'",
-        "try { Rename-Item -LiteralPath " + q(exe) + " -NewName " + q(oldName) + " -ErrorAction Stop } catch { Log ('rename failed: ' + $_.Exception.Message); exit 1 }",
-        "Log 'copying new files'",
-        "Copy-Item -Path " + q(path.join(extractDir, "*")) + " -Destination " + q(appDir) + " -Recurse -Force",
+        "try { Rename-Item -LiteralPath " + q(exe) + " -NewName " + q(path.basename(oldExe)) + " -ErrorAction Stop } catch { Fail ('rename failed: ' + $_.Exception.Message) }",
+        "Log 'copying new files (robocopy)'",
+        "robocopy $src " + q(appDir) + " /E /R:2 /W:2 /NFL /NDL /NP /NJH /NJS",
+        "$rc = $LASTEXITCODE",
+        "Log ('robocopy exit code ' + $rc)",
+        "if ($rc -ge 8) { Fail ('robocopy failed with exit code ' + $rc) }",
+        "if (-not (Test-Path -LiteralPath " + q(exe) + ")) {",
+        "  Log 'new exe missing after copy - rolling back'",
+        "  Rename-Item -LiteralPath " + q(oldExe) + " -NewName " + q(exeName) + " -Force -ErrorAction SilentlyContinue",
+        "  Fail 'rolled back to previous exe'",
+        "}",
         "Log 'relaunching app'",
-        "Start-Process -FilePath " + q(exe),
+        "try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Fail ('relaunch failed: ' + $_.Exception.Message) }",
         "Start-Sleep -Seconds 5",
-        "try { Remove-Item -LiteralPath " + q(path.join(appDir, oldName)) + " -Force -ErrorAction SilentlyContinue } catch {}",
+        "try { Remove-Item -LiteralPath " + q(oldExe) + " -Force -ErrorAction SilentlyContinue } catch {}",
+        "try { Remove-Item -LiteralPath " + q(tmp) + " -Recurse -Force -ErrorAction SilentlyContinue } catch {}",
         "Log 'done'",
       ].join("\n")
       fs.writeFileSync(scriptPath, ps, "utf8")
