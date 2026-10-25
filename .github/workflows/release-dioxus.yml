@@ -201,6 +201,16 @@ jobs:
             | Linux (x86_64, glibc) | `vibedeck-0.8.3-linux-x64.tar.gz` |
             | Windows (x86_64) | `vibedeck-0.8.3-windows-x64.zip` |
 
+            ## What's new (M9.4 — Nexus 0.7.1 parity, v0.8.3-dioxus.6)
+
+            - Resizable panels: drag the sidebar and dock edges; widths are remembered.
+            - File and diff previews open as tabs next to Files/Git (close with X button); the dock keeps a stable width.
+            - Settings: Global/Project scope for skills and prompts, auto UI language (follows browser/OS) and auto color mode.
+            - Frameless desktop window with custom title bar buttons (minimize / maximize / close) and edge resizing.
+            - Tool calls color-coded (green done / amber running / red error) with collapsible bodies.
+            - Fixed: Stats/History tab crashed on load in the browser; model/mode/thinking dropdowns open mid-session again.
+            - Sidebar: collapsible project groups, busy spinner + cancel, right-click context menu with delete confirmation.
+
             ## What's new (M9)
 
             - Real file previews: PDF (rasterized pages via bundled pdfium), DOCX/ODT (styled document flow), PPTX/ODP (slide cards), XLSX/XLS/ODS (all sheets as clickable tabs), images, Markdown + Mermaid, code with syntax highlighting.

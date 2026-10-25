@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (M9.4 — parity with Mistral Vibe Nexus 0.7.1)
+## v0.8.3-dioxus.6 (2026-10-25) — parity with Mistral Vibe Nexus 0.7.1
 
 - **Panels:** left sidebar and right dock are now resizable by dragging
   (`sidebar-resize-handle`, `dock-resize-handle`; widths persist via CSS variables
