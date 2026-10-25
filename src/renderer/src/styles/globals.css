@@ -5543,6 +5543,40 @@ code {
   min-width: 0;
 }
 
+
+/* v0.13.0: settings editors fill the available window height. The raw
+   config editor used to stay at min-height 280px no matter how tall the
+   window was; master-detail tabs (agents/models/providers/mcp) and the
+   skills editor now use the whole vertical space too, with internal
+   scrolling. */
+.settings-section:has(.raw-config-section),
+.settings-section:has(.master-detail),
+.settings-section:has(.skill-detail) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.raw-config-section {
+  flex: 1 1 auto;
+  min-height: 420px;
+}
+.raw-editor-col {
+  display: flex;
+  flex-direction: column;
+}
+.raw-editor-col .vibe-editor-box {
+  flex: 1 1 auto;
+}
+.raw-editor-col > .field {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+}
+.skill-detail-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 300px;
+}
+
 .history-project-select {
   max-width: 240px;
   font-size: 12px;
