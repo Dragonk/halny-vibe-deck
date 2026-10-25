@@ -10,6 +10,8 @@ pub mod app;
 pub mod components;
 pub mod events;
 pub mod fsgit;
+#[cfg(feature = "server")]
+pub mod preview;
 pub mod highlight;
 pub mod vibestats;
 pub mod vibeconfig;
@@ -135,7 +137,7 @@ fn main() {
 fn open_webview(url: &str) -> Result<(), String> {
     use tao::{
         event::{Event, WindowEvent},
-        event_loop::{ControlFlow, EventLoopBuilder},
+        event_loop::ControlFlow,
         window::WindowBuilder,
     };
     use wry::WebViewBuilder;
@@ -145,7 +147,7 @@ fn open_webview(url: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let event_loop = {
         use tao::platform::unix::EventLoopBuilderExtUnix;
-        EventLoopBuilder::new().with_any_thread(true).build()
+        tao::event_loop::EventLoopBuilder::new().with_any_thread(true).build()
     };
     #[cfg(not(target_os = "linux"))]
     let event_loop = tao::event_loop::EventLoop::new();

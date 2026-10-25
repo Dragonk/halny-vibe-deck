@@ -21,19 +21,45 @@ pub struct FileEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SheetData {
+    pub name: String,
+    pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PreviewData {
-    /// text | markdown | csv | image | xlsx | docx | pdf | binary | error
+    /// text | markdown | csv | image | xlsx | doc | slides | pdf | binary | error
     pub kind: String,
-    /// text content / extracted text / csv source
+    /// text content / csv source / extracted pdf text
     pub text: String,
     /// data: URL for images
     pub data_url: String,
-    /// xlsx: first sheet name
-    pub sheet_name: String,
-    /// xlsx rows (also used for csv when parsed server-side)
-    pub rows: Vec<Vec<String>>,
+    /// pdf: rendered pages as data URLs (empty -> text fallback)
+    pub pages: Vec<String>,
+    /// doc/slides: pre-rendered escaped HTML
+    pub html: String,
+    /// xlsx: all sheets
+    pub sheets: Vec<SheetData>,
+    /// text-like kinds can switch to the editor
+    pub editable: bool,
     pub file_name: String,
     pub file_size: u64,
+}
+
+impl PreviewData {
+    pub fn empty() -> Self {
+        Self {
+            kind: String::new(),
+            text: String::new(),
+            data_url: String::new(),
+            pages: Vec::new(),
+            html: String::new(),
+            sheets: Vec::new(),
+            editable: false,
+            file_name: String::new(),
+            file_size: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -180,11 +206,8 @@ mod imp {
                 return PreviewData {
                     kind: "error".into(),
                     text: e.to_string(),
-                    data_url: String::new(),
-                    sheet_name: String::new(),
-                    rows: Vec::new(),
                     file_name: name,
-                    file_size: 0,
+                    ..PreviewData::empty()
                 }
             }
         };
@@ -192,38 +215,39 @@ mod imp {
         let err = |msg: String| PreviewData {
             kind: "error".into(),
             text: msg,
-            data_url: String::new(),
-            sheet_name: String::new(),
-            rows: Vec::new(),
             file_name: name.clone(),
             file_size: size,
+            ..PreviewData::empty()
         };
         let ext = Path::new(&name)
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
-        let base = PreviewData {
-            kind: String::new(),
-            text: String::new(),
-            data_url: String::new(),
-            sheet_name: String::new(),
-            rows: Vec::new(),
-            file_name: name.clone(),
-            file_size: size,
-        };
+        let base = PreviewData::empty();
+        const DOC_CAP: u64 = 25 * 1024 * 1024;
         match ext.as_str() {
-            "md" | "markdown" => {
-                match read_capped(&full, TEXT_CAP) {
-                    Ok(bytes) => PreviewData { kind: "markdown".into(), text: String::from_utf8_lossy(&bytes).into_owned(), ..base },
-                    Err(e) => err(e.to_string()),
-                }
-            }
-            "csv" | "tsv" => {
-                match read_capped(&full, 1024 * 1024) {
-                    Ok(bytes) => PreviewData { kind: "csv".into(), text: String::from_utf8_lossy(&bytes).into_owned(), ..base },
-                    Err(e) => err(e.to_string()),
-                }
-            }
+            "md" | "markdown" => match read_capped(&full, TEXT_CAP) {
+                Ok(bytes) => PreviewData {
+                    kind: "markdown".into(),
+                    text: String::from_utf8_lossy(&bytes).into_owned(),
+                    editable: true,
+                    file_name: name,
+                    file_size: size,
+                    ..base
+                },
+                Err(e) => err(e.to_string()),
+            },
+            "csv" | "tsv" => match read_capped(&full, 1024 * 1024) {
+                Ok(bytes) => PreviewData {
+                    kind: "csv".into(),
+                    text: String::from_utf8_lossy(&bytes).into_owned(),
+                    editable: true,
+                    file_name: name,
+                    file_size: size,
+                    ..base
+                },
+                Err(e) => err(e.to_string()),
+            },
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tiff" | "svg" => {
                 match read_capped(&full, IMAGE_CAP) {
                     Ok(bytes) => {
@@ -245,42 +269,101 @@ mod imp {
                             "image/jpeg"
                         };
                         let b64 = b64_encode(&bytes);
-                        PreviewData { kind: "image".into(), data_url: format!("data:{mime};base64,{b64}"), ..base }
+                        PreviewData { kind: "image".into(), data_url: format!("data:{mime};base64,{b64}"), file_name: name, file_size: size, ..base }
                     }
                     Err(e) => err(e.to_string()),
                 }
             }
-            "xlsx" | "xls" | "xlsm" | "ods" => match xlsx_rows(&full) {
-                Ok((sheet, rows)) => PreviewData { kind: "xlsx".into(), sheet_name: sheet, rows, ..base },
-                Err(e) => err(e),
-            },
-            "docx" => match docx_text(&full) {
-                Ok(text) => PreviewData { kind: "docx".into(), text, ..base },
-                Err(e) => err(e),
-            },
-            "pdf" => match pdf_text(&full) {
-                Ok(text) => PreviewData { kind: "pdf".into(), text, ..base },
-                Err(e) => err(e),
-            },
+            "xlsx" | "xls" | "xlsm" | "ods" => {
+                if size > DOC_CAP {
+                    return err("file too large".into());
+                }
+                match crate::preview::xlsx_sheets(&full) {
+                    Ok(sheets) => PreviewData { kind: "xlsx".into(), sheets, file_name: name, file_size: size, ..base },
+                    Err(e) => err(e),
+                }
+            }
+            "docx" | "odt" => {
+                if size > DOC_CAP {
+                    return err("file too large".into());
+                }
+                let html = if ext == "docx" {
+                    crate::preview::docx_to_html(&full)
+                } else {
+                    crate::preview::odt_to_html(&full)
+                };
+                match html {
+                    Ok(html) => PreviewData { kind: "doc".into(), html, file_name: name, file_size: size, ..base },
+                    Err(e) => err(e),
+                }
+            }
+            "pptx" | "odp" => {
+                if size > DOC_CAP {
+                    return err("file too large".into());
+                }
+                let html = if ext == "pptx" {
+                    crate::preview::pptx_to_html(&full)
+                } else {
+                    crate::preview::odp_to_html(&full)
+                };
+                match html {
+                    Ok(html) => PreviewData { kind: "slides".into(), html, file_name: name, file_size: size, ..base },
+                    Err(e) => err(e),
+                }
+            }
+            "pdf" => {
+                if size > DOC_CAP {
+                    return err("file too large".into());
+                }
+                match crate::preview::pdf_pages(&full) {
+                    Ok(pages) if !pages.is_empty() => PreviewData { kind: "pdf".into(), pages, file_name: name, file_size: size, ..base },
+                    _ => match pdf_text(&full) {
+                        Ok(text) => PreviewData { kind: "pdf".into(), text, file_name: name, file_size: size, ..base },
+                        Err(e) => err(e),
+                    },
+                }
+            }
             "txt" | "log" | "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml"
             | "yaml" | "yml" | "html" | "css" | "sh" | "sql" | "go" | "c" | "h" | "cpp"
             | "java" | "kt" | "rb" | "php" | "xml" | "ini" | "conf" | "env" | "lock" | "" => {
                 match read_capped(&full, TEXT_CAP) {
-                    Ok(bytes) => PreviewData { kind: "text".into(), text: String::from_utf8_lossy(&bytes).into_owned(), ..base },
+                    Ok(bytes) => PreviewData {
+                        kind: "text".into(),
+                        text: String::from_utf8_lossy(&bytes).into_owned(),
+                        editable: true,
+                        file_name: name,
+                        file_size: size,
+                        ..base
+                    },
                     Err(e) => err(e.to_string()),
                 }
             }
             _ => {
                 if is_probably_binary(&ext) {
-                    PreviewData { kind: "binary".into(), ..base }
+                    PreviewData { kind: "binary".into(), file_name: name, file_size: size, ..base }
                 } else {
                     match read_capped(&full, TEXT_CAP) {
-                        Ok(bytes) => PreviewData { kind: "text".into(), text: String::from_utf8_lossy(&bytes).into_owned(), ..base },
+                        Ok(bytes) => PreviewData {
+                            kind: "text".into(),
+                            text: String::from_utf8_lossy(&bytes).into_owned(),
+                            editable: true,
+                            file_name: name,
+                            file_size: size,
+                            ..base
+                        },
                         Err(e) => err(e.to_string()),
                     }
                 }
             }
         }
+    }
+
+    pub fn save_file(path: &str, content: &str) -> Result<(), ServerFnError> {
+        let full = confine(path)?;
+        if content.len() > 1024 * 1024 {
+            return Err(ServerFnError::new("content too large (limit 1 MB)".to_string()));
+        }
+        fs::write(&full, content).map_err(|e| ServerFnError::new(e.to_string()))
     }
 
     fn is_probably_binary(ext: &str) -> bool {
@@ -308,102 +391,7 @@ mod imp {
         out
     }
 
-    // ---- xlsx (calamine) ----
-    fn cell_string(data: &calamine::Data) -> String {
-        match data {
-            calamine::Data::Empty => String::new(),
-            calamine::Data::String(s) => s.clone(),
-            calamine::Data::Float(f) => {
-                if f.fract() == 0.0 && f.abs() < 1e15 {
-                    format!("{}", *f as i64)
-                } else {
-                    format!("{f}")
-                }
-            }
-            calamine::Data::Int(i) => i.to_string(),
-            calamine::Data::DateTime(d) => d.to_string(),
-            calamine::Data::DateTimeIso(s) => s.clone(),
-            calamine::Data::DurationIso(s) => s.clone(),
-            calamine::Data::Bool(b) => b.to_string(),
-            calamine::Data::Error(e) => format!("{e:?}"),
-        }
-    }
-
-    fn xlsx_rows(path: &Path) -> Result<(String, Vec<Vec<String>>), String> {
-        use calamine::Reader;
-        let mut workbook =
-            calamine::open_workbook_auto(path).map_err(|e| format!("workbook: {e}"))?;
-        let names = workbook.sheet_names();
-        if names.is_empty() {
-            return Ok((String::new(), Vec::new()));
-        }
-        let first = names[0].clone();
-        let range = workbook
-            .worksheet_range(&first)
-            .map_err(|e| e.to_string())?;
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        for row in range.rows().take(500) {
-            rows.push(
-                row.iter()
-                    .take(64)
-                    .map(cell_string)
-                    .collect(),
-            );
-        }
-        Ok((first, rows))
-    }
-
-    // ---- docx (zip: word/document.xml, paragraph scan on </w:p>) ----
-    fn docx_text(path: &Path) -> Result<String, String> {
-        let file = fs::File::open(path).map_err(|e| e.to_string())?;
-        let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-        let mut xml = String::new();
-        {
-            let mut doc = zip
-                .by_name("word/document.xml")
-                .map_err(|e| e.to_string())?;
-            std::io::Read::read_to_string(&mut doc, &mut xml).map_err(|e| e.to_string())?;
-        }
-        let mut out = String::new();
-        for chunk in xml.split("</w:p>") {
-            let mut para = String::new();
-            let mut rest = chunk;
-            while let Some(start) = rest.find("<w:t") {
-                let after = &rest[start..];
-                // skip a self-closing <w:tab/> style tag
-                if after.starts_with("<w:tab") || after.starts_with("<w:tc") {
-                    rest = &after[3..];
-                    continue;
-                }
-                let text_start = match after.find('>') {
-                    Some(i) => i + 1,
-                    None => break,
-                };
-                let text_end = match after[text_start..].find("</w:t>") {
-                    Some(i) => text_start + i,
-                    None => break,
-                };
-                para.push_str(&after[text_start..text_end]);
-                rest = &after[text_end + 6..];
-            }
-            if !para.is_empty() {
-                out.push_str(&para);
-                out.push('\n');
-            }
-            if out.len() > 512 * 1024 {
-                break;
-            }
-        }
-        out = out
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'");
-        Ok(out)
-    }
-
-    // ---- pdf (pdf-extract) ----
+        // ---- pdf (pdf-extract) ----
     fn pdf_text(path: &Path) -> Result<String, String> {
         let text = pdf_extract::extract_text(path).map_err(|e| format!("pdf: {e}"))?;
         let mut out = text;
@@ -601,6 +589,12 @@ pub async fn api_list_dir(token: String, path: String) -> Result<Vec<FileEntry>,
 pub async fn api_read_file(token: String, path: String) -> Result<PreviewData, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::read_file(&path))
+}
+
+#[server]
+pub async fn api_save_file(token: String, path: String, content: String) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    imp::save_file(&path, &content)
 }
 
 #[server]

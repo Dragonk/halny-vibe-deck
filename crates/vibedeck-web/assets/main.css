@@ -5803,3 +5803,40 @@ pre.code-view { white-space: pre; }
     --tok-kw: #af00db;
     --tok-table: #795e26;
 }
+
+/* ---- M9: real previews (pdf pages, docx/odt/pptx/odp, xlsx tabs, editor) ---- */
+.file-preview-actions { display: flex; align-items: center; gap: 6px; }
+.file-preview-btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.preview-save-status { font-size: 11px; }
+.preview-save-status.ok { color: var(--color-success); }
+.preview-save-status.error { color: var(--color-danger); }
+.preview-edit { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.preview-edit .code-editor { flex: 1; min-height: 0; }
+
+.doc-render { max-width: 860px; margin: 0 auto; padding: 20px 24px; line-height: 1.65; }
+.doc-render h1 { font-size: 1.7em; margin: 22px 0 10px; }
+.doc-render h2 { font-size: 1.4em; margin: 20px 0 8px; }
+.doc-render h3 { font-size: 1.2em; margin: 18px 0 8px; }
+.doc-render h4, .doc-render h5, .doc-render h6 { font-size: 1.05em; margin: 16px 0 6px; }
+.doc-render p { margin: 8px 0; }
+.doc-render ul { padding-left: 22px; margin: 8px 0; }
+.doc-render li { margin: 3px 0; }
+.doc-render .doc-spacer { margin: 4px 0; }
+.doc-render table.doc-table { border-collapse: collapse; margin: 12px 0; max-width: 100%; }
+.doc-render table.doc-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+.doc-render table.doc-table tr:first-child td { font-weight: 600; background: var(--panel-hover); }
+.preview-doc { flex: 1; overflow: auto; }
+
+.slides-view { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.slide-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--panel); }
+.slide-num { font-size: 10px; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 6px; }
+.slide-title { margin: 0 0 8px; font-size: 15px; }
+.slide-card ul { padding-left: 20px; margin: 6px 0; }
+.slide-card li { margin: 4px 0; }
+
+.pdf-pages { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
+
+.sheet-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); }
+.sheet-tab { padding: 3px 10px; font-size: 11px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; }
+.sheet-tab.active { color: var(--text); border-color: var(--accent); background: var(--panel-hover); }

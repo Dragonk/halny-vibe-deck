@@ -8,9 +8,10 @@
 
 use dioxus::prelude::*;
 
+use crate::components::code_editor::CodeEditor;
 use crate::fsgit::{
-    api_git_diff, api_git_status, api_list_dir, api_read_file, FileEntry, GitStatus,
-    PreviewData,
+    api_git_diff, api_git_status, api_list_dir, api_read_file, api_save_file, FileEntry,
+    GitStatus, PreviewData,
 };
 use crate::i18n::tr;
 use crate::state::{lang, token, ClientState, View};
@@ -185,7 +186,7 @@ fn files_panel(
 
     // preview overlay takes over the dock body
     if let Some((path, data)) = pv {
-        return preview_panel(lang, path, data, preview);
+        return rsx! { PreviewPanel { state, lang, path, data, preview } };
     }
 
     // ---------------- breadcrumb ----------------
@@ -329,12 +330,8 @@ fn file_row(
                             name.clone(),
                             PreviewData {
                                 kind: "loading".into(),
-                                text: String::new(),
-                                data_url: String::new(),
-                                sheet_name: String::new(),
-                                rows: Vec::new(),
                                 file_name: name,
-                                file_size: 0,
+                                ..PreviewData::empty()
                             },
                         )));
                         spawn(async move {
@@ -343,11 +340,8 @@ fn file_row(
                                 Err(e) => PreviewData {
                                     kind: "error".into(),
                                     text: e.to_string(),
-                                    data_url: String::new(),
-                                    sheet_name: String::new(),
-                                    rows: Vec::new(),
                                     file_name: path.clone(),
-                                    file_size: 0,
+                                    ..PreviewData::empty()
                                 },
                             };
                             preview.set(Some((path, data)));
@@ -368,49 +362,207 @@ fn file_row(
 // Preview panel
 // ---------------------------------------------------------------------------
 
-fn preview_panel(
+#[component]
+fn PreviewPanel(
+    state: Signal<ClientState>,
     lang: String,
     path: String,
     data: PreviewData,
-    mut preview: Signal<Option<(String, PreviewData)>>,
+    preview: Signal<Option<(String, PreviewData)>>,
 ) -> Element {
     let name = data.file_name.clone();
     let size = fmt_size(data.file_size);
-    let _ = path;
 
-    let body_el: Element = match data.kind.as_str() {
-        "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
-        "error" => rsx! { div { class: "preview-error-box", "{data.text}" } },
-        "binary" => rsx! {
-            div { class: "preview-loading",
-                "{tr(&lang, \"binaryPreviewHint\")} ({name}, {size})"
+    // editor state — the component instance is re-created whenever the
+    // preview signal swaps the file, so this is per-file state.
+    let editing = use_signal(|| false);
+    let content = use_signal(String::new);
+    let saving = use_signal(|| false);
+    let saved = use_signal(|| false);
+    let save_err = use_signal(String::new);
+    let active_sheet = use_signal(|| 0usize);
+
+    let is_editing = *editing.read();
+    let is_saving = *saving.read();
+    let is_saved = *saved.read();
+    let dirty = is_editing && *content.read() != data.text;
+    let err_txt = save_err.read().clone();
+
+    let body_el: Element = if is_editing {
+        rsx! {
+            div { class: "preview-edit",
+                CodeEditor { code: content, id: "pv".to_string() }
             }
-        },
-        "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
-        "markdown" => {
-            let html = crate::md::to_html(&data.text);
-            rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
         }
-        "csv" => sheet_table(&parse_csv(&data.text), None),
-        "xlsx" => sheet_table(&data.rows, Some(data.sheet_name.clone())),
-        "docx" | "pdf" => {
-            let lines: Vec<Element> = data
-                .text
-                .lines()
-                .map(|l| rsx! { p { style: "margin:0 0 8px 0;", "{l}" } })
-                .collect();
-            rsx! {
-                div { class: if data.kind == "pdf" { "preview-pdf" } else { "preview-docx" },
-                    {lines.iter().cloned()}
+    } else {
+        match data.kind.as_str() {
+            "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
+            "error" => rsx! { div { class: "preview-error-box", "{data.text}" } },
+            "binary" => rsx! {
+                div { class: "preview-loading",
+                    "{tr(&lang, \"binaryPreviewHint\")} ({name}, {size})"
+                }
+            },
+            "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
+            "markdown" => {
+                let html = crate::md::to_html(&data.text);
+                rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
+            }
+            "csv" => sheet_table(&parse_csv(&data.text)),
+            "xlsx" => {
+                if data.sheets.is_empty() {
+                    rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } }
+                } else {
+                    let idx = (*active_sheet.read()).min(data.sheets.len() - 1);
+                    let tabs: Vec<Element> = data
+                        .sheets
+                        .iter()
+                        .enumerate()
+                        .map(|(i, sh)| {
+                            let cls = if i == idx { "sheet-tab active" } else { "sheet-tab" };
+                            let mut active_sheet = active_sheet.clone();
+                            rsx! {
+                                button {
+                                    class: "{cls}",
+                                    onclick: move |_| active_sheet.set(i),
+                                    "{sh.name}"
+                                }
+                            }
+                        })
+                        .collect();
+                    let rows = data.sheets[idx].rows.clone();
+                    rsx! {
+                        div { class: "preview-sheet",
+                            div { class: "sheet-tabs", {tabs.iter().cloned()} }
+                            {sheet_table(&rows)}
+                        }
+                    }
                 }
             }
-        }
-        _ => {
-            let html = crate::highlight::highlight_auto(&name, &data.text);
-            rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
+            "doc" | "slides" => rsx! {
+                div { class: "preview-doc", dangerous_inner_html: "{data.html}" }
+            },
+            "pdf" => {
+                if data.pages.is_empty() {
+                    let lines: Vec<Element> = data
+                        .text
+                        .lines()
+                        .map(|l| rsx! { p { style: "margin:0 0 8px 0;", "{l}" } })
+                        .collect();
+                    rsx! {
+                        div { class: "preview-pdf",
+                            {lines.iter().cloned()}
+                        }
+                    }
+                } else {
+                    let imgs: Vec<Element> = data
+                        .pages
+                        .iter()
+                        .map(|p| rsx! { img { class: "pdf-page", src: "{p}", alt: "page" } })
+                        .collect();
+                    rsx! { div { class: "pdf-pages", {imgs.iter().cloned()} } }
+                }
+            }
+            _ => {
+                let html = crate::highlight::highlight_auto(&name, &data.text);
+                rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
+            }
         }
     };
 
+    let edit_btn: Element = if data.editable {
+        if is_editing {
+            let mut editing = editing.clone();
+            rsx! {
+                button {
+                    class: "file-preview-btn",
+                    title: "{tr(&lang, \"previewEdit\")}",
+                    onclick: move |_| editing.set(false),
+                    "✎"
+                }
+            }
+        } else {
+            let mut editing = editing.clone();
+            let text = data.text.clone();
+            let mut content = content.clone();
+            rsx! {
+                button {
+                    class: "file-preview-btn",
+                    title: "{tr(&lang, \"previewEdit\")}",
+                    onclick: move |_| {
+                        content.set(text.clone());
+                        editing.set(true);
+                    },
+                    "✎"
+                }
+            }
+        }
+    } else {
+        VNode::empty()
+    };
+
+    let save_btn: Element = if is_editing {
+        rsx! {
+            button {
+                class: if dirty { "file-preview-btn primary" } else { "file-preview-btn" },
+                disabled: !dirty || is_saving,
+                onclick: {
+                    let st = state.clone();
+                    let p = path.clone();
+                    let mut saving = saving.clone();
+                    let saved = saved.clone();
+                    let save_err = save_err.clone();
+                    let content = content.clone();
+                    let preview = preview.clone();
+                    let data = data.clone();
+                    move |_| {
+                        let c = content.read().clone();
+                        saving.set(true);
+                        let st = st.clone();
+                        let p = p.clone();
+                        let data = data.clone();
+                        let mut saving = saving.clone();
+                        let mut saved = saved.clone();
+                        let mut save_err = save_err.clone();
+                        let mut preview = preview.clone();
+                        spawn(async move {
+                            match api_save_file(token(&st), p.clone(), c.clone()).await {
+                                Ok(()) => {
+                                    saved.set(true);
+                                    save_err.set(String::new());
+                                    let mut d = data.clone();
+                                    d.text = c.clone();
+                                    preview.set(Some((p, d)));
+                                }
+                                Err(e) => {
+                                    saved.set(false);
+                                    save_err.set(e.to_string());
+                                }
+                            }
+                            saving.set(false);
+                        });
+                    }
+                },
+                if is_saving { "{tr(&lang, \"previewSaving\")}" } else { "{tr(&lang, \"previewSave\")}" }
+            }
+        }
+    } else {
+        VNode::empty()
+    };
+
+    let save_status: Element = if is_editing {
+        if !err_txt.is_empty() {
+            rsx! { span { class: "preview-save-status error", "{err_txt}" } }
+        } else if is_saved && !dirty {
+            rsx! { span { class: "preview-save-status ok", "✓ {tr(&lang, \"previewSaved\")}" } }
+        } else {
+            VNode::empty()
+        }
+    } else {
+        VNode::empty()
+    };
+
+    let mut preview = preview.clone();
     rsx! {
         div { class: "file-preview",
             div { class: "file-preview-header",
@@ -418,10 +570,15 @@ fn preview_panel(
                     span { class: "file-preview-name", "{name}" }
                     span { class: "file-preview-size", "{size}" }
                 }
-                button {
-                    class: "file-preview-btn",
-                    onclick: move |_| preview.set(None),
-                    "✕"
+                div { class: "file-preview-actions",
+                    {save_status}
+                    {edit_btn}
+                    {save_btn}
+                    button {
+                        class: "file-preview-btn",
+                        onclick: move |_| preview.set(None),
+                        "✕"
+                    }
                 }
             }
             div { class: "file-preview-body",
@@ -431,15 +588,7 @@ fn preview_panel(
     }
 }
 
-fn sheet_table(rows: &[Vec<String>], sheet: Option<String>) -> Element {
-    let tab_el: Element = match sheet {
-        Some(s) if !s.is_empty() => rsx! {
-            div { class: "sheet-tabs",
-                button { class: "sheet-tab active", "{s}" }
-            }
-        },
-        _ => VNode::empty(),
-    };
+fn sheet_table(rows: &[Vec<String>]) -> Element {
     let row_els: Vec<Element> = rows
         .iter()
         .enumerate()
@@ -459,7 +608,6 @@ fn sheet_table(rows: &[Vec<String>], sheet: Option<String>) -> Element {
         .collect();
     rsx! {
         div { class: "preview-sheet",
-            {tab_el}
             div { style: "overflow:auto;flex:1;",
                 table { style: "border-collapse:collapse;font-size:12px;font-family:monospace;",
                     {row_els.iter().cloned()}
@@ -468,10 +616,6 @@ fn sheet_table(rows: &[Vec<String>], sheet: Option<String>) -> Element {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Git panel
-// ---------------------------------------------------------------------------
 
 fn git_panel(
     state: Signal<ClientState>,

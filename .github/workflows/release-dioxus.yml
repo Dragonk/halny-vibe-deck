@@ -1,0 +1,157 @@
+name: release-dioxus
+
+on:
+  push:
+    tags:
+      - "v*-dioxus*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VERSION: 0.8.3
+  PDFIUM_TAG: chromium/7881
+
+jobs:
+  test:
+    name: Test workspace
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Test (workspace)
+        run: cargo test --workspace --locked
+
+      - name: Test (vibedeck-web, server feature)
+        run: cargo test -p vibedeck-web --features server --locked
+
+  bundles:
+    name: Bundles (linux x64 + windows x64)
+    runs-on: ubuntu-22.04
+    needs: test
+    env:
+      CARGO_TARGET_DIR: /mnt/vd-target
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,x86_64-pc-windows-gnu
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev mingw-w64
+
+      - name: Install dioxus-cli
+        run: cargo install dioxus-cli --version 0.7.10 --locked
+
+      - name: Build web bundle (wasm + public/)
+        working-directory: crates/vibedeck-web
+        run: dx build --fullstack --web --release
+
+      - name: Build linux server binary (gui + headless)
+        run: |
+          cargo build --profile server-release -p vibedeck-web --features server,gui --locked
+          strip --strip-all "$CARGO_TARGET_DIR/server-release/vibedeck-web"
+
+      - name: Build windows server binary (x86_64-pc-windows-gnu)
+        env:
+          CARGO_TARGET_DIR: /mnt/vd-target-win
+        run: |
+          cargo build --profile server-release -p vibedeck-web --features server,gui --target x86_64-pc-windows-gnu --locked
+          x86_64-w64-mingw32-strip --strip-all "/mnt/vd-target-win/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe"
+
+      - name: Fetch pdfium binaries
+        run: |
+          mkdir -p pdfium && cd pdfium
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-linux-x64.tgz" | tar -xz
+          curl -sL "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}/pdfium-win-x64.tgz" | tar -xz
+
+      - name: Assemble linux bundle
+        run: |
+          mkdir -p dist/vibedeck-linux
+          cp "$CARGO_TARGET_DIR/server-release/vibedeck-web" dist/vibedeck-linux/vibedeck
+          cp pdfium/lib/libpdfium.so dist/vibedeck-linux/
+          cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-linux/public
+          tar -czf "vibedeck-${VERSION}-linux-x64.tar.gz" -C dist/vibedeck-linux .
+
+      - name: Assemble windows bundle
+        run: |
+          mkdir -p dist/vibedeck-win
+          cp /mnt/vd-target-win/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe dist/vibedeck-win/vibedeck.exe
+          cp pdfium/bin/pdfium.dll dist/vibedeck-win/
+          cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-win/public
+          cd dist/vibedeck-win && zip -q -r "../../vibedeck-${VERSION}-windows-x64.zip" .
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles
+          path: |
+            vibedeck-*-linux-x64.tar.gz
+            vibedeck-*-windows-x64.zip
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: bundles
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bundles
+          path: dist
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VibeDeck ${{ github.ref_name }}
+          prerelease: true
+          files: dist/*
+          body: |
+            **VibeDeck — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
+
+            > ⚠️ VibeDeck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
+
+            ## Binaries
+
+            | Platform | File |
+            |---|---|
+            | Linux (x86_64, glibc) | `vibedeck-0.8.3-linux-x64.tar.gz` |
+            | Windows (x86_64) | `vibedeck-0.8.3-windows-x64.zip` |
+
+            ## What's new (M9)
+
+            - Real file previews: PDF (rasterized pages via bundled pdfium), DOCX/ODT (styled document flow), PPTX/ODP (slide cards), XLSX/XLS/ODS (all sheets as clickable tabs), images, Markdown + Mermaid, code with syntax highlighting.
+            - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
+            - First Windows build (`vibedeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
+            - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
+
+            ## Requirements
+
+            - Linux: webkit2gtk 4.1 runtime (on Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0`), glibc-based distro.
+            - Windows: 10/11 with WebView2 (preinstalled on current systems; otherwise install from Microsoft).
+            - Vibe CLI / `vibe-acp` (see first-run Setup in the app).
+
+            ## Usage
+
+            - `./vibedeck` — auto: opens the desktop window if a display is available, otherwise headless server.
+            - `./vibedeck --mode gui` — force desktop window.
+            - `./vibedeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
+            - `./vibedeck --port 1234` / `--set-login user pass` — configure the remote server.

@@ -18,6 +18,9 @@ tokio = { version = "1", features = ["time"] }
 # optional server-side preview parsers (same versions as the egui app)
 calamine = { version = "0.37", optional = true }
 zip = { version = "9", default-features = false, features = ["deflate"], optional = true }
+quick-xml = { version = "0.42", optional = true }
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 pdf-extract = { version = "0.7", optional = true }
 wry = { version = "0.53.5", optional = true }
 tao = { version = "0.34", optional = true }
@@ -26,5 +29,5 @@ tao = { version = "0.34", optional = true }
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:vibedeck-vibe", "dep:toml"]
+server = ["dioxus/server", "dep:vibedeck-engine", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:vibedeck-vibe", "dep:toml"]
 gui = ["dep:wry", "dep:tao"]
