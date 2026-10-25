@@ -229,6 +229,16 @@ app.whenReady().then(() => {
   ipcMain.handle("config:get", () => loadConfig());
   ipcMain.handle("config:save", (_e, config: AppConfig) => {
     saveConfig(config);
+    // v0.7.1: a removed remote connection must not leave its worker
+    // (and the ssh child) running until the app quits.
+    const keepIds = new Set((config.remoteConnections ?? []).map((c) => c.id));
+    for (const id of [...remoteAcpManagers.keys()]) {
+      if (!keepIds.has(id)) {
+        const m = remoteAcpManagers.get(id);
+        remoteAcpManagers.delete(id);
+        void m?.stop();
+      }
+    }
   });
 
   // Dialogs
@@ -343,7 +353,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle("acp:stop", async () => {
-    await stopAllAcp()
+    // v0.7.1: only the LOCAL agent. Settings restarts the local agent on
+    // save; remote workers must survive it (stopAllAcp runs on quit).
+    await acpManager.stop()
   })
 
   ipcMain.handle("acp:is-running", (_e, remoteId?: string) =>

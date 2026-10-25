@@ -45,7 +45,10 @@ export async function remoteGitStatus(conn: RemoteConnection, cwd: string): Prom
         const behindPart = head.split("behind ")[1];
         if (aheadPart) result.ahead = parseInt(aheadPart, 10) || 0;
         if (behindPart) result.behind = parseInt(behindPart, 10) || 0;
-      } else if (rec.length >= 3) {
+      } else if (rec.length >= 3 && rec[2] === " ") {
+        // v0.7.1: porcelain -z rename/copy entries are followed by a second
+        // NUL-separated record (the old path); only XY-prefixed records
+        // (2 status chars + 1 space + path) are real entries.
         const xy = rec.slice(0, 2);
         const path = rec.slice(3);
         const index = (xy[0] ?? " ").trim();

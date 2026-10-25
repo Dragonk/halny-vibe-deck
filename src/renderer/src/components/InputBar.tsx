@@ -249,7 +249,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       setAtFiles([])
       return
     }
-    window.api.fs.searchFiles(dir, atQuery).then((entries) => {
+    // v0.7.1: remote sessions must search their own host, not the local disk
+    const atRid = useStore.getState().currentSession()?.remoteId ?? undefined
+    window.api.fs.searchFiles(dir, atQuery, atRid).then((entries) => {
       setAtFiles(entries)
       setAtPickerIdx(0)
     })
@@ -453,6 +455,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     const pathMatches = [...textToSend.matchAll(atPathRegex)]
     let expandedText = textToSend
     const attachments: { path: string; isDir: boolean; content: string }[] = []
+    // v0.7.1: @paths resolve on the session's own worker (remote-aware)
+    const attachRid = useStore.getState().currentSession()?.remoteId ?? undefined
 
     if (pathMatches.length > 0) {
       const fetchPromises = pathMatches.map(async (match) => {
@@ -464,7 +468,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             ? path
             : `${cwd}/${path}`.replace(/\\/g, '/')
         try {
-          const result = await window.api.fs.readFile(fullPath)
+          const result = await window.api.fs.readFile(fullPath, attachRid)
           return { original: match[0], result, isDir, path: rawPath }
         } catch {
           return { original: match[0], result: { type: 'error' as const, content: '' }, isDir, path: rawPath }
@@ -769,8 +773,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     setShowAttachMenu(false)
     const cwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
     if (!cwd) return
+    // v0.7.1: remote sessions diff their own repository over ssh
+    const rid = useStore.getState().currentSession()?.remoteId ?? undefined
     try {
-      const diff = await window.api.git.diffAll(cwd)
+      const diff = await window.api.git.diffAll(cwd, rid)
       if (!diff || diff.trim().length === 0) {
         insertTextAtCursor(tr.branchDiffEmpty)
         return
@@ -814,6 +820,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   // ---- Folder picker ----
   const canChangeFolder = (): boolean => {
     const session = currentSession()
+    // v0.7.1: remote sessions work on the remote host - the native dialog
+    // picks local folders, which would produce a bogus remote cwd.
+    if (session?.remoteId) return false
     return !session || session.messages.length === 0
   }
 

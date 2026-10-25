@@ -574,6 +574,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
 
     ;(async () => {
       const rid = tab.remoteId ?? undefined
+      try {
       const s = await window.api.fs.stat(tab.path, rid)
       if (!alive) return
       setStat(s)
@@ -598,6 +599,11 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
             setTruncated(t.truncated)
           }
         }
+      }
+      } catch (err) {
+        // v0.7.1: a rejected fs call (e.g. removed remote connection) must
+        // not leave the preview stuck on the loading state forever.
+        if (alive) setTextError(err instanceof Error ? err.message : String(err))
       }
     })()
 
