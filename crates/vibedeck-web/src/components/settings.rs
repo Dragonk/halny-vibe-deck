@@ -20,6 +20,59 @@ fn loc(lang: &str, pl: &str, en: &str) -> String {
     }
 }
 
+/// Editable draft of one SSH remote connection (Settings editor).
+#[derive(Clone)]
+struct SshDraft {
+    id: String,
+    name: String,
+    ssh_cmd: String,
+    enabled: bool,
+    /// One location per line.
+    locations: String,
+    install_command: String,
+}
+
+impl SshDraft {
+    fn from_conn(c: &vibedeck_core::snapshot::RemoteConnection) -> Self {
+        Self {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            ssh_cmd: c.ssh_cmd.clone(),
+            enabled: c.enabled,
+            locations: c.locations.join("\n"),
+            install_command: c.install_command.clone(),
+        }
+    }
+
+    fn new_blank() -> Self {
+        Self {
+            id: format!("conn-{}", vibedeck_core::types::now_ms()),
+            name: String::new(),
+            ssh_cmd: String::new(),
+            enabled: true,
+            locations: String::new(),
+            install_command: String::new(),
+        }
+    }
+
+    fn to_conn(&self) -> vibedeck_core::snapshot::RemoteConnection {
+        vibedeck_core::snapshot::RemoteConnection {
+            id: self.id.clone(),
+            name: self.name.trim().to_string(),
+            enabled: self.enabled,
+            ssh_cmd: self.ssh_cmd.trim().to_string(),
+            locations: self
+                .locations
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect(),
+            install_command: self.install_command.trim().to_string(),
+        }
+    }
+}
+
 async fn reload_cfg(
     state: Signal<ClientState>,
     mut cfg: Signal<Option<VibeConfigData>>,
@@ -325,6 +378,7 @@ pub fn SettingsView() -> Element {
     let remote_enabled = s.snapshot.config.remote_enabled;
     let auth_configured = s.snapshot.config.auth_configured;
     let remote_port = s.snapshot.config.remote_port;
+    let ssh_conns = s.snapshot.config.remote_connections.clone();
     let serve_url = format!("https://<host>:{remote_port}");
     let status = s.snapshot.status.clone();
     drop(s);
@@ -334,6 +388,11 @@ pub fn SettingsView() -> Element {
     let mut r_pass = use_signal(String::new);
     let mut r_port = use_signal(move || remote_port.to_string());
     let mut r_enable = use_signal(move || remote_enabled || auth_configured);
+
+    // SSH remote-connections editor state (remote tab, second section).
+    let ssh_draft = use_signal(|| Option::<SshDraft>::None);
+    let ssh_msg = use_signal(String::new);
+    let ssh_busy = use_signal(|| false);
 
     // Vibe CLI configuration state (loaded once, refetched after edits).
     let mut cfg = use_signal(|| Option::<VibeConfigData>::None);
@@ -553,6 +612,34 @@ pub fn SettingsView() -> Element {
                             "{loc(&lang, \"Dostęp zdalny wyłączony — interfejs lokalny działa bez hasła na 127.0.0.1.\", \"Remote access disabled — the local interface runs without a login on 127.0.0.1.\")}"
                         }
                     }
+                }
+            }
+            div { class: "settings-section",
+                div { class: "settings-section-header",
+                    div { class: "settings-section-title", "{loc(&lang, \"Serwery zdalne (SSH)\", \"Remote servers (SSH)\")}" }
+                    button {
+                        class: "save-btn",
+                        style: "margin-left:auto;",
+                        onclick: {
+                            let mut ssh_draft = ssh_draft.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            move |_| {
+                                ssh_msg.set(String::new());
+                                ssh_draft.set(Some(SshDraft::new_blank()));
+                            }
+                        },
+                        "＋ {loc(&lang, \"Dodaj serwer\", \"Add server\")}"
+                    }
+                }
+                div { class: "field-hint",
+                    "{loc(&lang, \"Połącz się przez SSH z innym serwerem i steruj agentem vibe-acp zdalnie — nowe sesje, historia CLI i podgląd postępu w grupie 📍 w pasku bocznym.\", \"Connect over SSH to another server and drive its vibe-acp agent remotely — new sessions, CLI history and live progress in the 📍 group in the sidebar.\")}"
+                }
+                {ssh_conn_rows(state, lang.clone(), &ssh_conns, ssh_draft.clone(), ssh_msg.clone()).iter().cloned()}
+                if let Some(d) = ssh_draft.read().clone() {
+                    {ssh_editor_el(state.clone(), lang.clone(), d, ssh_draft.clone(), ssh_msg.clone(), ssh_busy.clone())}
+                }
+                if !ssh_msg.read().is_empty() {
+                    div { class: "field-hint", style: "white-space:pre-wrap;", "{ssh_msg.read().clone()}" }
                 }
             }
         },
@@ -1131,4 +1218,334 @@ pub fn SettingsView() -> Element {
 
 async fn refresh_after_save(state: Signal<ClientState>) {
     crate::state::refresh(state).await;
+}
+
+/// Saved SSH connection rows (name + command + edit).
+fn ssh_conn_rows(
+    _state: Signal<ClientState>,
+    lang: String,
+    conns: &[vibedeck_core::snapshot::RemoteConnection],
+    ssh_draft: Signal<Option<SshDraft>>,
+    ssh_msg: Signal<String>,
+) -> Vec<Element> {
+    conns
+        .iter()
+        .map(|c| {
+            let name = c.name.clone();
+            let cmd = c.ssh_cmd.clone();
+            let draft = SshDraft::from_conn(c);
+            rsx! {
+                div { class: "remote-conn-row",
+                    span {
+                        class: "remote-dot",
+                        title: if c.enabled {
+                            "{loc(&lang, \"Włączone\", \"Enabled\")}"
+                        } else {
+                            "{loc(&lang, \"Wyłączone\", \"Disabled\")}"
+                        },
+                        style: if c.enabled {
+                            "background:#22c55e;margin-left:0;"
+                        } else {
+                            "background:#6b6b70;margin-left:0;"
+                        },
+                    }
+                    span { class: "remote-conn-name", "{name}" }
+                    span { class: "remote-conn-cmd", "{cmd}" }
+                    button {
+                        class: "save-btn",
+                        style: "padding:2px 10px;",
+                        onclick: {
+                            let mut ssh_draft = ssh_draft.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let draft = draft.clone();
+                            move |_| {
+                                ssh_msg.set(String::new());
+                                ssh_draft.set(Some(draft.clone()));
+                            }
+                        },
+                        "{loc(&lang, \"Edytuj\", \"Edit\")}"
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+/// The SSH connection draft editor: name, ssh command, locations,
+/// install command + Test / Install / Save / Delete / Cancel.
+fn ssh_editor_el(
+    state: Signal<ClientState>,
+    lang: String,
+    d: SshDraft,
+    ssh_draft: Signal<Option<SshDraft>>,
+    ssh_msg: Signal<String>,
+    ssh_busy: Signal<bool>,
+) -> Element {
+    rsx! {
+        div { class: "field", style: "border:1px solid var(--border-subtle);border-radius:8px;padding:10px;",
+            div { class: "field",
+                div { class: "field-label", "{loc(&lang, \"Nazwa\", \"Name\")}" }
+                input {
+                    class: "field-input",
+                    r#type: "text",
+                    value: "{d.name}",
+                    oninput: {
+                        let mut ssh_draft = ssh_draft.clone();
+                        move |e| {
+                            let mut w = ssh_draft.write();
+                            if let Some(x) = w.as_mut() { x.name = e.value(); }
+                        }
+                    },
+                }
+            }
+            div { class: "field",
+                div { class: "field-label", "SSH {loc(&lang, \"polecenie\", \"command\")}" }
+                input {
+                    class: "field-input",
+                    r#type: "text",
+                    style: "font-family:monospace;",
+                    placeholder: "ssh user@host -p 2222",
+                    value: "{d.ssh_cmd}",
+                    oninput: {
+                        let mut ssh_draft = ssh_draft.clone();
+                        move |e| {
+                            let mut w = ssh_draft.write();
+                            if let Some(x) = w.as_mut() { x.ssh_cmd = e.value(); }
+                        }
+                    },
+                }
+            }
+            div { class: "field-row",
+                label { class: "checkbox-label",
+                    input {
+                        r#type: "checkbox",
+                        checked: d.enabled,
+                        onchange: {
+                            let mut ssh_draft = ssh_draft.clone();
+                            move |e| {
+                                let mut w = ssh_draft.write();
+                                if let Some(x) = w.as_mut() { x.enabled = e.checked(); }
+                            }
+                        },
+                    }
+                    "{loc(&lang, \"Włączony\", \"Enabled\")}"
+                }
+            }
+            div { class: "field",
+                div { class: "field-label", "{loc(&lang, \"Katalogi projektów (jeden na linię)\", \"Project directories (one per line)\")}" }
+                textarea {
+                    class: "field-input",
+                    style: "min-height:60px;font-family:monospace;font-size:12px;",
+                    value: "{d.locations}",
+                    oninput: {
+                        let mut ssh_draft = ssh_draft.clone();
+                        move |e| {
+                            let mut w = ssh_draft.write();
+                            if let Some(x) = w.as_mut() { x.locations = e.value(); }
+                        }
+                    },
+                }
+            }
+            div { class: "field",
+                div { class: "field-label", "{loc(&lang, \"Własna komenda instalacji (opcjonalna)\", \"Custom install command (optional)\")}" }
+                input {
+                    class: "field-input",
+                    r#type: "text",
+                    style: "font-family:monospace;font-size:12px;",
+                    value: "{d.install_command}",
+                    oninput: {
+                        let mut ssh_draft = ssh_draft.clone();
+                        move |e| {
+                            let mut w = ssh_draft.write();
+                            if let Some(x) = w.as_mut() { x.install_command = e.value(); }
+                        }
+                    },
+                }
+                div { class: "field-hint",
+                    "{loc(&lang, \"Instalator domyślnie używa uv (uv tool install mistral-vibe).\", \"The installer uses uv by default (uv tool install mistral-vibe).\")}"
+                }
+            }
+            div { class: "field-row", style: "gap:8px;flex-wrap:wrap;",
+                button {
+                    class: "save-btn",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let lang = lang.clone();
+                        let d = d.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        let ssh_busy = ssh_busy.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let lang = lang.clone();
+                            let d = d.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let mut ssh_busy = ssh_busy.clone();
+                            spawn(async move {
+                                ssh_busy.set(true);
+                                ssh_msg.set(loc(&lang, "Testuję...", "Testing..."));
+                                let res = crate::api::api_test_remote(token(&state), d.to_conn()).await;
+                                match res {
+                                    Ok(r) => {
+                                        if !r.reachable {
+                                            ssh_msg.set(format!(
+                                                "❌ {}",
+                                                r.error.unwrap_or_else(|| "SSH connection failed".into())
+                                            ));
+                                        } else if r.acp_installed {
+                                            ssh_msg.set(format!(
+                                                "✅ {} — vibe-acp {} ({})",
+                                                loc(&lang, "Połączenie OK", "Connection OK"),
+                                                r.version.unwrap_or_default(),
+                                                r.acp_path.unwrap_or_default(),
+                                            ));
+                                        } else {
+                                            ssh_msg.set(format!(
+                                                "⚠️ {} — {}",
+                                                loc(&lang, "Połączono, ale vibe-acp nie jest zainstalowany", "Connected, but vibe-acp is not installed"),
+                                                loc(&lang, "użyj Install", "use Install"),
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                                ssh_busy.set(false);
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Test\", \"Test\")}"
+                }
+                button {
+                    class: "save-btn",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let lang = lang.clone();
+                        let d = d.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        let ssh_busy = ssh_busy.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let lang = lang.clone();
+                            let d = d.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let mut ssh_busy = ssh_busy.clone();
+                            spawn(async move {
+                                ssh_busy.set(true);
+                                ssh_msg.set(loc(&lang, "Instaluję (do 5 min)...", "Installing (up to 5 min)..."));
+                                let res = crate::api::api_install_remote_acp(token(&state), d.to_conn()).await;
+                                match res {
+                                    Ok(r) if r.ok => {
+                                        ssh_msg.set(format!(
+                                            "✅ {}",
+                                            loc(&lang, "Zainstalowano vibe-acp na zdalnym serwerze", "vibe-acp installed on the remote host"),
+                                        ));
+                                    }
+                                    Ok(r) => {
+                                        let err = r.error.unwrap_or_else(|| "install failed".into());
+                                        ssh_msg.set(format!("❌ {err}\n{}", r.log));
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                                ssh_busy.set(false);
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Install\", \"Install\")}"
+                }
+                button {
+                    class: "save-btn",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let lang = lang.clone();
+                        let d = d.clone();
+                        let ssh_draft = ssh_draft.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        let ssh_busy = ssh_busy.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let lang = lang.clone();
+                            let d = d.clone();
+                            let mut ssh_draft = ssh_draft.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let mut ssh_busy = ssh_busy.clone();
+                            spawn(async move {
+                                if d.name.trim().is_empty() || d.ssh_cmd.trim().is_empty() {
+                                    ssh_msg.set(loc(&lang, "Podaj nazwę i polecenie SSH.", "Enter a name and the SSH command."));
+                                    return;
+                                }
+                                ssh_busy.set(true);
+                                let mut list = state.read().snapshot.config.remote_connections.clone();
+                                let conn = d.to_conn();
+                                match list.iter_mut().find(|c| c.id == conn.id) {
+                                    Some(existing) => *existing = conn.clone(),
+                                    None => list.push(conn.clone()),
+                                }
+                                match crate::api::api_save_remote_connections(token(&state), list).await {
+                                    Ok(()) => {
+                                        ssh_msg.set(String::new());
+                                        ssh_draft.set(None);
+                                        refresh_after_save(state).await;
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                                ssh_busy.set(false);
+                            });
+                        }
+                    },
+                    "{tr(&lang, \"saveLabel\")}"
+                }
+                button {
+                    class: "save-btn",
+                    style: "background:var(--panel-hover);",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let d = d.clone();
+                        let ssh_draft = ssh_draft.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let d = d.clone();
+                            let mut ssh_draft = ssh_draft.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            spawn(async move {
+                                let list = state.read().snapshot.config.remote_connections.clone();
+                                let mut next: Vec<_> = list
+                                    .into_iter()
+                                    .filter(|c| c.id != d.id)
+                                    .collect();
+                                if next.is_empty() {
+                                    next = Vec::new();
+                                }
+                                match crate::api::api_save_remote_connections(token(&state), next).await {
+                                    Ok(()) => {
+                                        ssh_msg.set(String::new());
+                                        ssh_draft.set(None);
+                                        refresh_after_save(state).await;
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Usuń\", \"Delete\")}"
+                }
+                button {
+                    class: "save-btn",
+                    style: "background:var(--panel-hover);",
+                    onclick: {
+                        let mut ssh_draft = ssh_draft.clone();
+                        let mut ssh_msg = ssh_msg.clone();
+                        move |_| {
+                            ssh_draft.set(None);
+                            ssh_msg.set(String::new());
+                        }
+                    },
+                    "{tr(&lang, \"cancelLabel\")}"
+                }
+            }
+        }
+    }
 }

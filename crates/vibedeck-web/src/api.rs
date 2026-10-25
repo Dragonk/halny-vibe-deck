@@ -285,3 +285,115 @@ fn resolve_attachments(text: &str) -> (String, Vec<vibedeck_core::types::Attachm
 
     (expanded, attachments)
 }
+
+// ---------------------------------------------------------------------------
+// SSH remote connections (Nexus parity)
+// ---------------------------------------------------------------------------
+
+/// Saved SSH remote connections (Settings editor + sidebar groups).
+#[server]
+pub async fn api_remote_connections(
+    token: String,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteConnection>, ServerFnError> {
+    check(&token)?;
+    Ok(vibedeck_engine::Engine::global().config().remote_connections)
+}
+
+/// Persist the full remote-connection list. Allowed through the remote
+/// HTTPS listener too (Nexus only protects the serve/credentials section).
+#[server]
+pub async fn api_save_remote_connections(
+    token: String,
+    conns: Vec<vibedeck_core::snapshot::RemoteConnection>,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    for c in &conns {
+        if c.name.trim().is_empty() || c.ssh_cmd.trim().is_empty() {
+            return Err(ServerFnError::new("name and ssh command required"));
+        }
+    }
+    vibedeck_engine::Engine::global().set_remote_connections(conns);
+    Ok(())
+}
+
+/// Test an (unsaved) connection draft: reachability + vibe-acp presence.
+#[server]
+pub async fn api_test_remote(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+) -> Result<vibedeck_core::snapshot::RemoteTestResult, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::test_remote(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Install (or upgrade) vibe-acp on the remote host.
+/// LOCAL-ONLY (Nexus WEB_BLOCKED has remote:install-acp).
+#[server]
+pub async fn api_install_remote_acp(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+) -> Result<vibedeck_core::snapshot::RemoteInstallResult, ServerFnError> {
+    check(&token)?;
+    require_local()?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::install_remote_acp(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// CLI sessions discovered on a remote host (JSON-RPC over ssh).
+#[server]
+pub async fn api_remote_sessions(
+    token: String,
+    conn_id: String,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteSessionInfo>, ServerFnError> {
+    check(&token)?;
+    let Some(conn) = vibedeck_engine::Engine::global().remote_connection(&conn_id) else {
+        return Ok(Vec::new());
+    };
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::list_remote_sessions(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Quick liveness check for the sidebar status dot.
+#[server]
+pub async fn api_check_remote_status(
+    token: String,
+    conn_id: String,
+) -> Result<vibedeck_core::snapshot::RemoteStatus, ServerFnError> {
+    check(&token)?;
+    let Some(conn) = vibedeck_engine::Engine::global().remote_connection(&conn_id) else {
+        return Ok(vibedeck_core::snapshot::RemoteStatus::default());
+    };
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::check_remote_status(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// New session on an SSH remote (sidebar "+" per location).
+#[server]
+pub async fn api_start_remote_session(
+    token: String,
+    conn_id: String,
+    location: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().create_remote_session(&conn_id, &location);
+    Ok(())
+}
+
+/// Open a CLI session discovered on an SSH remote (replays history).
+#[server]
+pub async fn api_open_remote_session(
+    token: String,
+    conn_id: String,
+    session_id: String,
+    title: String,
+    cwd: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    vibedeck_engine::Engine::global().open_remote_session(&conn_id, &session_id, &title, &cwd);
+    Ok(())
+}

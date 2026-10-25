@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.8.3-dioxus.7 (2026-10-25) — M9.5: local no-auth + HTTPS remote login + SSH remote connections
+
+- **Local start without password:** the app no longer asks for login when the
+  interface is served on the local loopback (127.0.0.1) — the desktop UI opens
+  straight into the chat. Credentials are only requested when connecting over
+  HTTPS from another machine.
+- **Remote HTTPS serve (Nexus parity):** a new serve stack binds HTTPS with a
+  self-signed cert when remote access is enabled; browser sessions authenticate
+  with a secure cookie after a redesigned Nexus-style login screen (flame brand,
+  card layout, error/hint states). Credential editing (username/password) is
+  available in local Settings only.
+- **SSH remote connections (Nexus v0.9.0 parity):** Settings → Remote lets you
+  add SSH servers (name, ssh command, project locations, optional custom install
+  command). Each connection can be tested (reachable / vibe-acp installed /
+  version), and vibe-acp can be installed remotely (`uv tool install mistral-vibe`).
+- **Remote sidebar:** remote servers appear as 📍 groups with a live status dot
+  (green/red); quick-start locations (📁) start a remote session in one click,
+  remote CLI sessions are listed and clickable, local mirrors are grouped per
+  remote working directory with a ＋ quick-start button.
+- **Remote sessions:** remote ACP clients run over SSH (`ssh … bash -lc
+  "exec vibe-acp"`) using the same JSON-RPC protocol — remote chat, modes and
+  config options work like local ones; session mirrors carry the remote id.
+
 ## v0.8.3-dioxus.6 (2026-10-25) — parity with Mistral Vibe Nexus 0.7.1
 
 - **Panels:** left sidebar and right dock are now resizable by dragging

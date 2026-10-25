@@ -101,6 +101,9 @@ pub struct EngineConfig {
     pub hidden_sessions: Vec<String>,
     #[serde(default)]
     pub hidden_projects: Vec<String>,
+    /// SSH remotes where vibe-acp runs (Nexus remote connections).
+    #[serde(default)]
+    pub remote_connections: Vec<vibedeck_core::snapshot::RemoteConnection>,
 }
 
 fn default_remote_port() -> u16 {

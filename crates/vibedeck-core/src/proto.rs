@@ -159,9 +159,12 @@ pub enum AcpEvent {
 /// Commands from the UI to the ACP worker.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AcpCommand {
-    /// Spawn vibe-acp at `acp_path` and run the `initialize` handshake.
+    /// Spawn the agent from `argv` and run the `initialize` handshake.
+    /// For local sessions this is `[acp_path]`; for SSH remotes it is the
+    /// tokenized `ssh` command with `bash -lc "exec vibe-acp"` appended -
+    /// the JSON-RPC protocol is identical over the ssh pipe.
     Start {
-        acp_path: String,
+        argv: Vec<String>,
     },
     /// Kill the subprocess and reset state.
     Stop,

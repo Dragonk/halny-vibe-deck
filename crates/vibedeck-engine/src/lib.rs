@@ -7,6 +7,7 @@
 //! clients stays in sync.
 
 pub mod config;
+pub mod remote;
 mod types;
 
 pub use config::{random_hex, AuthEntry, EngineConfig};
@@ -154,7 +155,7 @@ impl Engine {
         *self.global_status.lock().unwrap() = AcpStatus::Connecting;
         let acp_path = self.config().acp_path;
         if !acp_path.is_empty() {
-            self.lister.send(AcpCommand::Start { acp_path });
+            self.lister.send(AcpCommand::Start { argv: vec![acp_path] });
         }
     }
 
@@ -173,12 +174,24 @@ impl Engine {
 
     // ---------------- slots ----------------
 
-    /// Spawn a slot for the given local session and start its process.
+    /// Spawn a slot for the given session and start its process. Local
+    /// slots run `acp_path`; remote slots run the connection's ssh
+    /// command with `bash -lc "exec vibe-acp"` (same JSON-RPC protocol).
     fn ensure_slot(&self, session_key: &str, purpose: SlotPurpose) -> Option<u64> {
-        let acp_path = self.config().acp_path;
-        if acp_path.is_empty() {
-            return None;
-        }
+        let argv = match &purpose {
+            SlotPurpose::NewLocal { .. } | SlotPurpose::LoadBackend { .. } => {
+                let acp_path = self.config().acp_path;
+                if acp_path.is_empty() {
+                    return None;
+                }
+                vec![acp_path]
+            }
+            SlotPurpose::NewRemote { conn_id, .. } | SlotPurpose::LoadRemote { conn_id, .. } => {
+                let cfg = self.config();
+                let conn = cfg.remote_connections.iter().find(|c| c.id == *conn_id)?;
+                crate::remote::remote_argv(conn)
+            }
+        };
         let mut st = self.state.lock().unwrap();
         if let Some(slot_id) = st.slot_of_session(session_key) {
             return Some(slot_id);
@@ -187,7 +200,7 @@ impl Engine {
         st.next_slot += 1;
         let mut slot = spawn_slot(slot_id, purpose);
         slot.status = AcpStatus::Connecting;
-        let _ = slot.cmd.send(AcpCommand::Start { acp_path });
+        let _ = slot.cmd.send(AcpCommand::Start { argv });
         st.slots.insert(slot_id, slot);
         st.slot_of.insert(session_key.to_string(), slot_id);
         Some(slot_id)
@@ -251,6 +264,7 @@ impl Engine {
                 sidebar_sessions_limit: cfg.sidebar_sessions_limit,
                 hidden_sessions: cfg.hidden_sessions.clone(),
                 hidden_projects: cfg.hidden_projects.clone(),
+                remote_connections: cfg.remote_connections.clone(),
             },
         }
     }
@@ -357,6 +371,104 @@ impl Engine {
             &key,
             SlotPurpose::LoadBackend {
                 session_id: info.session_id.clone(),
+                cwd,
+            },
+        );
+        self.publish(BusEvent::StructureChanged);
+    }
+
+    // ---------------- SSH remote sessions (Nexus parity) ----------------
+
+    /// Look up a saved remote connection by id.
+    pub fn remote_connection(&self, conn_id: &str) -> Option<vibedeck_core::snapshot::RemoteConnection> {
+        self.config().remote_connections.into_iter().find(|c| c.id == conn_id)
+    }
+
+    /// Persist the full remote-connection list (Settings editor).
+    pub fn set_remote_connections(
+        &self,
+        conns: Vec<vibedeck_core::snapshot::RemoteConnection>,
+    ) {
+        self.update_config(|c| c.remote_connections = conns);
+        self.publish_structure();
+    }
+
+    /// New session on an SSH remote: creates the local mirror bound to
+    /// `conn_id` and spawns its agent process over ssh.
+    pub fn create_remote_session(&self, conn_id: &str, location: &str) {
+        if self.remote_connection(conn_id).is_none() {
+            return;
+        }
+        let cwd = location.to_string();
+        let label = location
+            .rsplit(['/', '\\'])
+            .find(|s| !s.is_empty())
+            .unwrap_or("Remote session");
+        let key = {
+            let mut st = self.state.lock().unwrap();
+            let mut session = ChatSession::new(label, &cwd);
+            session.working_directory = cwd.clone();
+            session.remote_id = Some(conn_id.to_string());
+            let key = session.id.clone();
+            st.sessions.insert(0, session);
+            st.current = Some(0);
+            key
+        };
+        self.ensure_slot(
+            &key,
+            SlotPurpose::NewRemote {
+                conn_id: conn_id.to_string(),
+                cwd,
+            },
+        );
+        self.publish(BusEvent::StructureChanged);
+    }
+
+    /// Open (or switch to) a CLI session discovered on an SSH remote:
+    /// creates the local mirror and replays the remote history.
+    pub fn open_remote_session(
+        &self,
+        conn_id: &str,
+        session_id: &str,
+        title: &str,
+        cwd: &str,
+    ) {
+        if self.remote_connection(conn_id).is_none() {
+            return;
+        }
+        {
+            let mut st = self.state.lock().unwrap();
+            if let Some(i) = st.sessions.iter().position(|s| {
+                s.remote_id.as_deref() == Some(conn_id)
+                    && s.acp_session_id.as_deref() == Some(session_id)
+            }) {
+                st.current = Some(i);
+                drop(st);
+                self.publish(BusEvent::StructureChanged);
+                return;
+            }
+        }
+        let cwd = if cwd.is_empty() {
+            self.workdir()
+        } else {
+            cwd.to_string()
+        };
+        let name = if title.is_empty() { "Remote session" } else { title };
+        let key = {
+            let mut st = self.state.lock().unwrap();
+            let mut session = ChatSession::new(name, &cwd);
+            session.working_directory = cwd.clone();
+            session.remote_id = Some(conn_id.to_string());
+            let key = session.id.clone();
+            st.sessions.insert(0, session);
+            st.current = Some(0);
+            key
+        };
+        self.ensure_slot(
+            &key,
+            SlotPurpose::LoadRemote {
+                conn_id: conn_id.to_string(),
+                session_id: session_id.to_string(),
                 cwd,
             },
         );
@@ -681,6 +793,20 @@ impl Engine {
                                 model: global_model,
                             });
                         }
+                        SlotPurpose::NewRemote { cwd, .. } => {
+                            let _ = slot.cmd.send(AcpCommand::NewSession {
+                                cwd,
+                                model: global_model,
+                            });
+                        }
+                        SlotPurpose::LoadRemote { session_id, cwd, .. } => {
+                            slot.busy = true;
+                            let _ = slot.cmd.send(AcpCommand::LoadSession {
+                                session_id,
+                                cwd,
+                                model: global_model,
+                            });
+                        }
                     }
                 }
                 AcpEvent::Disconnected { .. } => {
@@ -745,6 +871,9 @@ impl Engine {
                     let matches_purpose = matches!(
                         &slot.purpose,
                         SlotPurpose::LoadBackend { session_id: sid, .. } if *sid == session_id
+                    ) || matches!(
+                        &slot.purpose,
+                        SlotPurpose::LoadRemote { session_id: sid, .. } if *sid == session_id
                     );
                     if matches_purpose {
                         if let Some(i) = slot_session {

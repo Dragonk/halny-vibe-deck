@@ -20,6 +20,14 @@ pub enum SlotPurpose {
     NewLocal { cwd: String },
     /// Mirror of a CLI session -> run `session/load` and replay history.
     LoadBackend { session_id: String, cwd: String },
+    /// Fresh session on an SSH remote -> run `session/new` there.
+    NewRemote { conn_id: String, cwd: String },
+    /// Mirror of a remote CLI session -> `session/load` over ssh.
+    LoadRemote {
+        conn_id: String,
+        session_id: String,
+        cwd: String,
+    },
 }
 
 /// One agent worker (a vibe-acp subprocess) bound to a local session.

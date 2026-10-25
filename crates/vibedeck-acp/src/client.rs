@@ -101,13 +101,17 @@ struct Client {
 }
 
 impl Client {
-    fn spawn_bin(
-        acp_path: &str,
+    fn spawn_argv(
+        argv: &[String],
         raw_tx: Sender<RawMsg>,
         raw_rx: Receiver<RawMsg>,
         event_tx: Sender<AcpEvent>,
     ) -> Result<Self> {
-        let mut cmd = Command::new(acp_path);
+        if argv.is_empty() {
+            anyhow::bail!("empty agent command");
+        }
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..]);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -120,7 +124,7 @@ impl Client {
         }
         let mut child = cmd
             .spawn()
-            .with_context(|| format!("failed to spawn `{acp_path}`"))?;
+            .with_context(|| format!("failed to spawn `{}`", argv.join(" ")))?;
 
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout: ChildStdout = child.stdout.take().expect("piped stdout");
@@ -415,7 +419,7 @@ impl Worker {
 
     fn handle(&mut self, cmd: AcpCommand) {
         match cmd {
-            AcpCommand::Start { acp_path } => self.cmd_start(&acp_path),
+            AcpCommand::Start { argv } => self.cmd_start(&argv),
             AcpCommand::Stop => {
                 if let Some(mut c) = self.client.take() {
                     c.kill();
@@ -496,8 +500,8 @@ impl Worker {
         let _ = Client::write_msg(&client.stdin, &resp);
     }
 
-    fn cmd_start(&mut self, acp_path: &str) {
-        match self.start_client(acp_path) {
+    fn cmd_start(&mut self, argv: &[String]) {
+        match self.start_client(argv) {
             Ok(()) => {}
             Err(e) => {
                 self.client = None;
@@ -509,7 +513,7 @@ impl Worker {
         }
     }
 
-    fn start_client(&mut self, acp_path: &str) -> Result<()> {
+    fn start_client(&mut self, argv: &[String]) -> Result<()> {
         // Stop any previous instance first.
         if let Some(mut c) = self.client.take() {
             c.kill();
@@ -517,7 +521,7 @@ impl Worker {
         self.resume_not_supported = false;
 
         let (raw_tx, raw_rx) = std::sync::mpsc::channel::<RawMsg>();
-        let client = Client::spawn_bin(acp_path, raw_tx, raw_rx, self.event_tx.clone())?;
+        let client = Client::spawn_argv(argv, raw_tx, raw_rx, self.event_tx.clone())?;
         self.client = Some(client);
 
         self.initialize()

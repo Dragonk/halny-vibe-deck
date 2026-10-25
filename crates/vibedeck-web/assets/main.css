@@ -5852,3 +5852,61 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     .sidebar { width: 200px !important; }
     .dock { width: 280px !important; }
 }
+
+/* ---- M9.5b: remote SSH connections (Nexus parity) ---- */
+.remote-badge {
+    font-size: 11px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.remote-project-group .project-group-header { color: var(--accent); }
+.remote-project-group .project-group-header:hover { color: var(--accent-hover); }
+.remote-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex-shrink: 0;
+    margin-left: auto;
+}
+.remote-dot.ok { background: #22c55e; }
+.remote-dot.down { background: #ef4444; }
+.remote-cwd-group { display: flex; flex-direction: column; gap: 2px; }
+.remote-cwd-group .session-item { padding-left: 26px; }
+.remote-cwd-header { padding-left: 22px; }
+.pgh-plus {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1;
+    padding: 0 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.pgh-plus:hover { background: var(--panel-hover); color: var(--text); }
+.remote-location-item { opacity: 0.85; }
+.remote-loc-icon { font-size: 11px; flex-shrink: 0; }
+.remote-conn-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    cursor: pointer;
+}
+.remote-conn-row:hover { border-color: var(--accent); }
+.remote-conn-name { font-size: 12px; font-weight: 600; color: var(--text); }
+.remote-conn-cmd {
+    font-size: 10px;
+    color: var(--text-dim);
+    font-family: var(--mono, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

@@ -253,7 +253,7 @@ impl VibedeckApp {
         self.settings.save();
         self.status = AcpStatus::Connecting;
         self.acp.send(AcpCommand::Start {
-            acp_path: acp_path.to_string(),
+            argv: vec![acp_path.to_string()],
         });
     }
 

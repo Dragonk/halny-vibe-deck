@@ -153,6 +153,9 @@ pub struct ChatSession {
     pub last_active_ms: i64,
     #[serde(default)]
     pub working_directory: String,
+    /// SSH remote connection this session runs on (None = local).
+    #[serde(default)]
+    pub remote_id: Option<String>,
 }
 
 impl ChatSession {
@@ -166,6 +169,7 @@ impl ChatSession {
             created_at_ms: now,
             last_active_ms: now,
             working_directory: working_directory.to_string(),
+            remote_id: None,
         }
     }
 }

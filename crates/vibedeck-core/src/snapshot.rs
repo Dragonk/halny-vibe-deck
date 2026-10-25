@@ -130,6 +130,9 @@ pub struct SessionMeta {
     /// Per-slot connection status ("connecting"/"connected"/...).
     #[serde(default)]
     pub status: String,
+    /// SSH remote connection this session runs on (None = local).
+    #[serde(default)]
+    pub remote_id: Option<String>,
 }
 
 impl SessionMeta {
@@ -144,6 +147,7 @@ impl SessionMeta {
             message_count: s.messages.len(),
             busy,
             status: status.to_string(),
+            remote_id: s.remote_id.clone(),
         }
     }
 }
@@ -152,6 +156,75 @@ impl From<&ChatSession> for SessionMeta {
     fn from(s: &ChatSession) -> Self {
         Self::from_session(s, false, "")
     }
+}
+
+/// One SSH remote where vibe-acp runs (Codex-style remote projects;
+/// mirrors Nexus `RemoteConnection`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RemoteConnection {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// e.g. `ssh user@host -p 2222` (no remote command part).
+    #[serde(default)]
+    pub ssh_cmd: String,
+    /// Remote working directories shown as sub-projects.
+    #[serde(default)]
+    pub locations: Vec<String>,
+    /// Optional custom install command for vibe-acp.
+    #[serde(default)]
+    pub install_command: String,
+}
+
+/// Result of testing an (unsaved) connection draft.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteTestResult {
+    pub reachable: bool,
+    pub acp_installed: bool,
+    #[serde(default)]
+    pub acp_path: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One CLI session discovered on a remote host.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteSessionInfo {
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// Quick liveness check for the sidebar dot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteStatus {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub checked_at_ms: i64,
+    #[serde(default)]
+    pub latency_ms: Option<u64>,
+}
+
+/// Result of installing vibe-acp on a remote host.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteInstallResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub log: String,
 }
 
 /// UI preferences mirrored from the engine config (subset shown to clients).
@@ -179,6 +252,8 @@ pub struct UiConfig {
     pub hidden_sessions: Vec<String>,
     #[serde(default)]
     pub hidden_projects: Vec<String>,
+    #[serde(default)]
+    pub remote_connections: Vec<RemoteConnection>,
 }
 
 fn default_remote_port() -> u16 {
