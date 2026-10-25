@@ -37,9 +37,10 @@ async fn reload_cfg(
 async fn reload_files(
     state: Signal<ClientState>,
     kind: String,
+    scope: String,
     mut files: Signal<Vec<FileCard>>,
 ) {
-    match crate::vibeconfig::api_list_vibe_files(token(&state), kind).await {
+    match crate::vibeconfig::api_list_vibe_files(token(&state), scope, kind).await {
         Ok(f) => files.set(f),
         Err(_) => files.set(Vec::new()),
     }
@@ -89,9 +90,11 @@ fn files_panel(
     mut editor: Signal<String>,
     mut new_name: Signal<String>,
     mut saved: Signal<String>,
+    scope: Signal<String>,
 ) -> Element {
     let list = files.read().clone();
     let sel = sel_path.read().clone();
+    let cur_scope = scope.read().clone();
     let rows: Vec<Element> = list
         .iter()
         .enumerate()
@@ -106,6 +109,7 @@ fn files_panel(
             let files2 = files;
             let mut sel_path2 = sel_path;
             let mut editor2 = editor;
+            let scope2 = scope;
             let path = f.path.clone();
             let name = f.display_name.clone();
             let meta = f.meta.clone();
@@ -115,12 +119,12 @@ fn files_panel(
                 let p = path_del.clone();
                 spawn(async move {
                     let _ = crate::vibeconfig::api_delete_vibe_file(
-                        token(&state2), p.clone(),
+                        token(&state2), scope2.read().clone(), p.clone(),
                     )
                     .await;
                     sel_path2.set(String::new());
                     editor2.set(String::new());
-                    reload_files(state2, kind.to_string(), files2).await;
+                    reload_files(state2, kind.to_string(), scope2.read().clone(), files2).await;
                     saved.set(String::new());
                 });
             });
@@ -147,10 +151,49 @@ fn files_panel(
         _ => "# new\n".to_string(),
     };
 
+    // Global/Project scope switch (Nexus scope pills)
+    let g_cls = if cur_scope == "global" {
+        "scope-pill active"
+    } else {
+        "scope-pill"
+    };
+    let p_cls = if cur_scope == "project" {
+        "scope-pill active"
+    } else {
+        "scope-pill"
+    };
+    let switch_scope = move |sc: &'static str| {
+        let state = state.clone();
+        let files = files.clone();
+        let mut sel_path = sel_path.clone();
+        let mut editor = editor.clone();
+        let mut scope = scope.clone();
+        let kind = kind;
+        move |_: dioxus::prelude::Event<dioxus::prelude::MouseData>| {
+            if scope.read().clone() == sc {
+                return;
+            }
+            scope.set(sc.to_string());
+            sel_path.set(String::new());
+            editor.set(String::new());
+            let state = state.clone();
+            let files = files.clone();
+            spawn(async move {
+                reload_files(state, kind.to_string(), sc.to_string(), files).await;
+            });
+        }
+    };
+    let on_global = switch_scope("global");
+    let on_project = switch_scope("project");
+
     rsx! {
         div { class: "settings-section",
             div { class: "settings-section-header",
                 div { class: "settings-section-title", "{tr(&lang, kind)}" }
+                div { class: "scope-switch",
+                    button { class: "{g_cls}", onclick: on_global, "{tr(&lang, \"scopeGlobal\")}" }
+                    button { class: "{p_cls}", onclick: on_project, "{tr(&lang, \"scopeProject\")}" }
+                }
             }
             div { class: "session-rows",
                 if rows.is_empty() {
@@ -176,21 +219,23 @@ fn files_panel(
                             let editor = editor.clone();
                             let files = files.clone();
                             let saved = saved.clone();
+                            let scope = scope.clone();
                             move |_| {
                                 let state = state.clone();
                                 let sel = sel.clone();
                                 let editor = editor.clone();
                                 let files = files.clone();
                                 let mut saved = saved.clone();
+                                let scope = scope.clone();
                                 async move {
                                     let res = crate::vibeconfig::api_save_vibe_file(
-                                        token(&state), sel.clone(), editor.read().clone(),
+                                        token(&state), scope.read().clone(), sel.clone(), editor.read().clone(),
                                     )
                                     .await;
                                     match res {
                                         Ok(()) => {
                                             saved.set(String::new());
-                                            reload_files(state, kind.to_string(), files).await;
+                                            reload_files(state, kind.to_string(), scope.read().clone(), files).await;
                                         }
                                         Err(e) => saved.set(e.to_string()),
                                     }
@@ -222,6 +267,7 @@ fn files_panel(
                         let saved = saved.clone();
                         let lang_oc = lang.clone();
                         let template_oc = template.clone();
+                        let scope_oc = scope.clone();
                         move |_| {
                             let state = state.clone();
                             let mut new_name = new_name.clone();
@@ -229,6 +275,7 @@ fn files_panel(
                             let mut saved = saved.clone();
                             let lang = lang_oc.clone();
                             let template = template_oc.clone();
+                            let scope = scope_oc.clone();
                             async move {
                                 let name = new_name.read().trim().to_string();
                                 if name.is_empty() {
@@ -241,14 +288,14 @@ fn files_panel(
                                     _ => format!("skills/{name}/SKILL.md"),
                                 };
                                 let res = crate::vibeconfig::api_save_vibe_file(
-                                    token(&state), path.clone(), template.clone(),
+                                    token(&state), scope.read().clone(), path.clone(), template.clone(),
                                 )
                                 .await;
                                 match res {
                                     Ok(()) => {
                                         new_name.set(String::new());
                                         saved.set(String::new());
-                                        reload_files(state, kind.to_string(), files).await;
+                                        reload_files(state, kind.to_string(), scope.read().clone(), files).await;
                                     }
                                     Err(e) => saved.set(e.to_string()),
                                 }
@@ -305,6 +352,7 @@ pub fn SettingsView() -> Element {
     let editor = use_signal(String::new);
     let new_name = use_signal(String::new);
     let file_saved = use_signal(String::new);
+    let scope = use_signal(|| "global".to_string());
 
     // add-form state
     let mut p_name = use_signal(String::new);
@@ -345,8 +393,13 @@ pub fn SettingsView() -> Element {
     {
         files_kind.set(cur_tab.clone());
         let st = state.clone();
+        let sc = scope.read().clone();
+        let mut sel_path = sel_path.clone();
+        let mut editor = editor.clone();
+        sel_path.set(String::new());
+        editor.set(String::new());
         spawn(async move {
-            reload_files(st, cur_tab, files).await;
+            reload_files(st, cur_tab, sc, files).await;
         });
     }
 
@@ -887,12 +940,12 @@ pub fn SettingsView() -> Element {
                         span { class: "field-hint", style: "margin-left:10px;", "{list_saved.read()}" }
                     }
                 }
-                {files_panel(lang.clone(), state.clone(), "skills", files, sel_path, editor, new_name, file_saved)}
+                {files_panel(lang.clone(), state.clone(), "skills", files, sel_path, editor, new_name, file_saved, scope)}
                 {err_el}
             }
         },
-        "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved),
-        "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved),
+        "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved, scope),
+        "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved, scope),
         "sandbox" => rsx! {
             div { class: "settings-section",
                 div { class: "sandbox-planned-card",
@@ -975,7 +1028,7 @@ pub fn SettingsView() -> Element {
                                 }
                             }
                         },
-                        option { value: "auto", selected: language == "auto", "Auto (EN)" }
+                        option { value: "auto", selected: language == "auto", "{tr(&lang, \"autoSystem\")}" }
                         option { value: "en", selected: language == "en", "English" }
                         option { value: "pl", selected: language == "pl", "Polski" }
                         option { value: "de", selected: language == "de", "Deutsch" }

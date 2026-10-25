@@ -152,8 +152,85 @@ fn split_user_segments(content: &str, atts: &[Attachment]) -> Vec<UserSeg> {
     segs
 }
 
+/// The Mistral logo mark (Nexus `MISTRAL_LOGO`), rendered inside the AI
+/// message avatar.
+#[component]
+fn MistralLogo() -> Element {
+    rsx! {
+        svg {
+            view_box: "0 0 24 24",
+            fill: "currentColor",
+            path { d: "M13.3715 16.358H16.1144V13.6486H13.3712L13.3715 16.358H10.6283V13.6486H7.88568V16.358H10.6283V19.0676H2.3999V16.358H5.14279V5.52002H7.88568V8.22963H10.6286V10.939H13.3715V8.22963H16.1144V5.52002H18.8572V16.358H21.5999V19.0676H13.3715V16.358Z" }
+        }
+    }
+}
+
+/// Copy-to-clipboard action button (Nexus `msg-action-btn`).
+#[component]
+fn CopyButton(text: String) -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let lang = lang(&state);
+    rsx! {
+        button {
+            class: "msg-action-btn",
+            title: "{tr(&lang, \"copy\")}",
+            onclick: move |_| {
+                let js = format!(
+                    "try{{navigator.clipboard.writeText(\"{}\")}}catch(e){{}}",
+                    js_escape(&text)
+                );
+                dioxus::document::eval(&js);
+            },
+            svg {
+                xmlns: "http://www.w3.org/2000/svg",
+                width: "16", height: "16",
+                view_box: "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "2",
+                stroke_linecap: "round",
+                stroke_linejoin: "round",
+                rect { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" }
+                path { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }
+            }
+        }
+    }
+}
+
+/// Escape a string for embedding inside a JS double-quoted string literal.
+fn js_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `HH:MM` for a message timestamp, in the browser's local timezone.
+fn msg_time(ms: i64) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let d = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ms as f64));
+        format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // SSR fallback (no JS): UTC
+        let secs = ms.div_euclid(1000);
+        format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
+    }
+}
+
 #[component]
 pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
+    let time_str = msg_time(msg.timestamp_ms);
     match msg.sender {
         MessageSender::User => {
             // Inline `@marker` rendering with expandable attachment chips
@@ -190,33 +267,78 @@ pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
             rsx! {
                 div { class: "msg-row msg-user",
                     div { class: "msg-bubble",
-                        {seg_els.iter().cloned()}
-                        {extra_els.iter().cloned()}
+                        div { class: "msg-text",
+                            {seg_els.iter().cloned()}
+                            {extra_els.iter().cloned()}
+                        }
+                        div { class: "msg-actions-row",
+                            div { class: "msg-actions-left" }
+                            div { class: "msg-actions-right",
+                                div { class: "msg-time", "{time_str}" }
+                                CopyButton { text: msg.content.clone() }
+                            }
+                        }
                     }
                 }
             }
         }
-        MessageSender::Ai => rsx! {
-            div { class: "msg-row msg-ai",
-                span { class: "msg-avatar", "V" }
-                div { class: "msg-content",
-                    for block in &msg.thinking {
-                        ThinkingSection { block: block.clone() }
-                    }
-                    if !msg.tool_calls.is_empty() {
-                        div { class: "tool-calls-list",
-                            for tc in &msg.tool_calls {
-                                ToolCallBlock { tc: tc.clone() }
+        MessageSender::Ai => {
+            let avatar_cls = if streaming {
+                "msg-avatar-wrap msg-avatar-busy"
+            } else {
+                "msg-avatar-wrap"
+            };
+            rsx! {
+                div { class: "msg-row msg-ai",
+                    div { class: "{avatar_cls}",
+                        div { class: "msg-avatar", MistralLogo {} }
+                        if streaming {
+                            svg {
+                                class: "msg-avatar-spinner",
+                                view_box: "0 0 36 36",
+                                xmlns: "http://www.w3.org/2000/svg",
+                                circle {
+                                    cx: "18", cy: "18", r: "15",
+                                    fill: "none",
+                                    stroke: "currentColor",
+                                    stroke_width: "2.5",
+                                    stroke_linecap: "round",
+                                    stroke_dasharray: "60 40",
+                                }
                             }
                         }
                     }
-                    MarkdownLite { text: msg.content.clone() }
-                    if streaming {
-                        span { class: "cursor-blink" }
+                    div { class: "msg-content",
+                        for block in &msg.thinking {
+                            ThinkingSection { block: block.clone() }
+                        }
+                        if !msg.tool_calls.is_empty() {
+                            div { class: "tool-calls-list",
+                                for tc in &msg.tool_calls {
+                                    ToolCallBlock { tc: tc.clone() }
+                                }
+                            }
+                        }
+                        if !msg.content.is_empty() {
+                            div { class: "msg-text",
+                                MarkdownLite { text: msg.content.clone() }
+                            }
+                        }
+                        if streaming {
+                            span { class: "cursor-blink" }
+                        }
+                        div { class: "msg-actions-row",
+                            div { class: "msg-actions-left",
+                                div { class: "msg-time", "{time_str}" }
+                            }
+                            div { class: "msg-actions-right",
+                                CopyButton { text: msg.content.clone() }
+                            }
+                        }
                     }
                 }
             }
-        },
+        }
         MessageSender::System => rsx! {
             div { class: "msg-row msg-notice",
                 div { class: "msg-content", "{msg.content}" }
@@ -260,23 +382,35 @@ fn AttachmentFile(path: String, is_dir: bool, content: String) -> Element {
 fn ThinkingSection(block: vibedeck_core::types::ThinkingBlock) -> Element {
     let state = use_context::<Signal<ClientState>>();
     let lang = lang(&state);
+    let expanded = use_signal(|| false);
     let label = if block.is_complete {
         tr(&lang, "thinking").to_string()
     } else {
         tr(&lang, "thinkingThinking").to_string()
     };
+    let chev = if *expanded.read() { "▲" } else { "▼" };
     let paragraphs: Vec<&str> = block.content.split("\n\n").collect();
     rsx! {
-        details { class: "thinking-section",
-            summary { class: "thinking-toggle",
+        div { class: "thinking-section",
+            button {
+                class: "thinking-toggle",
+                onclick: {
+                    let mut expanded = expanded.clone();
+                    move |_| {
+                        let v = *expanded.read();
+                        expanded.set(!v);
+                    }
+                },
                 span { class: "thinking-dot" }
                 span { class: "thinking-label", "{label}" }
-                span { class: "thinking-chevron" }
+                span { class: "thinking-chevron", "{chev}" }
             }
-            div { class: "thinking-content",
-                div { class: "thinking-paragraphs",
-                    for para in paragraphs {
-                        p { class: "thinking-paragraph", "{para}" }
+            if *expanded.read() {
+                div { class: "thinking-content",
+                    div { class: "thinking-paragraphs",
+                        for para in paragraphs {
+                            p { class: "thinking-paragraph", "{para}" }
+                        }
                     }
                 }
             }
@@ -329,40 +463,53 @@ fn ToolCallBlock(tc: vibedeck_core::types::ToolCall) -> Element {
         return rsx! { TaskToolBlock { tc: tc.clone() } };
     }
 
-    let (icon, done_cls) = match tc.status {
-        ToolStatus::Done => ("✔", "tool-done"),
-        ToolStatus::Error => ("✖", "tool-error"),
-        ToolStatus::Running => ("⏳", "tool-running"),
+    let expanded = use_signal(|| false);
+    let status_str = match tc.status {
+        ToolStatus::Done => "done",
+        ToolStatus::Error => "error",
+        ToolStatus::Running => "running",
     };
+    let block_cls = format!("tool-call-block tool-call-{status_str}");
+    let icon_cls = format!("tool-call-icon tool-call-icon-{status_str}");
+    let chev = if *expanded.read() { "▲" } else { "▼" };
     let kind = tc.kind.clone();
     let title = tc.title.clone();
-    let input = tc.input_json.clone().unwrap_or_default();
     let output = tc.output.clone().unwrap_or_default();
     let has_changes = !tc.file_changes.is_empty();
 
     rsx! {
-        details { class: "tool-rich-bash",
-            summary { class: "tool-call-header",
-                span { class: "tool-status {done_cls}", "{icon}" }
+        div { class: "{block_cls}",
+            button {
+                class: "tool-call-header",
+                onclick: {
+                    let mut expanded = expanded.clone();
+                    move |_| {
+                        let v = *expanded.read();
+                        expanded.set(!v);
+                    }
+                },
+                span { class: "{icon_cls}", StatusIcon { status: tc.status } }
                 span { class: "tool-call-title", "{title}" }
-                span { class: "tool-call-chevron" }
+                span { class: "tool-call-chevron", "{chev}" }
             }
-            div { class: "tool-call-content",
-                if !kind.is_empty() {
-                    span { class: "tool-kind-chip", "{kind}" }
-                }
-                if !input.is_empty() {
-                    div { class: "tool-call-input", "{input}" }
-                }
-                if has_changes {
-                    div { class: "tool-call-path",
-                        for ch in &tc.file_changes {
-                            span { class: "tool-file-path", "{ch.path}" }
+            if *expanded.read() {
+                div { class: "tool-call-content",
+                    if !kind.is_empty() {
+                        span { class: "tool-kind-chip", "{kind}" }
+                    }
+                    if !input.is_empty() {
+                        div { class: "tool-call-input", "{input}" }
+                    }
+                    if has_changes {
+                        div { class: "tool-call-path",
+                            for ch in &tc.file_changes {
+                                span { class: "tool-file-path", "{ch.path}" }
+                            }
                         }
                     }
-                }
-                if !output.is_empty() {
-                    div { class: "tool-call-output", "{output}" }
+                    if !output.is_empty() {
+                        div { class: "tool-call-output", "{output}" }
+                    }
                 }
             }
         }

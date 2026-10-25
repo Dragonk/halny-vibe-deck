@@ -244,7 +244,7 @@ code {
 
 /* ===== Sidebar ===== */
 .sidebar {
-    width: 220px;
+    width: var(--vd-sidebar-w, 220px);
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -4115,6 +4115,8 @@ code {
     overflow: hidden;
     position: relative;
     min-width: 0;
+    width: var(--vd-dock-w, 400px);
+    flex-shrink: 0;
 }
 .dock-resizing {
     user-select: none;
@@ -5840,3 +5842,13 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
 .sheet-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); }
 .sheet-tab { padding: 3px 10px; font-size: 11px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; }
 .sheet-tab.active { color: var(--text); border-color: var(--accent); background: var(--panel-hover); }
+
+/* ---- M9.4: context-menu overlay (click-away layer) ---- */
+.ctx-overlay { position: fixed; inset: 0; z-index: 999; }
+
+/* ---- M9.4: hide resize handles on narrow screens ---- */
+@media (max-width: 900px) {
+    .sidebar-resize-handle, .dock-resize-handle { display: none; }
+    .sidebar { width: 200px !important; }
+    .dock { width: 280px !important; }
+}

@@ -136,8 +136,19 @@ mod imp {
             .map_err(|e| ServerFnError::new(format!("save failed: {e}")))
     }
 
-    /// Confine a user-supplied file path to ~/.vibe/{agents,prompts,skills}/.
-    fn confine(rel: &str) -> Result<std::path::PathBuf, ServerFnError> {
+    /// Base directory for vibe config files: `~/.vibe` (global scope) or
+    /// `<working_directory>/.vibe` (project scope).
+    pub fn base_dir(scope: &str) -> std::path::PathBuf {
+        if scope == "project" {
+            std::path::PathBuf::from(Engine::global().workdir()).join(".vibe")
+        } else {
+            vibe_home()
+        }
+    }
+
+    /// Confine a user-supplied file path to {agents,prompts,skills}/ under the
+    /// selected scope's base directory.
+    fn confine(rel: &str, scope: &str) -> Result<std::path::PathBuf, ServerFnError> {
         let rel = rel.trim().trim_start_matches('/');
         if rel.contains("..") || rel.is_empty() {
             return Err(ServerFnError::new("invalid path"));
@@ -148,10 +159,100 @@ mod imp {
         if !matches!(dir, "agents" | "prompts" | "skills") || rest.is_empty() {
             return Err(ServerFnError::new("path must be under agents/, prompts/ or skills/"));
         }
-        Ok(vibe_home().join(dir).join(rest))
+        Ok(base_dir(scope).join(dir).join(rest))
     }
 
-    pub fn list_files(kind: &str) -> Vec<FileCard> {
+    /// Generic directory scan for the project scope (no load_all helpers there).
+    fn scan_kind(scope: &str, kind: &str) -> Vec<FileCard> {
+        let ext = match kind {
+            "agents" => "toml",
+            "prompts" => "md",
+            _ => return scan_skills(scope),
+        };
+        let dir = base_dir(scope).join(kind);
+        let mut out = Vec::new();
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_file() || p.extension().and_then(|e| e.to_str()) != Some(ext) {
+                    continue;
+                }
+                let name = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let content = fs::read_to_string(&p).unwrap_or_default();
+                let meta = if kind == "agents" {
+                    agent_meta(&content)
+                } else {
+                    String::new()
+                };
+                out.push(FileCard {
+                    kind: kind.to_string(),
+                    display_name: name.clone(),
+                    path: format!("{kind}/{name}.{ext}"),
+                    content,
+                    meta,
+                });
+            }
+        }
+        out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        out
+    }
+
+    fn scan_skills(scope: &str) -> Vec<FileCard> {
+        let dir = base_dir(scope).join("skills");
+        let mut out = Vec::new();
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                let skill_md = p.join("SKILL.md");
+                if !skill_md.is_file() {
+                    continue;
+                }
+                let name = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                out.push(FileCard {
+                    kind: "skills".to_string(),
+                    display_name: name.clone(),
+                    path: format!("skills/{name}/SKILL.md"),
+                    content: fs::read_to_string(&skill_md).unwrap_or_default(),
+                    meta: String::new(),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        out
+    }
+
+    /// Best-effort meta line for a raw agent TOML (project scope has no loader).
+    fn agent_meta(content: &str) -> String {
+        let mut model = String::new();
+        if let Ok(table) = content.parse::<toml::Table>() {
+            model = table
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+        }
+        if model.is_empty() {
+            String::new()
+        } else {
+            format!("model: {model}")
+        }
+    }
+
+    pub fn list_files(kind: &str, scope: &str) -> Vec<FileCard> {
+        if scope == "project" {
+            return scan_kind(scope, kind);
+        }
         match kind {
             "agents" => AgentFile::load_all()
                 .into_iter()
@@ -197,8 +298,8 @@ mod imp {
         }
     }
 
-    pub fn write_file(path: &str, content: &str) -> Result<(), ServerFnError> {
-        let target = confine(path)?;
+    pub fn write_file(scope: &str, path: &str, content: &str) -> Result<(), ServerFnError> {
+        let target = confine(path, scope)?;
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| ServerFnError::new(format!("mkdir failed: {e}")))?;
@@ -213,8 +314,8 @@ mod imp {
             .map_err(|e| ServerFnError::new(format!("write failed: {e}")))
     }
 
-    pub fn delete_file(path: &str) -> Result<(), ServerFnError> {
-        let target = confine(path)?;
+    pub fn delete_file(scope: &str, path: &str) -> Result<(), ServerFnError> {
+        let target = confine(path, scope)?;
         if target.exists() {
             fs::remove_file(&target)
                 .map_err(|e| ServerFnError::new(format!("delete failed: {e}")))?;
@@ -336,21 +437,21 @@ pub async fn api_save_vibe_config_raw(token: String, raw: String) -> Result<(), 
 }
 
 #[server]
-pub async fn api_list_vibe_files(token: String, kind: String) -> Result<Vec<FileCard>, ServerFnError> {
+pub async fn api_list_vibe_files(token: String, scope: String, kind: String) -> Result<Vec<FileCard>, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::list_files(&kind))
+    Ok(imp::list_files(&kind, &scope))
 }
 
 #[server]
-pub async fn api_save_vibe_file(token: String, path: String, content: String) -> Result<(), ServerFnError> {
+pub async fn api_save_vibe_file(token: String, scope: String, path: String, content: String) -> Result<(), ServerFnError> {
     imp::check(&token)?;
-    imp::write_file(&path, &content)
+    imp::write_file(&scope, &path, &content)
 }
 
 #[server]
-pub async fn api_delete_vibe_file(token: String, path: String) -> Result<(), ServerFnError> {
+pub async fn api_delete_vibe_file(token: String, scope: String, path: String) -> Result<(), ServerFnError> {
     imp::check(&token)?;
-    imp::delete_file(&path)
+    imp::delete_file(&scope, &path)
 }
 
 #[server]

@@ -239,14 +239,26 @@ pub fn InputBar() -> Element {
                         }
                     }
                 },
-                "■"
+                svg {
+                    xmlns: "http://www.w3.org/2000/svg",
+                    width: "12", height: "12",
+                    view_box: "0 0 24 24",
+                    fill: "currentColor",
+                    rect { x: "4", y: "4", width: "16", height: "16", rx: "2" }
+                }
             }
         }
     } else {
+        let can_send = !draft().trim().is_empty();
+        let send_cls = if can_send {
+            "ic-send-btn enabled"
+        } else {
+            "ic-send-btn"
+        };
         rsx! {
             button {
-                class: "ic-send-btn",
-                disabled: draft().trim().is_empty(),
+                class: "{send_cls}",
+                disabled: !can_send,
                 title: "{tr(&lang, \"sendEnter\")}",
                 onclick: {
                     let state = state.clone();
@@ -262,7 +274,14 @@ pub fn InputBar() -> Element {
                         }
                     }
                 },
-                "➤"
+                svg {
+                    xmlns: "http://www.w3.org/2000/svg",
+                    width: "14", height: "14",
+                    view_box: "0 0 24 24",
+                    fill: "currentColor",
+                    style: "transform:rotate(-90deg);",
+                    path { d: "M12 18v4h4v-4h-4ZM16 14v4h4v-4h-4ZM20 10v4h4v-4h-4ZM16 6v4h4V6h-4ZM12 2v4h4V2h-4ZM12 10v4h4v-4h-4ZM8 10v4h4v-4H8ZM4 10v4h4v-4H4ZM0 10v4h4v-4H0Z" }
+                }
             }
         }
     };
@@ -311,11 +330,13 @@ pub fn InputBar() -> Element {
                                         slash_loaded.set(true);
                                         let sk = crate::vibeconfig::api_list_vibe_files(
                                             token(&state),
+                                            "global".to_string(),
                                             "skills".to_string(),
                                         )
                                         .await;
                                         let pr = crate::vibeconfig::api_list_vibe_files(
                                             token(&state),
+                                            "global".to_string(),
                                             "prompts".to_string(),
                                         )
                                         .await;
@@ -607,7 +628,10 @@ fn config_chip(
     let option: Option<ConfigOption> = s.snapshot.config_options.iter().find(|o| o.id == id).cloned();
     drop(s);
 
-    let disabled = busy || option.is_none();
+    // Only the model chip locks while busy — mode/thinking can be switched
+    // mid-session, so their dropdowns must stay clickable (bug: lists did not
+    // open after the first message).
+    let disabled = option.is_none() || (id == "model" && busy);
     let items: Vec<(String, String, String)> = option
         .as_ref()
         .map(|o| {
