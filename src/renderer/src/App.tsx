@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
 import type { AcpHistoryMessage } from './store'
 import { useTranslation, t, resolveLanguage } from './i18n'
-import type { AppConfig, ConfigOption, PlanEntry, ToolCallDiff } from './types'
+import type { AppConfig, ConfigOption, PlanEntry, SubagentInfo, ToolCallDiff } from './types'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
@@ -462,6 +462,7 @@ export default function App(): React.JSX.Element {
             previousContent: (d.previousContent as string | null | undefined) ?? null,
             toolName: (d.toolName as string | null | undefined) ?? null,
             rawOutput: (d.rawOutput as Record<string, unknown> | null | undefined) ?? null,
+            subagent: (d.subagent as SubagentInfo | null | undefined) ?? null,
           })
           break
         }
@@ -479,6 +480,7 @@ export default function App(): React.JSX.Element {
               previousContent: (d.previousContent as string | null | undefined) ?? null,
               toolName: (d.toolName as string | null | undefined) ?? null,
               rawOutput: (d.rawOutput as Record<string, unknown> | null | undefined) ?? null,
+            subagent: (d.subagent as SubagentInfo | null | undefined) ?? null,
             })
           }
           break

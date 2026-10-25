@@ -49,6 +49,7 @@ export interface AcpHistoryToolCall {
   previousContent?: string | null;
   toolName?: string | null;
   rawOutput?: Record<string, unknown> | null;
+  subagent?: { agent: string | null; agentName?: string | null; task: string; childSessionId: string | null } | null;
 }
 
 export interface AcpHistoryMessage {
@@ -1325,6 +1326,7 @@ export const useStore = create<AppStore>((set, get) => ({
               previousContent: tc.previousContent,
               toolName: tc.toolName,
               rawOutput: tc.rawOutput,
+              subagent: tc.subagent,
             }))
           : undefined;
       messages.push({

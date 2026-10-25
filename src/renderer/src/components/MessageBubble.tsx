@@ -758,6 +758,137 @@ function ToolLineBlock({ toolCall }: { toolCall: ToolCall }): React.JSX.Element 
   );
 }
 
+// v0.13: transcript of a subagent session read from the unified session store.
+interface SubagentWorkData {
+  messages: Array<{
+    role: string;
+    content: string;
+    thinking?: Array<{ id: string; content: string }>;
+    toolCalls?: Array<{ title: string; status: string }>;
+  }>;
+}
+
+// v0.13: subagent invocation card (agents.spawn / task tool) - agent name,
+// the full task prompt, live status, and the subagent's own transcript
+// loaded on demand from its child session on disk.
+function SubagentBlock({
+  toolCall,
+  tr,
+  acpSessionId,
+}: {
+  toolCall: ToolCall;
+  tr: Record<TranslationKeys, string>;
+  acpSessionId?: string;
+}): React.JSX.Element {
+  const sa = toolCall.subagent;
+  const agent =
+    typeof sa?.agent === "string" && sa.agent.length > 0
+      ? sa.agent
+      : typeof sa?.agentName === "string" && sa.agentName.length > 0
+        ? sa.agentName
+        : tr.subagent;
+  const task = typeof sa?.task === "string" ? sa.task : "";
+  const childId = typeof sa?.childSessionId === "string" ? sa.childSessionId : null;
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [work, setWork] = useState<SubagentWorkData | null>(null);
+  const [workErr, setWorkErr] = useState(false);
+  const [workLoading, setWorkLoading] = useState(false);
+
+  const toggleWork = async (): Promise<void> => {
+    if (workLoading) return;
+    if (work) {
+      setWork(null);
+      return;
+    }
+    if (!childId) return;
+    setWorkLoading(true);
+    setWorkErr(false);
+    try {
+      const statsApi = window.api.stats as unknown as {
+        sessionPreview: (sessionId: string) => Promise<unknown>;
+        remoteSessionPreview: (remoteId: string, sessionId: string) => Promise<unknown>;
+      };
+      const rid = remoteIdForSession(acpSessionId);
+      const res = rid
+        ? await statsApi.remoteSessionPreview(rid, childId)
+        : await statsApi.sessionPreview(childId);
+      if (res && typeof res === "object" && Array.isArray((res as SubagentWorkData).messages)) {
+        setWork(res as SubagentWorkData);
+      } else {
+        setWorkErr(true);
+      }
+    } catch {
+      setWorkErr(true);
+    }
+    setWorkLoading(false);
+  };
+
+  return (
+    <div className="subagent-card">
+      <div className="subagent-header">
+        <span className="subagent-badge">{tr.subagent}</span>
+        <span className="subagent-agent">{agent}</span>
+        <span
+          className={
+            "subagent-status" +
+            (toolCall.status === "running" ? " running" : toolCall.status === "error" ? " error" : "")
+          }
+        >
+          {toolCall.status === "error" ? "✕" : toolCall.status === "running" ? "…" : "✓"}
+        </span>
+      </div>
+      {task.length > 0 && (
+        <div
+          className={"subagent-task" + (promptOpen ? " open" : "")}
+          onClick={() => setPromptOpen((v) => !v)}
+        >
+          <span className="subagent-task-label">{tr.subagentPromptLabel}</span>
+          <span className="subagent-task-text">{task}</span>
+        </div>
+      )}
+      {toolCall.status === "error" && toolCall.output && toolCall.output.length > 0 && (
+        <pre className="subagent-error-out">{toolCall.output}</pre>
+      )}
+      {childId && (
+        <button className="subagent-work-btn" onClick={() => void toggleWork()} disabled={workLoading}>
+          {work ? tr.subagentHideWork : tr.subagentShowWork}
+        </button>
+      )}
+      {workErr && <div className="subagent-work-error">{tr.subagentWorkUnavailable}</div>}
+      {work && (
+        <div className="subagent-work">
+          {work.messages.map((m, i) => (
+            <div key={i} className="subagent-work-msg">
+              {m.role === "user" ? (
+                <div className="subagent-work-user">{m.content}</div>
+              ) : (
+                <>
+                  {(m.thinking ?? []).map((th, ti) => (
+                    <div key={"th" + ti} className="subagent-work-thinking">
+                      {th.content}
+                    </div>
+                  ))}
+                  {(m.toolCalls ?? []).map((tc, tci) => (
+                    <div key={"tc" + tci} className="subagent-work-tool">
+                      {"· " + tc.title + (tc.status === "error" ? " ✕" : "")}
+                    </div>
+                  ))}
+                  {m.content.length > 0 && (
+                    <div className="subagent-work-answer">
+                      <MarkdownContent content={m.content} />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function ToolCallRichContent({
   toolCall,
   tr,
@@ -784,6 +915,9 @@ function ToolCallRichContent({
     tn.endsWith(".read_file")
   ) {
     return <ReadFileBlock toolCall={toolCall} tr={tr} />;
+  }
+  if (toolCall.subagent || tn === "agents.spawn" || tn === "task") {
+    return <SubagentBlock toolCall={toolCall} tr={tr} acpSessionId={acpSessionId} />;
   }
   if (tn.startsWith("process.")) {
     return <ProcessBlock toolCall={toolCall} />;
@@ -1572,6 +1706,10 @@ function StepRow({
             ) : (
               (() => {
                 const tc = step.toolCall as ToolCall;
+                // v0.13: subagent invocations (agents.spawn / task) get the rich card
+                if (tc.subagent || tc.toolName === 'agents.spawn') {
+                  return <SubagentBlock toolCall={tc} tr={tr} acpSessionId={acpSessionId} />;
+                }
                 const isTaskTool =
                   tc.title === "task" ||
                   tc.title.startsWith("task:") ||

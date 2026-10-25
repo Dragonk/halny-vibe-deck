@@ -34,6 +34,16 @@ export interface ToolCall {
   toolName?: string | null
   /** v0.12: raw structured output of process.* tools (process card). */
   rawOutput?: Record<string, unknown> | null
+  /** v0.13: subagent invocation meta (agents.spawn / task) for the subagent card. */
+  subagent?: SubagentInfo | null
+}
+
+/** v0.13: one subagent invocation (agents.spawn / task) - prompt + child session. */
+export interface SubagentInfo {
+  agent: string | null
+  agentName?: string | null
+  task: string
+  childSessionId: string | null
 }
 
 export interface ThinkingBlock {
@@ -313,6 +323,7 @@ export interface SessionPreviewData {
       previousContent?: string | null
       toolName?: string | null
       rawOutput?: Record<string, unknown> | null
+      subagent?: SubagentInfo | null
     }>
   }>
   title: string | null

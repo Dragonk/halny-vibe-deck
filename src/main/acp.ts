@@ -37,6 +37,8 @@ export interface AcpHistoryToolCall {
   previousContent?: string | null
   toolName?: string | null
   rawOutput?: Record<string, unknown> | null
+  /** v0.13: subagent invocation meta (agents.spawn / task). */
+  subagent?: Record<string, unknown> | null
 }
 
 /** v0.11.1: one entry of the agent plan / todo checklist (session_update "plan"). */
@@ -366,6 +368,18 @@ export class AcpManager {
     const raw = update.rawOutput ?? update.raw_output
     return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined
   }
+
+  /** v0.13: subagent invocation meta (agents.spawn / task) - prompt + child session. */
+  private metaSubagent(update: Record<string, unknown>): Record<string, unknown> | undefined {
+    const meta = update._meta as Record<string, unknown> | undefined
+    if (!meta || meta['effect_kind'] !== 'subagent') return undefined
+    const out: Record<string, unknown> = {}
+    if (typeof meta['agent'] === 'string') out['agent'] = meta['agent']
+    if (typeof meta['task'] === 'string') out['task'] = meta['task']
+    const child = meta['child_session_id'] ?? meta['childSessionId']
+    if (typeof child === 'string' && child.length > 0) out['childSessionId'] = child
+    return Object.keys(out).length > 0 ? out : undefined
+  }
   private normalizeToolStatus(s: unknown): 'running' | 'done' | 'error' {
     if (s === 'completed' || s === 'done' || s === 'success') return 'done'
     if (s === 'failed' || s === 'error') return 'error'
@@ -455,7 +469,8 @@ export class AcpManager {
               diffs: this.diffBlocks(update),
               previousContent: this.editPreviousContent(update),
               toolName: this.metaToolName(update),
-              rawOutput: this.processRawOutput(update)
+              rawOutput: this.processRawOutput(update),
+              subagent: this.metaSubagent(update)
             }
           })
         }
@@ -476,7 +491,8 @@ export class AcpManager {
               diffs: this.diffBlocks(update),
               previousContent: this.editPreviousContent(update),
               toolName: this.metaToolName(update),
-              rawOutput: this.processRawOutput(update)
+              rawOutput: this.processRawOutput(update),
+              subagent: this.metaSubagent(update)
             }
           })
           // v0.9.0: release the name entry once the call reaches a terminal
@@ -663,7 +679,8 @@ export class AcpManager {
             diffs: this.diffBlocks(update),
             previousContent: this.editPreviousContent(update) ?? null,
             toolName: this.metaToolName(update) ?? null,
-            rawOutput: this.processRawOutput(update) ?? null
+            rawOutput: this.processRawOutput(update) ?? null,
+            subagent: this.metaSubagent(update) ?? null
           }
           toolCallsById.set(toolCallId, tc)
           ensureAi().toolCalls!.push(tc)
@@ -683,6 +700,8 @@ export class AcpManager {
             if (rtn !== undefined) tc.toolName = rtn
             const rraw = this.processRawOutput(update)
             if (rraw !== undefined) tc.rawOutput = rraw
+            const rsub = this.metaSubagent(update)
+            if (rsub !== undefined) tc.subagent = rsub
             tc.status = this.normalizeToolStatus(update.status)
           }
         }

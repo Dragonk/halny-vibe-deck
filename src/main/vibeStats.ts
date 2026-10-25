@@ -643,6 +643,7 @@ export interface SessionPreview {
       previousContent?: string | null
       toolName?: string | null
       rawOutput?: Record<string, unknown> | null
+      subagent?: { agent: string | null; agentName?: string | null; task: string; childSessionId: string | null } | null
     }>
   }>
   title: string | null
@@ -763,6 +764,19 @@ export function buildSessionPreview(
       const sc = (out['structured_content'] as Record<string, unknown> | undefined) ?? {}
       const tin = (det['input'] as Record<string, unknown> | undefined) ?? {}
       const inPath = String(tin['filePath'] ?? tin['file_path'] ?? tin['path'] ?? '')
+      // v0.13: subagent invocation (agents.spawn / task) - prompt + child session id.
+      let psub: { agent: string | null; agentName?: string | null; task: string; childSessionId: string | null } | null = null
+      if (String(det['kind'] ?? '') === 'subagent') {
+        const saMetaAll = (out['_meta'] as Record<string, unknown> | undefined) ?? {}
+        const saMeta = (saMetaAll['mistral.vibe.subagent'] as Record<string, unknown> | undefined) ?? undefined
+        const childRaw = det['childSessionId'] ?? (saMeta ? saMeta['childSessionId'] : undefined)
+        psub = {
+          agent: typeof tin['agent'] === 'string' ? tin['agent'] : null,
+          agentName: typeof det['agentName'] === 'string' ? det['agentName'] : null,
+          task: typeof tin['task'] === 'string' ? tin['task'] : '',
+          childSessionId: typeof childRaw === 'string' && childRaw.length > 0 ? childRaw : null,
+        }
+      }
       let pdiffs: PreviewToolCallDiff[] | undefined
       let prevContent: string | null = null
       const metaAll = (out['_meta'] as Record<string, unknown> | undefined) ?? {}
@@ -813,6 +827,7 @@ export function buildSessionPreview(
           previousContent: prevContent,
           toolName: det['toolName'] != null ? String(det['toolName']) : null,
           rawOutput: String(det['toolName'] ?? '').startsWith('process.') ? out : undefined,
+          subagent: psub,
         },
       ]
     }
