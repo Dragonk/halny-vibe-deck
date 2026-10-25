@@ -144,6 +144,7 @@ jobs:
             - Real file previews: PDF (rasterized pages via bundled pdfium), DOCX/ODT (styled document flow), PPTX/ODP (slide cards), XLSX/XLS/ODS (all sheets as clickable tabs), images, Markdown + Mermaid, code with syntax highlighting.
             - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
             - First Windows build (`vibedeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
+            - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
             - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
 
             ## Requirements
@@ -154,7 +155,7 @@ jobs:
 
             ## Usage
 
-            - `./vibedeck` — auto: opens the desktop window if a display is available, otherwise headless server.
+            - `./vibedeck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
             - `./vibedeck --mode gui` — force desktop window.
             - `./vibedeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
             - `./vibedeck --port 1234` / `--set-login user pass` — configure the remote server.

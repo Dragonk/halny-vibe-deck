@@ -5,6 +5,10 @@
 
 #![allow(non_snake_case)]
 
+// Windows: no console window — double-clicking the exe opens the GUI
+// directly. Console output is only kept for debug builds.
+#![cfg_attr(all(target_os = "windows", feature = "gui", not(debug_assertions)), windows_subsystem = "windows")]
+
 pub mod api;
 pub mod app;
 pub mod components;
@@ -48,7 +52,11 @@ fn main() {
             "gui" | "desktop" => true,
             "headless" => false,
             "auto" => {
-                std::env::var_os("DISPLAY").is_some()
+                // On Windows a desktop session is the norm — default to the
+                // GUI window (double-click should just open the app). On
+                // Unix, open the GUI only when a display server is available.
+                cfg!(target_os = "windows")
+                    || std::env::var_os("DISPLAY").is_some()
                     || std::env::var_os("WAYLAND_DISPLAY").is_some()
             }
             other => {
