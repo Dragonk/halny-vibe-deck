@@ -95,6 +95,9 @@ jobs:
         run: |
           mkdir -p dist/vibedeck-win
           cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe" dist/vibedeck-win/vibedeck.exe
+          WEBVIEW2_LOADER=$(find "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/build" -path '*webview2-com-sys*/out/x64/WebView2Loader.dll' -print -quit)
+          test -n "$WEBVIEW2_LOADER" || { echo 'WebView2Loader.dll not found'; exit 1; }
+          cp "$WEBVIEW2_LOADER" dist/vibedeck-win/
           cp pdfium/bin/pdfium.dll dist/vibedeck-win/
           cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-win/public
           cd dist/vibedeck-win && zip -q -r "../../vibedeck-${VERSION}-windows-x64.zip" .
@@ -145,6 +148,7 @@ jobs:
             - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
             - First Windows build (`vibedeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
             - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
+            - Bundled `WebView2Loader.dll` next to `vibedeck.exe` — required by the Windows webview (fixes the “WebView2Loader.dll not found” system error).
             - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
 
             ## Requirements
