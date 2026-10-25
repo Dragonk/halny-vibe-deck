@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 import MessageBubble from './MessageBubble'
@@ -27,6 +27,12 @@ export default function ChatView(): React.JSX.Element {
     () => (session?.acpSessionId ? sessionPlans[session.acpSessionId] : undefined) ?? EMPTY_PLAN,
     [sessionPlans, session?.acpSessionId],
   )
+  // v0.12: collapsible plan card - collapsed shows the counter plus the
+  // current (or last) entry; manual toggle always wins over auto-collapse.
+  const [planCollapsedManual, setPlanCollapsedManual] = useState<boolean | null>(null)
+  const planAllDone = planEntries.length > 0 && planEntries.every((e) => e.status === 'completed')
+  const planCollapsed = planCollapsedManual ?? planAllDone
+  const planCurrent = planEntries.find((e) => e.status === 'in_progress') ?? planEntries[planEntries.length - 1]
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -86,21 +92,41 @@ export default function ChatView(): React.JSX.Element {
                 />
               ))}
               {planEntries.length > 0 && (
-                <div className="plan-card">
-                  <div className="plan-card-header">
+                <div className={'plan-card' + (planCollapsed ? ' plan-card-collapsed' : '')}>
+                  <button
+                    type="button"
+                    className="plan-card-header"
+                    onClick={() => setPlanCollapsedManual(!planCollapsed)}
+                  >
                     <span className="plan-card-title">{tr.planLabel}</span>
-                    <span className="plan-card-count">
-                      {planEntries.filter((e) => e.status === 'completed').length}/{planEntries.length}
-                    </span>
-                  </div>
-                  {planEntries.map((entry, pIdx) => (
-                    <div key={pIdx} className={'plan-row plan-' + entry.status}>
-                      <span className="plan-icon">
-                        {entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '◐' : '○'}
+                    <span className="plan-card-meta">
+                      <span className="plan-card-count">
+                        {planEntries.filter((e) => e.status === 'completed').length}/{planEntries.length}
                       </span>
-                      <span className="plan-content">{entry.content}</span>
+                      <span className={'plan-card-chevron' + (planCollapsed ? '' : ' open')}>
+                        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                          <path d="M1 3l4 4 4-4" />
+                        </svg>
+                      </span>
+                    </span>
+                  </button>
+                  {planCollapsed && planCurrent ? (
+                    <div className={'plan-row plan-' + planCurrent.status}>
+                      <span className="plan-icon">
+                        {planCurrent.status === 'completed' ? '✓' : planCurrent.status === 'in_progress' ? '◐' : '○'}
+                      </span>
+                      <span className="plan-content">{planCurrent.content}</span>
                     </div>
-                  ))}
+                  ) : (
+                    planEntries.map((entry, pIdx) => (
+                      <div key={pIdx} className={'plan-row plan-' + entry.status}>
+                        <span className="plan-icon">
+                          {entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '◐' : '○'}
+                        </span>
+                        <span className="plan-content">{entry.content}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
               {showAgentBusy && !isResuming && (

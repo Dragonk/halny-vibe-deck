@@ -6245,7 +6245,7 @@ code {
 
 /* v0.11.1: agent plan / todo checklist card */
 .plan-card { margin: 4px 2px 14px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 10px; background: rgba(127, 127, 127, 0.04); }
-.plan-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.plan-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; border: none; background: none; padding: 0; width: 100%; cursor: pointer; font: inherit; color: inherit; text-align: left; }
 .plan-card-title { font-size: 11px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-muted); }
 .plan-card-count { font-size: 11px; color: var(--text-dim); }
 .plan-row { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; font-size: 13px; color: var(--text-muted); }
@@ -6256,3 +6256,7 @@ code {
 .plan-row.plan-in_progress { color: var(--text); font-weight: 500; }
 .plan-row.plan-in_progress .plan-icon { color: var(--accent); animation: plan-pulse 1.6s ease-in-out infinite; }
 @keyframes plan-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.plan-card-meta { display: flex; align-items: center; gap: 6px; }
+.plan-card-chevron { display: inline-flex; align-items: center; color: var(--text-dim); transition: transform 0.15s ease; }
+.plan-card-chevron.open { transform: rotate(180deg); }
+.plan-card-collapsed .plan-row { margin-top: 2px; }
