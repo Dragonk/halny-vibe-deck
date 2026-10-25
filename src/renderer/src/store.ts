@@ -208,6 +208,7 @@ interface AppStore {
   getNextQueuedMessage: () => { id: string; content: string } | undefined;
 
   currentSessionWorkingDirectory: () => string;
+  currentSessionRemoteId: () => string | undefined;
 
   // Actions
   addUserMessage: (text: string, attachments?: { path: string; isDir: boolean; content: string }[]) => Message;
@@ -908,6 +909,12 @@ export const useStore = create<AppStore>((set, get) => ({
     const { sessions, currentSessionId, workingDirectory } = get();
     const session = sessions.find((s) => s.id === currentSessionId);
     return session?.workingDirectory || workingDirectory || "";
+  },
+
+  currentSessionRemoteId: () => {
+    const { sessions, currentSessionId } = get();
+    const session = sessions.find((s) => s.id === currentSessionId);
+    return session?.remoteId;
   },
 
   addUserMessage: (text, attachments) => {

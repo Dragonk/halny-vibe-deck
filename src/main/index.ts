@@ -762,20 +762,34 @@ app.whenReady().then(() => {
   };
 
   ipcMain.handle("vibe:get-config", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemoteVibeConfig(remoteId ?? "") : loadVibeConfig(resolveScopeDir(scope, cwd)));
+    scope === "remote"
+      ? getRemoteVibeConfig(remoteId ?? "")
+      : scope === "project" && remoteId
+        ? getRemoteVibeConfig(remoteId, cwd + "/.vibe")
+        : loadVibeConfig(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:save-config", async (_e, config: VibeConfig, scope: string, cwd: string, remoteId?: string) => {
     if (scope === "remote") {
       await saveRemoteVibeConfig(config, remoteId ?? "");
       return;
     }
+    if (scope === "project" && remoteId) {
+      await saveRemoteVibeConfig(config, remoteId, cwd + "/.vibe");
+      return;
+    }
     saveVibeConfig(config, resolveScopeDir(scope, cwd));
   });
   ipcMain.handle("vibe:get-raw-config", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemoteRawConfig(remoteId ?? "") : loadVibeConfigRaw(resolveScopeDir(scope, cwd)));
+    scope === "remote"
+      ? getRemoteRawConfig(remoteId ?? "")
+      : scope === "project" && remoteId
+        ? getRemoteRawConfig(remoteId, cwd + "/.vibe")
+        : loadVibeConfigRaw(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:save-raw-config", async (_e, content: string, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? saveRemoteRawConfig(content, remoteId ?? "")
-      : saveVibeConfigRaw(content, resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? saveRemoteRawConfig(content, remoteId, cwd + "/.vibe")
+        : saveVibeConfigRaw(content, resolveScopeDir(scope, cwd)));
 
   ipcMain.handle("vibe:get-agents", async (_e, scope: string, cwd: string, remoteId?: string) => {
     if (scope === "remote") return getRemoteAgents(remoteId ?? "");
@@ -814,6 +828,10 @@ app.whenReady().then(() => {
       await saveRemoteAgent(name, config, remoteId ?? "");
       return;
     }
+    if (scope === "project" && remoteId) {
+      await saveRemoteAgent(name, config, remoteId, cwd + "/.vibe");
+      return;
+    }
     saveAgentFile(name, config, resolveScopeDir(scope, cwd));
   });
   ipcMain.handle("vibe:delete-agent", async (_e, name: string, scope: string, cwd: string, remoteId?: string) => {
@@ -821,14 +839,26 @@ app.whenReady().then(() => {
       await deleteRemoteAgent(name, remoteId ?? "");
       return;
     }
+    if (scope === "project" && remoteId) {
+      await deleteRemoteAgent(name, remoteId, cwd + "/.vibe");
+      return;
+    }
     deleteAgentFile(name, resolveScopeDir(scope, cwd));
   });
 
   ipcMain.handle("vibe:get-prompts", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemotePrompts(remoteId ?? "") : loadPromptFiles(resolveScopeDir(scope, cwd)));
+    scope === "remote"
+      ? getRemotePrompts(remoteId ?? "")
+      : scope === "project" && remoteId
+        ? getRemotePrompts(remoteId, cwd + "/.vibe")
+        : loadPromptFiles(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:save-prompt", async (_e, name: string, content: string, scope: string, cwd: string, remoteId?: string) => {
     if (scope === "remote") {
       await saveRemotePrompt(name, content, remoteId ?? "");
+      return;
+    }
+    if (scope === "project" && remoteId) {
+      await saveRemotePrompt(name, content, remoteId, cwd + "/.vibe");
       return;
     }
     savePromptFile(name, content, resolveScopeDir(scope, cwd));
@@ -838,37 +868,59 @@ app.whenReady().then(() => {
       await deleteRemotePrompt(name, remoteId ?? "");
       return;
     }
+    if (scope === "project" && remoteId) {
+      await deleteRemotePrompt(name, remoteId, cwd + "/.vibe");
+      return;
+    }
     deletePromptFile(name, resolveScopeDir(scope, cwd));
   });
 
   ipcMain.handle("vibe:get-skills", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemoteSkills(remoteId ?? "") : loadSkillFiles(resolveScopeDir(scope, cwd)));
+    scope === "remote"
+      ? getRemoteSkills(remoteId ?? "")
+      : scope === "project" && remoteId
+        ? getRemoteSkills(remoteId, cwd + "/.vibe")
+        : loadSkillFiles(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:get-dir", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemoteVibeDir(remoteId ?? "") : resolveScopeDir(scope, cwd));
+    scope === "remote"
+      ? getRemoteVibeDir(remoteId ?? "")
+      : scope === "project" && remoteId
+        ? cwd + "/.vibe"
+        : resolveScopeDir(scope, cwd));
   ipcMain.handle("vibe:list-config-files", async (_e, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? listRemoteConfigFiles(remoteId ?? "")
-      : listConfigFiles(resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? listRemoteConfigFiles(remoteId, cwd + "/.vibe")
+        : listConfigFiles(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:create-skill", async (_e, name: string, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? createRemoteSkill(name, remoteId ?? "")
-      : createSkillFile(name, resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? createRemoteSkill(name, remoteId, cwd + "/.vibe")
+        : createSkillFile(name, resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:delete-skill", async (_e, name: string, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? deleteRemoteSkill(name, remoteId ?? "")
-      : deleteSkillFile(name, resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? deleteRemoteSkill(name, remoteId, cwd + "/.vibe")
+        : deleteSkillFile(name, resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:write-skill-file",
     async (_e, name: string, relPath: string, content: string, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? writeRemoteSkillFile(name, relPath, content, remoteId ?? "")
-      : writeSkillFile(name, relPath, content, resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? writeRemoteSkillFile(name, relPath, content, remoteId, cwd + "/.vibe")
+        : writeSkillFile(name, relPath, content, resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:delete-skill-file", async (_e, name: string, relPath: string, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote"
       ? deleteRemoteSkillFile(name, relPath, remoteId ?? "")
-      : deleteSkillSubFile(name, relPath, resolveScopeDir(scope, cwd)));
+      : scope === "project" && remoteId
+        ? deleteRemoteSkillFile(name, relPath, remoteId, cwd + "/.vibe")
+        : deleteSkillSubFile(name, relPath, resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:import-skill",
     async (_e, src: string, isZip: boolean, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote"
+    scope === "remote" || (scope === "project" && remoteId)
       ? importRemoteSkill()
       : isZip
         ? importSkillFromZip(src, resolveScopeDir(scope, cwd))

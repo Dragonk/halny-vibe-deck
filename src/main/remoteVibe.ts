@@ -1,6 +1,8 @@
 // v0.8.1: remote (SSH) vibe configuration. Mirrors the vibeConfig.ts
 // operations for the remote settings scope, executing them over sshRun
-// on the configured remote connection. Paths target "<home>/.vibe".
+// on the configured remote connection. Paths target "<home>/.vibe" by
+// default; an explicit dir (a remote project's "<cwd>/.vibe") scopes the
+// operations to a project on the remote host.
 import { loadConfig, type RemoteConnection } from "./config";
 import { shq, sshRun } from "./remote";
 import { parse, stringify } from "smol-toml";
@@ -14,6 +16,12 @@ import type {
 
 const NL = String.fromCharCode(10);
 const HOME_VIBE = '"$HOME"/.vibe';
+
+// Shell-safe form of a vibe dir: the global marker expands "$HOME" raw
+// inside the command; explicit project dirs are single-quoted via shq.
+function dirShell(dir: string): string {
+  return dir === HOME_VIBE ? dir : shq(dir);
+}
 
 async function connOrThrow(remoteId: string): Promise<RemoteConnection> {
   const conn = (loadConfig().remoteConnections ?? []).find(
@@ -58,8 +66,8 @@ async function remoteWrite(
 // config.toml
 // ---------------------------------------------------------------------------
 
-export async function getRemoteVibeConfig(remoteId: string): Promise<VibeConfig> {
-  const out = await runSoft(remoteId, "cat " + HOME_VIBE + "/config.toml 2>/dev/null");
+export async function getRemoteVibeConfig(remoteId: string, dir: string = HOME_VIBE): Promise<VibeConfig> {
+  const out = await runSoft(remoteId, "cat " + dirShell(dir) + "/config.toml 2>/dev/null");
   if (!out.trim()) return {};
   try {
     return parse(out) as VibeConfig;
@@ -68,23 +76,24 @@ export async function getRemoteVibeConfig(remoteId: string): Promise<VibeConfig>
   }
 }
 
-export async function saveRemoteVibeConfig(config: VibeConfig, remoteId: string): Promise<void> {
+export async function saveRemoteVibeConfig(config: VibeConfig, remoteId: string, dir: string = HOME_VIBE): Promise<void> {
   await remoteWrite(
     remoteId,
-    HOME_VIBE,
-    HOME_VIBE + "/config.toml",
+    dirShell(dir),
+    dirShell(dir) + "/config.toml",
     stringify(config as Record<string, unknown>),
   );
 }
 
 export async function getRemoteRawConfig(
   remoteId: string,
+  dir: string = HOME_VIBE,
 ): Promise<{ content: string; error: string | null }> {
-  const out = await runSoft(remoteId, "cat " + HOME_VIBE + "/config.toml 2>/dev/null");
+  const out = await runSoft(remoteId, "cat " + dirShell(dir) + "/config.toml 2>/dev/null");
   return { content: out, error: null };
 }
 
-export async function saveRemoteRawConfig(content: string, remoteId: string): Promise<string | null> {
+export async function saveRemoteRawConfig(content: string, remoteId: string, dir: string = HOME_VIBE): Promise<string | null> {
   try {
     const parsed = parse(content);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -93,7 +102,7 @@ export async function saveRemoteRawConfig(content: string, remoteId: string): Pr
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
-  await remoteWrite(remoteId, HOME_VIBE, HOME_VIBE + "/config.toml", content);
+  await remoteWrite(remoteId, dirShell(dir), dirShell(dir) + "/config.toml", content);
   return null;
 }
 
@@ -147,10 +156,10 @@ function parseRemoteAgentBlocks(out: string): VibeAgentFileConfig[] {
   return agents;
 }
 
-export async function getRemoteAgents(remoteId: string): Promise<VibeAgentFileConfig[]> {
+export async function getRemoteAgents(remoteId: string, dir: string = HOME_VIBE): Promise<VibeAgentFileConfig[]> {
   const out = await runSoft(
     remoteId,
-    "for f in \"$HOME\"/.vibe/agents/*.toml; do [ -f \"$f\" ] || continue; " +
+    "for f in " + dirShell(dir) + "/agents/*.toml; do [ -f \"$f\" ] || continue; " +
       "echo \"@@@F:$f\"; cat \"$f\"; echo; done",
   );
   return parseRemoteAgentBlocks(out);
@@ -206,20 +215,21 @@ export async function saveRemoteAgent(
   name: string,
   config: VibeAgentFileConfig,
   remoteId: string,
+  dir: string = HOME_VIBE,
 ): Promise<void> {
   const data = agentFileData(config);
   await remoteWrite(
     remoteId,
-    HOME_VIBE + "/agents",
-    HOME_VIBE + "/agents/" + shq(agentFileName(name)),
+    dirShell(dir) + "/agents",
+    dirShell(dir) + "/agents/" + shq(agentFileName(name)),
     stringify(data),
   );
 }
 
-export async function deleteRemoteAgent(name: string, remoteId: string): Promise<void> {
+export async function deleteRemoteAgent(name: string, remoteId: string, dir: string = HOME_VIBE): Promise<void> {
   await runSoft(
     remoteId,
-    "rm -f \"$HOME\"/.vibe/agents/" + shq(agentFileName(name)),
+    "rm -f " + dirShell(dir) + "/agents/" + shq(agentFileName(name)),
   );
 }
 
@@ -231,10 +241,10 @@ function promptFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, "_") + ".md";
 }
 
-export async function getRemotePrompts(remoteId: string): Promise<VibePrompt[]> {
+export async function getRemotePrompts(remoteId: string, dir: string = HOME_VIBE): Promise<VibePrompt[]> {
   const out = await runSoft(
     remoteId,
-    "for f in \"$HOME\"/.vibe/prompts/*; do [ -f \"$f\" ] || continue; " +
+    "for f in " + dirShell(dir) + "/prompts/*; do [ -f \"$f\" ] || continue; " +
       "echo \"@@@P:$f\"; cat \"$f\"; echo \"@@@E\"; done",
   );
   const prompts: VibePrompt[] = [];
@@ -255,19 +265,19 @@ export async function getRemotePrompts(remoteId: string): Promise<VibePrompt[]> 
   return prompts;
 }
 
-export async function saveRemotePrompt(name: string, content: string, remoteId: string): Promise<void> {
+export async function saveRemotePrompt(name: string, content: string, remoteId: string, dir: string = HOME_VIBE): Promise<void> {
   await remoteWrite(
     remoteId,
-    HOME_VIBE + "/prompts",
-    HOME_VIBE + "/prompts/" + shq(promptFileName(name)),
+    dirShell(dir) + "/prompts",
+    dirShell(dir) + "/prompts/" + shq(promptFileName(name)),
     content,
   );
 }
 
-export async function deleteRemotePrompt(name: string, remoteId: string): Promise<void> {
+export async function deleteRemotePrompt(name: string, remoteId: string, dir: string = HOME_VIBE): Promise<void> {
   await runSoft(
     remoteId,
-    "rm -f \"$HOME\"/.vibe/prompts/" + shq(promptFileName(name)),
+    "rm -f " + dirShell(dir) + "/prompts/" + shq(promptFileName(name)),
   );
 }
 
@@ -277,10 +287,11 @@ export async function deleteRemotePrompt(name: string, remoteId: string): Promis
 
 export async function listRemoteConfigFiles(
   remoteId: string,
+  dir: string = HOME_VIBE,
 ): Promise<Array<{ path: string; full: string }>> {
   const out = await runSoft(
     remoteId,
-    "printf \"@@@H%s\" \"$HOME\"; cd \"$HOME\"/.vibe 2>/dev/null && " +
+    "printf \"@@@H%s\" \"$HOME\"; cd " + dirShell(dir) + " 2>/dev/null && " +
       "find . -maxdepth 3 -type f ! -path \"./logs*\" ! -path \"./sessions*\" " +
       "! -path \"./node_modules*\" ! -path \"./.git*\" ! -path \"./tmp*\" | sort",
   );
@@ -288,12 +299,13 @@ export async function listRemoteConfigFiles(
   const nlIdx = out.indexOf(NL);
   if (nlIdx < 0) return [];
   const home = out.slice(4, nlIdx);
+  const root = dir === HOME_VIBE ? home + "/.vibe" : dir;
   const files: Array<{ path: string; full: string }> = [];
   for (const line of out.slice(nlIdx + 1).split(NL)) {
     const rel = line.trim();
     if (!rel) continue;
     const cleanRel = rel.startsWith("./") ? rel.slice(2) : rel;
-    files.push({ path: cleanRel, full: home + "/.vibe/" + cleanRel });
+    files.push({ path: cleanRel, full: root + "/" + cleanRel });
   }
   return files;
 }
@@ -310,9 +322,9 @@ function sanitizeSkillRel(relPath: string): string {
   return relPath.split("..").join("").replace(/^[/]+/, "");
 }
 
-export async function getRemoteSkills(remoteId: string): Promise<VibeSkill[]> {
+export async function getRemoteSkills(remoteId: string, dir: string = HOME_VIBE): Promise<VibeSkill[]> {
   const cmd =
-    "printf \"@@@H%s\" \"$HOME\"; cd \"$HOME\"/.vibe/skills 2>/dev/null || exit 0; " +
+    "printf \"@@@H%s\" \"$HOME\"; cd " + dirShell(dir) + "/skills 2>/dev/null || exit 0; " +
     "find . -maxdepth 4 | sort | while read -r p; do q=${p#./}; " +
     "if [ -d \"$p\" ]; then echo \"D $q\"; else echo \"F $q\"; fi; done; " +
     "for f in */SKILL.md; do [ -f \"$f\" ] || continue; echo \"@@@S:$f\"; " +
@@ -322,6 +334,7 @@ export async function getRemoteSkills(remoteId: string): Promise<VibeSkill[]> {
   const nlIdx = out.indexOf(NL);
   if (nlIdx < 0) return [];
   const home = out.slice(4, nlIdx);
+  const root = dir === HOME_VIBE ? home + "/.vibe" : dir;
   const body = out.slice(nlIdx + 1);
   const listPart = body.split("@@@S:")[0];
   const contents = new Map<string, string>();
@@ -352,14 +365,14 @@ export async function getRemoteSkills(remoteId: string): Promise<VibeSkill[]> {
       skills.set(name, {
         name,
         content: contents.get(name + "/SKILL.md") ?? "",
-        dir: home + "/.vibe/skills/" + name,
+        dir: root + "/skills/" + name,
         files: [],
       });
     }
     const skill = skills.get(name)!;
     skill.files.push({
       path: segs.slice(1).join("/"),
-      full: home + "/.vibe/skills/" + rel,
+      full: root + "/skills/" + rel,
       isDir,
     });
   }
@@ -372,12 +385,12 @@ export async function getRemoteSkills(remoteId: string): Promise<VibeSkill[]> {
   return [...skills.values()];
 }
 
-export async function createRemoteSkill(name: string, remoteId: string): Promise<string | null> {
+export async function createRemoteSkill(name: string, remoteId: string, dir: string = HOME_VIBE): Promise<string | null> {
   const clean = sanitizeSkillName(name);
   if (!clean) return "Invalid skill name";
   const exists = await runSoft(
     remoteId,
-    "test -d \"$HOME\"/.vibe/skills/" + shq(clean) + " && echo yes",
+    "test -d " + dirShell(dir) + "/skills/" + shq(clean) + " && echo yes",
   );
   if (exists.trim()) return "A skill with this name already exists";
   const starter =
@@ -388,19 +401,19 @@ export async function createRemoteSkill(name: string, remoteId: string): Promise
     "# " + clean + NL;
   await remoteWrite(
     remoteId,
-    "\"$HOME\"/.vibe/skills/" + shq(clean),
-    "\"$HOME\"/.vibe/skills/" + shq(clean) + "/SKILL.md",
+    dirShell(dir) + "/skills/" + shq(clean),
+    dirShell(dir) + "/skills/" + shq(clean) + "/SKILL.md",
     starter,
   );
   return null;
 }
 
-export async function deleteRemoteSkill(name: string, remoteId: string): Promise<string | null> {
+export async function deleteRemoteSkill(name: string, remoteId: string, dir: string = HOME_VIBE): Promise<string | null> {
   const clean = sanitizeSkillName(name);
   if (!clean) return "Invalid skill name";
   await runSoft(
     remoteId,
-    "rm -rf \"$HOME\"/.vibe/skills/" + shq(clean),
+    "rm -rf " + dirShell(dir) + "/skills/" + shq(clean),
   );
   return null;
 }
@@ -410,6 +423,7 @@ export async function writeRemoteSkillFile(
   relPath: string,
   content: string,
   remoteId: string,
+  dir: string = HOME_VIBE,
 ): Promise<string | null> {
   const clean = sanitizeSkillName(name);
   if (!clean) return "Invalid skill name";
@@ -418,8 +432,8 @@ export async function writeRemoteSkillFile(
   const target = clean + "/" + rel;
   await remoteWrite(
     remoteId,
-    "\"$HOME\"/.vibe/skills/" + shq(clean),
-    "\"$HOME\"/.vibe/skills/" + shq(target),
+    dirShell(dir) + "/skills/" + shq(clean),
+    dirShell(dir) + "/skills/" + shq(target),
     content,
   );
   return null;
@@ -429,6 +443,7 @@ export async function deleteRemoteSkillFile(
   name: string,
   relPath: string,
   remoteId: string,
+  dir: string = HOME_VIBE,
 ): Promise<string | null> {
   const clean = sanitizeSkillName(name);
   if (!clean) return "Invalid skill name";
@@ -439,7 +454,7 @@ export async function deleteRemoteSkillFile(
   }
   await runSoft(
     remoteId,
-    "rm -rf \"$HOME\"/.vibe/skills/" + shq(clean + "/" + rel),
+    "rm -rf " + dirShell(dir) + "/skills/" + shq(clean + "/" + rel),
   );
   return null;
 }

@@ -219,7 +219,7 @@ function mcpOauthUpdate(
 }
 
 export default function SettingsView(): React.JSX.Element {
-  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview, remoteStatuses } = useStore()
+  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, currentSessionRemoteId, openFilePreview, remoteStatuses } = useStore()
   const updateInfo = useStore((s) => s.updateInfo)
   const updateProgress = useStore((s) => s.updateProgress)
   const tr = useTranslation(config.language)
@@ -282,33 +282,53 @@ export default function SettingsView(): React.JSX.Element {
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
   const [scope, setScope] = useState<'global' | 'project' | 'remote'>('global')
   const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+  const projectRemoteId = currentSessionRemoteId()
   const [remoteScopeId, setRemoteScopeId] = useState<string | null>(null)
   const effectiveRemoteId =
     remoteScopeId ?? (config.remoteConnections ?? []).find((c) => c.enabled)?.id ?? null
-  const vibeRemoteId = scope === 'remote' ? (effectiveRemoteId ?? undefined) : undefined
+  // v0.11.2: the project scope follows the active session - when it runs on a
+  // remote SSH connection, all vibe.* calls target the remote project dir.
+  const vibeRemoteId = scope === 'remote'
+    ? (effectiveRemoteId ?? undefined)
+    : scope === 'project'
+      ? (projectRemoteId ?? undefined)
+      : undefined
 
   useEffect(() => {
     setLocal({ ...config })
   }, [config])
 
   const loadVibeData = useCallback(async (targetScope: 'global' | 'project' | 'remote' = scope, targetCwd: string = projectCwd): Promise<void> => {
-    const targetRemoteId = targetScope === 'remote' ? (effectiveRemoteId ?? undefined) : undefined
-    const [cfg, agents, prompts, skills] = await Promise.all([
-      window.api.vibe.getConfig(targetScope, targetCwd, targetRemoteId),
-      window.api.vibe.getAgents(targetScope, targetCwd, targetRemoteId),
-      window.api.vibe.getPrompts(targetScope, targetCwd, targetRemoteId),
-      window.api.vibe.getSkills(targetScope, targetCwd, targetRemoteId)
-    ])
-    setVibeConfig(cfg as VibeConfig)
-    setVibeAgents(agents as VibeAgentConfig[])
-    setVibePrompts(prompts as VibePrompt[])
-    setVibeSkills(skills as VibeSkill[])
-    if (targetScope === 'project') {
-      // Project agents may also reference models defined in the global config
-      const gcfg = await window.api.vibe.getConfig('global', targetCwd)
-      setGlobalModels(((gcfg as VibeConfig).models || []) as VibeModelConfig[])
-    } else {
-      setGlobalModels([])
+    const targetRemoteId = targetScope === 'remote'
+      ? (effectiveRemoteId ?? undefined)
+      : targetScope === 'project'
+        ? (currentSessionRemoteId() ?? undefined)
+        : undefined
+    try {
+      const [cfg, agents, prompts, skills] = await Promise.all([
+        window.api.vibe.getConfig(targetScope, targetCwd, targetRemoteId),
+        window.api.vibe.getAgents(targetScope, targetCwd, targetRemoteId),
+        window.api.vibe.getPrompts(targetScope, targetCwd, targetRemoteId),
+        window.api.vibe.getSkills(targetScope, targetCwd, targetRemoteId)
+      ])
+      setVibeConfig(cfg as VibeConfig)
+      setVibeAgents(agents as VibeAgentConfig[])
+      setVibePrompts(prompts as VibePrompt[])
+      setVibeSkills(skills as VibeSkill[])
+      if (targetScope === 'project') {
+        // Project agents may also reference models defined in the global config
+        // (for a remote project that is the remote host's global config)
+        const gcfg = await window.api.vibe.getConfig(
+          targetRemoteId ? 'remote' : 'global',
+          targetCwd,
+          targetRemoteId
+        )
+        setGlobalModels(((gcfg as VibeConfig).models || []) as VibeModelConfig[])
+      } else {
+        setGlobalModels([])
+      }
+    } catch (err) {
+      console.error('loadVibeData failed:', err)
     }
     setLoaded(true)
   }, [scope, projectCwd, effectiveRemoteId])
@@ -629,7 +649,7 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleOpenSkillsFolder = async (): Promise<void> => {
     const dir = await window.api.vibe.getDir(scope, projectCwd, vibeRemoteId)
-    if (scope === 'remote') return
+    if (scope === 'remote' || vibeRemoteId) return
     const skillsDir = `${dir}/skills`
     await window.api.shell.openPath(skillsDir)
   }
@@ -662,7 +682,7 @@ export default function SettingsView(): React.JSX.Element {
       .getDir(scope, projectCwd, vibeRemoteId)
       .then((dir) => setVibeCfgDir(dir))
       .catch(console.error)
-  }, [tab, scope, projectCwd])
+  }, [tab, scope, projectCwd, vibeRemoteId])
 
   const loadConfigFile = useCallback(async (rel: string | null, full?: string | null): Promise<void> => {
     setSelectedCfgFile(rel)
@@ -1027,17 +1047,19 @@ export default function SettingsView(): React.JSX.Element {
               <button
                 className={`scope-pill ${scope === 'project' ? 'active' : ''}`}
                 disabled={!projectCwd}
-                title={projectCwd ? projectCwd + '/.vibe' : ''}
+                title={projectCwd ? (projectRemoteId ? '📍 ' + projectCwd + '/.vibe' : projectCwd + '/.vibe') : ''}
                 onClick={() => { setScope('project'); setRawToml(null) }}
               >
-                {tr.settingsScopeProject}
+                {projectRemoteId ? '📍 ' : ''}{tr.settingsScopeProject}
               </button>
             </div>
           )}
           {CLI_SCOPED_TABS.has(tab) && (
             <span className="scope-path">
               {scope === 'project'
-                ? projectCwd + '/.vibe'
+                ? (projectRemoteId
+                    ? '📍 ' + ((config.remoteConnections ?? []).find((c) => c.id === projectRemoteId)?.name ?? 'remote') + ': ' + projectCwd + '/.vibe'
+                    : projectCwd + '/.vibe')
                 : scope === 'remote'
                   ? ((config.remoteConnections ?? []).find((c) => c.id === effectiveRemoteId)?.name ?? 'remote') + ': ~/.vibe'
                   : '~/.vibe'}
