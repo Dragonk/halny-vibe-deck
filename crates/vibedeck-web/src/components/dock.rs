@@ -1,10 +1,9 @@
 //! Dock: Files / Git panel on the right side of the chat view.
 //!
-//! Files tab: working-directory browser (breadcrumb + directory rows),
-//! click a file to preview it (text / markdown / csv / image / xlsx /
-//! docx / pdf — server-side extraction, see `fsgit.rs`).
-//! Git tab: `git status --porcelain` entries; click a file to see its
-//! diff. Same CSS classes as the Nexus dock.
+//! Mirrors the Nexus dock: Files/Git main tabs plus dynamically opened
+//! preview tabs (file previews and git diffs) that live next to them in
+//! the tab bar, each closable with its own ✕ button. Tab state survives
+//! switching between Files/Git.
 
 use dioxus::prelude::*;
 
@@ -57,10 +56,131 @@ fn parse_csv(src: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// An open preview tab in the dock tab bar (Nexus `PreviewTab`).
+#[derive(Clone, Debug, PartialEq)]
+struct PreviewTab {
+    id: u64,
+    /// "file" | "diff"
+    kind: String,
+    name: String,
+    path: String,
+    staged: bool,
+    data: Option<PreviewData>,
+    diff: String,
+    loaded: bool,
+}
+
+fn close_tab(mut tabs: Signal<Vec<PreviewTab>>, mut active: Signal<Option<u64>>, id: u64) {
+    {
+        let mut v = tabs.write();
+        v.retain(|t| t.id != id);
+    }
+    if *active.read() == Some(id) {
+        active.set(None);
+    }
+}
+
+fn open_file_tab(
+    state: Signal<ClientState>,
+    mut tabs: Signal<Vec<PreviewTab>>,
+    mut active: Signal<Option<u64>>,
+    mut next_id: Signal<u64>,
+    path: String,
+    name: String,
+) {
+    let existing = tabs
+        .read()
+        .iter()
+        .find(|t| t.kind == "file" && t.path == path)
+        .map(|t| t.id);
+    if let Some(id) = existing {
+        active.set(Some(id));
+        return;
+    }
+    let id = *next_id.read();
+    next_id.set(id + 1);
+    {
+        let mut v = tabs.write();
+        v.push(PreviewTab {
+            id,
+            kind: "file".into(),
+            name: name.clone(),
+            path: path.clone(),
+            staged: false,
+            data: None,
+            diff: String::new(),
+            loaded: false,
+        });
+    }
+    active.set(Some(id));
+    spawn(async move {
+        let data = match api_read_file(token(&state), path.clone()).await {
+            Ok(d) => d,
+            Err(e) => PreviewData {
+                kind: "error".into(),
+                text: e.to_string(),
+                file_name: path.clone(),
+                ..PreviewData::empty()
+            },
+        };
+        let mut v = tabs.write();
+        if let Some(t) = v.iter_mut().find(|t| t.id == id) {
+            t.data = Some(data);
+            t.loaded = true;
+        }
+    });
+}
+
+fn open_diff_tab(
+    state: Signal<ClientState>,
+    mut tabs: Signal<Vec<PreviewTab>>,
+    mut active: Signal<Option<u64>>,
+    mut next_id: Signal<u64>,
+    path: String,
+    staged: bool,
+) {
+    let existing = tabs
+        .read()
+        .iter()
+        .find(|t| t.kind == "diff" && t.path == path && t.staged == staged)
+        .map(|t| t.id);
+    if let Some(id) = existing {
+        active.set(Some(id));
+        return;
+    }
+    let id = *next_id.read();
+    next_id.set(id + 1);
+    let name = basename_or(&path);
+    {
+        let mut v = tabs.write();
+        v.push(PreviewTab {
+            id,
+            kind: "diff".into(),
+            name,
+            path: path.clone(),
+            staged,
+            data: None,
+            diff: String::new(),
+            loaded: false,
+        });
+    }
+    active.set(Some(id));
+    spawn(async move {
+        let d = api_git_diff(token(&state), staged, path.clone())
+            .await
+            .unwrap_or_default();
+        let mut v = tabs.write();
+        if let Some(t) = v.iter_mut().find(|t| t.id == id) {
+            t.diff = d;
+            t.loaded = true;
+        }
+    });
+}
+
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
-    let tab = use_signal(|| "files".to_string());
+    let mut tab = use_signal(|| "files".to_string());
     let mut entries = use_signal(Vec::<FileEntry>::new);
     let git = use_signal(|| None::<GitStatus>);
     let mut boot = use_signal(|| false);
@@ -79,13 +199,16 @@ pub fn Dock() -> Element {
     // local state that survives tab switches but resets with the component
     let cwd = use_signal(String::new);
     let mut files_msg = use_signal(String::new);
-    let preview = use_signal(|| None::<(String, PreviewData)>);
-    let git_diff = use_signal(|| None::<(String, String)>);
+    let tabs = use_signal(Vec::<PreviewTab>::new);
+    let active = use_signal(|| None::<u64>);
+    let next_id = use_signal(|| 1u64);
 
     // one-shot bootstrap: fetch the root listing when the dock first shows
     if !*boot.read() {
         boot.set(true);
         let st = state.clone();
+        let mut entries = entries.clone();
+        let mut files_msg = files_msg.clone();
         spawn(async move {
             match api_list_dir(token(&st), String::new()).await {
                 Ok(v) => entries.set(v),
@@ -105,8 +228,60 @@ pub fn Dock() -> Element {
         "dock-tab"
     };
 
+    // preview tabs row (next to Files/Git, after a separator)
+    let tabs_list = tabs.read().clone();
+    let active_id = *active.read();
+    let preview_tab_els: Vec<Element> = tabs_list
+        .iter()
+        .map(|t| {
+            let cls = if active_id == Some(t.id) {
+                "dock-tab dock-tab-preview active"
+            } else {
+                "dock-tab dock-tab-preview"
+            };
+            let id = t.id;
+            let name = t.name.clone();
+            let tabs_c2 = tabs.clone();
+            let active_c2 = active.clone();
+            rsx! {
+                div {
+                    class: "{cls}",
+                    onclick: move |_| active_c2.set(Some(id)),
+                    span { class: "dock-tab-name", "{name}" }
+                    button {
+                        class: "dock-tab-close",
+                        onclick: move |ev| {
+                            ev.stop_propagation();
+                            close_tab(tabs_c2, active_c2, id);
+                        },
+                        "✕"
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // body: active preview tab wins over the Files/Git panels
+    let open_tab = tabs_list.iter().find(|t| Some(t.id) == active_id).cloned();
     let current_tab = tab.read().clone();
-    let body_el: Element = if current_tab == "files" {
+    let body_el: Element = if let Some(t) = open_tab {
+        if t.kind == "diff" {
+            rsx! {
+                DiffPanel { key: "{t.id}", lang: lang.clone(), tab: t.clone(), tabs, active }
+            }
+        } else {
+            rsx! {
+                FilePreviewTab {
+                    key: "{t.id}",
+                    state: state.clone(),
+                    lang: lang.clone(),
+                    tab: t.clone(),
+                    tabs,
+                    active,
+                }
+            }
+        }
+    } else if current_tab == "files" {
         files_panel(
             state.clone(),
             lang.clone(),
@@ -114,51 +289,57 @@ pub fn Dock() -> Element {
             cwd,
             entries,
             files_msg,
-            preview,
+            tabs,
+            active,
+            next_id,
         )
     } else {
-        git_panel(state.clone(), lang.clone(), git, git_diff)
+        git_panel(state.clone(), lang.clone(), git, tabs, active, next_id)
     };
+
+    let mut tab = tab.clone();
+    let mut active = active.clone();
+    let state_f = state.clone();
+    let mut entries_f = entries.clone();
+    let mut files_msg_f = files_msg.clone();
+    let mut git_f = git.clone();
+    let state_g = state.clone();
+    let mut tab_g = tab.clone();
+    let mut active_g = active.clone();
 
     rsx! {
         aside { class: "dock",
+            div { class: "dock-resize-handle" }
             div { class: "dock-tabs",
                 button {
                     class: "{files_cls}",
-                    onclick: {
-                        let state = state.clone();
-                        let mut tab = tab.clone();
-                        let mut entries = entries.clone();
-                        let mut files_msg = files_msg.clone();
-                        move |_| {
-                            tab.set("files".into());
-                            spawn(async move {
-                                match api_list_dir(token(&state), String::new()).await {
-                                    Ok(v) => entries.set(v),
-                                    Err(e) => files_msg.set(e.to_string()),
-                                }
-                            });
-                        }
+                    onclick: move |_| {
+                        tab.set("files".into());
+                        active.set(None);
+                        spawn(async move {
+                            match api_list_dir(token(&state_f), String::new()).await {
+                                Ok(v) => entries_f.set(v),
+                                Err(e) => files_msg_f.set(e.to_string()),
+                            }
+                        });
                     },
-                    "{tr(&lang, \"filesTab\")}"
+                    "{tr(&lang, "filesTab")}"
                 }
                 button {
                     class: "{git_cls}",
-                    onclick: {
-                        let state = state.clone();
-                        let mut tab = tab.clone();
-                        let mut git = git.clone();
-                        move |_| {
-                            tab.set("git".into());
-                            spawn(async move {
-                                if let Ok(s) = api_git_status(token(&state)).await {
-                                    git.set(Some(s));
-                                }
-                            });
-                        }
+                    onclick: move |_| {
+                        tab_g.set("git".into());
+                        active_g.set(None);
+                        spawn(async move {
+                            if let Ok(s) = api_git_status(token(&state_g)).await {
+                                git_f.set(Some(s));
+                            }
+                        });
                     },
-                    "{tr(&lang, \"gitTab\")}"
+                    "{tr(&lang, "gitTab")}"
                 }
+                span { class: "dock-tab-sep" }
+                {preview_tab_els.iter().cloned()}
             }
             div { class: "dock-body",
                 {body_el}
@@ -171,6 +352,7 @@ pub fn Dock() -> Element {
 // Files panel
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn files_panel(
     state: Signal<ClientState>,
     lang: String,
@@ -178,16 +360,12 @@ fn files_panel(
     cwd: Signal<String>,
     entries: Signal<Vec<FileEntry>>,
     files_msg: Signal<String>,
-    preview: Signal<Option<(String, PreviewData)>>,
+    tabs: Signal<Vec<PreviewTab>>,
+    active: Signal<Option<u64>>,
+    next_id: Signal<u64>,
 ) -> Element {
     let list = entries.read().clone();
     let msg = files_msg.read().clone();
-    let pv = preview.read().clone();
-
-    // preview overlay takes over the dock body
-    if let Some((path, data)) = pv {
-        return rsx! { PreviewPanel { state, lang, path, data, preview } };
-    }
 
     // ---------------- breadcrumb ----------------
     let cur = cwd.read().clone();
@@ -257,13 +435,15 @@ fn files_panel(
                 cwd.clone(),
                 entries.clone(),
                 files_msg.clone(),
-                preview.clone(),
+                tabs.clone(),
+                active.clone(),
+                next_id.clone(),
             )
         })
         .collect();
 
     let empty_el: Element = if list.is_empty() && msg.is_empty() {
-        rsx! { div { class: "filetree-empty", "{tr(&lang, \"fileTreeEmpty\")}" } }
+        rsx! { div { class: "filetree-empty", "{tr(&lang, "fileTreeEmpty")}" } }
     } else {
         VNode::empty()
     };
@@ -294,7 +474,9 @@ fn file_row(
     cwd: Signal<String>,
     entries: Signal<Vec<FileEntry>>,
     files_msg: Signal<String>,
-    preview: Signal<Option<(String, PreviewData)>>,
+    tabs: Signal<Vec<PreviewTab>>,
+    active: Signal<Option<u64>>,
+    next_id: Signal<u64>,
 ) -> Element {
     let name = e.name.clone();
     let path = e.path.clone();
@@ -310,7 +492,9 @@ fn file_row(
                 let mut cwd = cwd.clone();
                 let mut entries = entries.clone();
                 let mut files_msg = files_msg.clone();
-                let mut preview = preview.clone();
+                let tabs = tabs.clone();
+                let active = active.clone();
+                let next_id = next_id.clone();
                 let name = name.clone();
                 let path = path.clone();
                 move |_| {
@@ -324,28 +508,7 @@ fn file_row(
                             }
                         });
                     } else {
-                        let path = path.clone();
-                        let name = name.clone();
-                        preview.set(Some((
-                            name.clone(),
-                            PreviewData {
-                                kind: "loading".into(),
-                                file_name: name,
-                                ..PreviewData::empty()
-                            },
-                        )));
-                        spawn(async move {
-                            let data = match api_read_file(token(&state), path.clone()).await {
-                                Ok(d) => d,
-                                Err(e) => PreviewData {
-                                    kind: "error".into(),
-                                    text: e.to_string(),
-                                    file_name: path.clone(),
-                                    ..PreviewData::empty()
-                                },
-                            };
-                            preview.set(Some((path, data)));
-                        });
+                        open_file_tab(state, tabs, active, next_id, path.clone(), name.clone());
                     }
                 }
             },
@@ -359,22 +522,25 @@ fn file_row(
 }
 
 // ---------------------------------------------------------------------------
-// Preview panel
+// File preview tab
 // ---------------------------------------------------------------------------
 
 #[component]
-fn PreviewPanel(
+fn FilePreviewTab(
     state: Signal<ClientState>,
     lang: String,
-    path: String,
-    data: PreviewData,
-    preview: Signal<Option<(String, PreviewData)>>,
+    tab: PreviewTab,
+    tabs: Signal<Vec<PreviewTab>>,
+    active: Signal<Option<u64>>,
 ) -> Element {
-    let name = data.file_name.clone();
-    let size = fmt_size(data.file_size);
+    let name = tab.name.clone();
+    let size = tab
+        .data
+        .as_ref()
+        .map(|d| fmt_size(d.file_size))
+        .unwrap_or_else(|| "…".to_string());
 
-    // editor state — the component instance is re-created whenever the
-    // preview signal swaps the file, so this is per-file state.
+    // editor state — keyed per tab so each file keeps its own state
     let editing = use_signal(|| false);
     let content = use_signal(String::new);
     let saving = use_signal(|| false);
@@ -385,207 +551,219 @@ fn PreviewPanel(
     let is_editing = *editing.read();
     let is_saving = *saving.read();
     let is_saved = *saved.read();
-    let dirty = is_editing && *content.read() != data.text;
     let err_txt = save_err.read().clone();
 
-    let body_el: Element = if is_editing {
-        rsx! {
-            div { class: "preview-edit",
-                CodeEditor { code: content, id: "pv".to_string() }
-            }
-        }
-    } else {
-        match data.kind.as_str() {
-            "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
-            "error" => rsx! { div { class: "preview-error-box", "{data.text}" } },
-            "binary" => rsx! {
-                div { class: "preview-loading",
-                    "{tr(&lang, \"binaryPreviewHint\")} ({name}, {size})"
-                }
-            },
-            "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
-            "markdown" => {
-                let html = crate::md::to_html(&data.text);
-                rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
-            }
-            "csv" => sheet_table(&parse_csv(&data.text)),
-            "xlsx" => {
-                if data.sheets.is_empty() {
-                    rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } }
-                } else {
-                    let idx = (*active_sheet.read()).min(data.sheets.len() - 1);
-                    let tabs: Vec<Element> = data
-                        .sheets
-                        .iter()
-                        .enumerate()
-                        .map(|(i, sh)| {
-                            let cls = if i == idx { "sheet-tab active" } else { "sheet-tab" };
-                            let mut active_sheet = active_sheet.clone();
-                            rsx! {
-                                button {
-                                    class: "{cls}",
-                                    onclick: move |_| active_sheet.set(i),
-                                    "{sh.name}"
-                                }
-                            }
-                        })
-                        .collect();
-                    let rows = data.sheets[idx].rows.clone();
-                    rsx! {
-                        div { class: "preview-sheet",
-                            div { class: "sheet-tabs", {tabs.iter().cloned()} }
-                            {sheet_table(&rows)}
-                        }
+    let body_el: Element = match tab.data.as_ref() {
+        None => rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } },
+        Some(data) => {
+            let dirty = is_editing && *content.read() != data.text;
+            let is_editing_c = is_editing;
+            let data = data.clone();
+            let inner: Element = if is_editing_c {
+                rsx! {
+                    div { class: "preview-edit",
+                        CodeEditor { code: content, id: "pv".to_string() }
                     }
                 }
-            }
-            "doc" | "slides" => rsx! {
-                div { class: "preview-doc", dangerous_inner_html: "{data.html}" }
-            },
-            "pdf" => {
-                if data.pages.is_empty() {
-                    let lines: Vec<Element> = data
-                        .text
-                        .lines()
-                        .map(|l| rsx! { p { style: "margin:0 0 8px 0;", "{l}" } })
-                        .collect();
-                    rsx! {
-                        div { class: "preview-pdf",
-                            {lines.iter().cloned()}
+            } else {
+                match data.kind.as_str() {
+                    "loading" => rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } },
+                    "error" => rsx! { div { class: "preview-error-box", "{data.text}" } },
+                    "binary" => rsx! {
+                        div { class: "preview-loading",
+                            "{tr(&lang, "binaryPreviewHint")} ({name}, {size})"
                         }
-                    }
-                } else {
-                    let imgs: Vec<Element> = data
-                        .pages
-                        .iter()
-                        .map(|p| rsx! { img { class: "pdf-page", src: "{p}", alt: "page" } })
-                        .collect();
-                    rsx! { div { class: "pdf-pages", {imgs.iter().cloned()} } }
-                }
-            }
-            _ => {
-                let html = crate::highlight::highlight_auto(&name, &data.text);
-                rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
-            }
-        }
-    };
-
-    let edit_btn: Element = if data.editable {
-        if is_editing {
-            let mut editing = editing.clone();
-            rsx! {
-                button {
-                    class: "file-preview-btn",
-                    title: "{tr(&lang, \"previewEdit\")}",
-                    onclick: move |_| editing.set(false),
-                    "✎"
-                }
-            }
-        } else {
-            let mut editing = editing.clone();
-            let text = data.text.clone();
-            let mut content = content.clone();
-            rsx! {
-                button {
-                    class: "file-preview-btn",
-                    title: "{tr(&lang, \"previewEdit\")}",
-                    onclick: move |_| {
-                        content.set(text.clone());
-                        editing.set(true);
                     },
-                    "✎"
-                }
-            }
-        }
-    } else {
-        VNode::empty()
-    };
-
-    let save_btn: Element = if is_editing {
-        rsx! {
-            button {
-                class: if dirty { "file-preview-btn primary" } else { "file-preview-btn" },
-                disabled: !dirty || is_saving,
-                onclick: {
-                    let st = state.clone();
-                    let p = path.clone();
-                    let mut saving = saving.clone();
-                    let saved = saved.clone();
-                    let save_err = save_err.clone();
-                    let content = content.clone();
-                    let preview = preview.clone();
-                    let data = data.clone();
-                    move |_| {
-                        let c = content.read().clone();
-                        saving.set(true);
-                        let st = st.clone();
-                        let p = p.clone();
-                        let data = data.clone();
-                        let mut saving = saving.clone();
-                        let mut saved = saved.clone();
-                        let mut save_err = save_err.clone();
-                        let mut preview = preview.clone();
-                        spawn(async move {
-                            match api_save_file(token(&st), p.clone(), c.clone()).await {
-                                Ok(()) => {
-                                    saved.set(true);
-                                    save_err.set(String::new());
-                                    let mut d = data.clone();
-                                    d.text = c.clone();
-                                    preview.set(Some((p, d)));
-                                }
-                                Err(e) => {
-                                    saved.set(false);
-                                    save_err.set(e.to_string());
+                    "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
+                    "markdown" => {
+                        let html = crate::md::to_html(&data.text);
+                        rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
+                    }
+                    "csv" => sheet_table(&parse_csv(&data.text)),
+                    "xlsx" => {
+                        if data.sheets.is_empty() {
+                            rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } }
+                        } else {
+                            let idx = (*active_sheet.read()).min(data.sheets.len() - 1);
+                            let tab_el_tabs: Vec<Element> = data
+                                .sheets
+                                .iter()
+                                .enumerate()
+                                .map(|(i, sh)| {
+                                    let cls = if i == idx { "sheet-tab active" } else { "sheet-tab" };
+                                    let mut active_sheet = active_sheet.clone();
+                                    rsx! {
+                                        button {
+                                            class: "{cls}",
+                                            onclick: move |_| active_sheet.set(i),
+                                            "{sh.name}"
+                                        }
+                                    }
+                                })
+                                .collect();
+                            let rows = data.sheets[idx].rows.clone();
+                            rsx! {
+                                div { class: "preview-sheet",
+                                    div { class: "sheet-tabs", {tab_el_tabs.iter().cloned()} }
+                                    {sheet_table(&rows)}
                                 }
                             }
-                            saving.set(false);
-                        });
+                        }
                     }
-                },
-                if is_saving { "{tr(&lang, \"previewSaving\")}" } else { "{tr(&lang, \"previewSave\")}" }
-            }
-        }
-    } else {
-        VNode::empty()
-    };
-
-    let save_status: Element = if is_editing {
-        if !err_txt.is_empty() {
-            rsx! { span { class: "preview-save-status error", "{err_txt}" } }
-        } else if is_saved && !dirty {
-            rsx! { span { class: "preview-save-status ok", "✓ {tr(&lang, \"previewSaved\")}" } }
-        } else {
-            VNode::empty()
-        }
-    } else {
-        VNode::empty()
-    };
-
-    let mut preview = preview.clone();
-    rsx! {
-        div { class: "file-preview",
-            div { class: "file-preview-header",
-                div { class: "file-preview-title",
-                    span { class: "file-preview-name", "{name}" }
-                    span { class: "file-preview-size", "{size}" }
+                    "doc" | "slides" => rsx! {
+                        div { class: "preview-doc", dangerous_inner_html: "{data.html}" }
+                    },
+                    "pdf" => {
+                        if data.pages.is_empty() {
+                            let lines: Vec<Element> = data
+                                .text
+                                .lines()
+                                .map(|l| rsx! { p { style: "margin:0 0 8px 0;", "{l}" } })
+                                .collect();
+                            rsx! {
+                                div { class: "preview-pdf",
+                                    {lines.iter().cloned()}
+                                }
+                            }
+                        } else {
+                            let imgs: Vec<Element> = data
+                                .pages
+                                .iter()
+                                .map(|p| rsx! { img { class: "pdf-page", src: "{p}", alt: "page" } })
+                                .collect();
+                            rsx! { div { class: "pdf-pages", {imgs.iter().cloned()} } }
+                        }
+                    }
+                    _ => {
+                        let html = crate::highlight::highlight_auto(&name, &data.text);
+                        rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
+                    }
                 }
-                div { class: "file-preview-actions",
-                    {save_status}
-                    {edit_btn}
-                    {save_btn}
+            };
+
+            // toolbar (buttons need `dirty`, computed here in Rust)
+            let data_text = data.text.clone();
+            let edit_btn: Element = if data.editable {
+                if is_editing_c {
+                    let mut editing = editing.clone();
+                    rsx! {
+                        button {
+                            class: "file-preview-btn",
+                            title: "{tr(&lang, "previewEdit")}",
+                            onclick: move |_| editing.set(false),
+                            "✎"
+                        }
+                    }
+                } else {
+                    let mut editing = editing.clone();
+                    let mut content = content.clone();
+                    rsx! {
+                        button {
+                            class: "file-preview-btn",
+                            title: "{tr(&lang, "previewEdit")}",
+                            onclick: move |_| {
+                                content.set(data_text.clone());
+                                editing.set(true);
+                            },
+                            "✎"
+                        }
+                    }
+                }
+            } else {
+                VNode::empty()
+            };
+
+            let save_btn: Element = if is_editing_c {
+                rsx! {
                     button {
-                        class: "file-preview-btn",
-                        onclick: move |_| preview.set(None),
-                        "✕"
+                        class: if dirty { "file-preview-btn primary" } else { "file-preview-btn" },
+                        disabled: !dirty || is_saving,
+                        onclick: {
+                            let st = state.clone();
+                            let p = tab.path.clone();
+                            let tid = tab.id;
+                            let content = content.clone();
+                            let tabs2 = tabs.clone();
+                            move |_| {
+                                let c = content.read().clone();
+                                let mut saving = saving.clone();
+                                saving.set(true);
+                                let st = st.clone();
+                                let p = p.clone();
+                                let mut saved = saved.clone();
+                                let mut save_err = save_err.clone();
+                                let mut saving2 = saving.clone();
+                                let mut tabs3 = tabs2.clone();
+                                spawn(async move {
+                                    match api_save_file(token(&st), p.clone(), c.clone()).await {
+                                        Ok(()) => {
+                                            saved.set(true);
+                                            save_err.set(String::new());
+                                            let mut v = tabs3.write();
+                                            if let Some(t) = v.iter_mut().find(|t| t.id == tid) {
+                                                if let Some(d) = t.data.as_mut() {
+                                                    d.text = c.clone();
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            saved.set(false);
+                                            save_err.set(e.to_string());
+                                        }
+                                    }
+                                    saving2.set(false);
+                                });
+                            }
+                        },
+                        if is_saving { "{tr(&lang, "previewSaving")}" } else { "{tr(&lang, "previewSave")}" }
+                    }
+                }
+            } else {
+                VNode::empty()
+            };
+
+            let save_status: Element = if is_editing_c {
+                if !err_txt.is_empty() {
+                    rsx! { span { class: "preview-save-status error", "{err_txt}" } }
+                } else if is_saved && !dirty {
+                    rsx! { span { class: "preview-save-status ok", "✓ {tr(&lang, "previewSaved")}" } }
+                } else {
+                    VNode::empty()
+                }
+            } else {
+                VNode::empty()
+            };
+
+            let tabs_c = tabs.clone();
+            let active_c = active.clone();
+            let tid = tab.id;
+            rsx! {
+                div { class: "file-preview",
+                    div { class: "file-preview-header",
+                        div { class: "file-preview-title",
+                            span { class: "file-preview-name", "{name}" }
+                            span { class: "file-preview-size", "{size}" }
+                        }
+                        div { class: "file-preview-actions",
+                            {save_status}
+                            {edit_btn}
+                            {save_btn}
+                            button {
+                                class: "file-preview-btn",
+                                onclick: move |_| close_tab(tabs_c, active_c, tid),
+                                "✕"
+                            }
+                        }
+                    }
+                    div { class: "file-preview-body",
+                        {inner}
                     }
                 }
             }
-            div { class: "file-preview-body",
-                {body_el}
-            }
         }
-    }
+    };
+
+    body_el
 }
 
 fn sheet_table(rows: &[Vec<String>]) -> Element {
@@ -617,19 +795,81 @@ fn sheet_table(rows: &[Vec<String>]) -> Element {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Diff preview tab
+// ---------------------------------------------------------------------------
+
+#[component]
+fn DiffPanel(
+    lang: String,
+    tab: PreviewTab,
+    tabs: Signal<Vec<PreviewTab>>,
+    active: Signal<Option<u64>>,
+) -> Element {
+    if !tab.loaded {
+        return rsx! { div { class: "preview-loading", "{tr(&lang, "previewLoading")}" } };
+    }
+
+    let line_els: Vec<Element> = tab
+        .diff
+        .lines()
+        .take(2000)
+        .map(|l| {
+            let style = if l.starts_with('+') && !l.starts_with("+++") {
+                "background:rgba(46,160,67,0.15);"
+            } else if l.starts_with('-') && !l.starts_with("---") {
+                "background:rgba(248,81,73,0.12);"
+            } else if l.starts_with('@') {
+                "color:var(--text-dim);"
+            } else {
+                ""
+            };
+            rsx! {
+                div { class: "diff-line", style: "{style}",
+                    span { class: "diff-text", "{l}" }
+                }
+            }
+        })
+        .collect();
+
+    let tabs_c = tabs.clone();
+    let active_c = active.clone();
+    let tid = tab.id;
+    let path = tab.path.clone();
+    rsx! {
+        div { class: "file-preview",
+            div { class: "file-preview-header",
+                div { class: "file-preview-title",
+                    span { class: "file-preview-name", "{path}" }
+                }
+                button {
+                    class: "file-preview-btn",
+                    onclick: move |_| close_tab(tabs_c, active_c, tid),
+                    "✕"
+                }
+            }
+            div { class: "file-preview-body",
+                div { class: "preview-diff",
+                    {line_els.iter().cloned()}
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Git panel
+// ---------------------------------------------------------------------------
+
 fn git_panel(
     state: Signal<ClientState>,
     lang: String,
     git: Signal<Option<GitStatus>>,
-    git_diff: Signal<Option<(String, String)>>,
+    tabs: Signal<Vec<PreviewTab>>,
+    active: Signal<Option<u64>>,
+    next_id: Signal<u64>,
 ) -> Element {
     let st = git.read().clone();
-    let diff = git_diff.read().clone();
-
-    // diff view replaces the list while open
-    if let Some((path, text)) = diff {
-        return diff_panel(path, text, git_diff);
-    }
 
     let (branch, ahead, behind, entries, err) = match &st {
         Some(s) => (
@@ -672,16 +912,12 @@ fn git_panel(
                     class: "git-file",
                     onclick: {
                         let state = state.clone();
-                        let mut git_diff = git_diff.clone();
+                        let tabs = tabs.clone();
+                        let active = active.clone();
+                        let next_id = next_id.clone();
                         let path = path.clone();
                         move |_| {
-                            let path = path.clone();
-                            spawn(async move {
-                                let d = api_git_diff(token(&state), staged, path.clone())
-                                    .await
-                                    .unwrap_or_default();
-                                git_diff.set(Some((path, d)));
-                            });
+                            open_diff_tab(state, tabs, active, next_id, path.clone(), staged);
                         }
                     },
                     span { class: "{cls}", "{code}" }
@@ -694,7 +930,7 @@ fn git_panel(
 
     let list_el: Element = if entries.is_empty() {
         if err.is_empty() {
-            rsx! { div { class: "git-empty", "{tr(&lang, \"gitNoChanges\")}" } }
+            rsx! { div { class: "git-empty", "{tr(&lang, "gitNoChanges")}" } }
         } else {
             rsx! { div { class: "git-error", "{err}" } }
         }
@@ -733,49 +969,6 @@ fn git_panel(
                 }
             }
             {list_el}
-        }
-    }
-}
-
-fn diff_panel(path: String, text: String, mut git_diff: Signal<Option<(String, String)>>) -> Element {
-    let line_els: Vec<Element> = text
-        .lines()
-        .take(2000)
-        .map(|l| {
-            let style = if l.starts_with('+') && !l.starts_with("+++") {
-                "background:rgba(46,160,67,0.15);"
-            } else if l.starts_with('-') && !l.starts_with("---") {
-                "background:rgba(248,81,73,0.12);"
-            } else if l.starts_with('@') {
-                "color:var(--text-dim);"
-            } else {
-                ""
-            };
-            rsx! {
-                div { class: "diff-line", style: "{style}",
-                    span { class: "diff-text", "{l}" }
-                }
-            }
-        })
-        .collect();
-
-    rsx! {
-        div { class: "file-preview",
-            div { class: "file-preview-header",
-                div { class: "file-preview-title",
-                    span { class: "file-preview-name", "{path}" }
-                }
-                button {
-                    class: "file-preview-btn",
-                    onclick: move |_| git_diff.set(None),
-                    "✕"
-                }
-            }
-            div { class: "file-preview-body",
-                div { class: "preview-diff",
-                    {line_els.iter().cloned()}
-                }
-            }
         }
     }
 }

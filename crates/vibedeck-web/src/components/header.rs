@@ -5,7 +5,7 @@
 use dioxus::prelude::*;
 
 use crate::i18n::{tf, tr};
-use crate::state::{lang, save_prefs, ClientState};
+use crate::state::{is_desktop, lang, save_prefs, ClientState};
 
 pub fn Header() -> Element {
     let state = use_context::<Signal<ClientState>>();
@@ -18,6 +18,7 @@ pub fn Header() -> Element {
     let dock_open = s.snapshot.config.dock_open;
     let limit = s.snapshot.config.sidebar_sessions_limit.unwrap_or(0);
     let language = s.snapshot.config.language.clone();
+    let auth_required = s.auth_required;
     drop(s);
 
     let (activity_cls, activity_text) = match status.as_str() {
@@ -114,6 +115,52 @@ pub fn Header() -> Element {
                         }
                     },
                     "{theme_icon}"
+                }
+                // Frameless desktop window: the window buttons live in the
+                // header and talk to the wry window over IPC (main.rs).
+                if is_desktop() {
+                    button {
+                        class: "header-btn",
+                        title: "{tr(&lang, \"minimize\")}",
+                        onclick: move |_| {
+                            dioxus::document::eval("window.ipc.postMessage('vd-min')");
+                        },
+                        "─"
+                    }
+                    button {
+                        class: "header-btn",
+                        title: "{tr(&lang, \"maximize\")}",
+                        onclick: move |_| {
+                            dioxus::document::eval("window.ipc.postMessage('vd-max')");
+                        },
+                        "□"
+                    }
+                    button {
+                        class: "header-btn close-btn",
+                        title: "{tr(&lang, \"close\")}",
+                        onclick: move |_| {
+                            dioxus::document::eval("window.ipc.postMessage('vd-close')");
+                        },
+                        "✕"
+                    }
+                } else if auth_required {
+                    // Remote access in a browser: offer a logout (⏻) instead
+                    // of the window buttons.
+                    button {
+                        class: "header-btn",
+                        title: "{tr(&lang, \"logoutLabel\")}",
+                        onclick: {
+                            let state = state.clone();
+                            move |_| {
+                                let state = state.clone();
+                                async move {
+                                    state.write().token = None;
+                                    state.write().loaded = false;
+                                }
+                            }
+                        },
+                        "⏻"
+                    }
                 }
             }
         }

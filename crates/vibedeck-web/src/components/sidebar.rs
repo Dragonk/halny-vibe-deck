@@ -16,6 +16,14 @@ struct ConfirmTarget {
     key: String,
 }
 
+/// Open context menu (right click): fixed position + the hide target.
+#[derive(Clone)]
+struct CtxMenu {
+    x: f64,
+    y: f64,
+    target: ConfirmTarget,
+}
+
 #[derive(Clone)]
 struct Group {
     wd: String,
@@ -52,6 +60,8 @@ fn short_dir(dir: &str) -> String {
 pub fn Sidebar() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let confirm = use_signal(|| None::<ConfirmTarget>);
+    let collapsed = use_signal(Vec::<String>::new);
+    let ctx = use_signal(|| None::<CtxMenu>);
 
     let s = state.read();
     let lang = lang(&state);
@@ -110,7 +120,7 @@ pub fn Sidebar() -> Element {
     // ---- Prebuilt element lists (avoids nested closure captures) ----
     let group_els: Vec<Element> = groups
         .iter()
-        .map(|g| group_el(state, lang.clone(), g, current, confirm))
+        .map(|g| group_el(state, lang.clone(), g, current, confirm, collapsed, ctx))
         .collect();
     let backend_els: Vec<Element> = backend
         .iter()
@@ -120,6 +130,10 @@ pub fn Sidebar() -> Element {
         .read()
         .clone()
         .map(|t| confirm_modal(state, lang.clone(), t, confirm));
+    let ctx_el = ctx
+        .read()
+        .clone()
+        .map(|c| ctx_menu_el(state, lang.clone(), c, ctx, confirm));
 
     let nav_cls = |v: View| {
         if view == v {
@@ -195,9 +209,13 @@ pub fn Sidebar() -> Element {
                     "{tr(&lang, \"settings\")}"
                 }
             }
+            div { class: "sidebar-resize-handle" }
         }
 
         if let Some(el) = modal_el {
+            {el}
+        }
+        if let Some(el) = ctx_el {
             {el}
         }
     }
@@ -251,17 +269,68 @@ fn confirm_modal(
     }
 }
 
+/// The right-click context menu (hide session/project). A full-screen
+/// overlay behind it closes the menu on any click.
+fn ctx_menu_el(
+    state: Signal<ClientState>,
+    lang: String,
+    c: CtxMenu,
+    mut ctx: Signal<Option<CtxMenu>>,
+    confirm: Signal<Option<ConfirmTarget>>,
+) -> Element {
+    let item_label = if c.target.is_project {
+        tr(&lang, "hideProject")
+    } else {
+        tr(&lang, "hideSession")
+    };
+    rsx! {
+        div {
+            class: "ctx-overlay",
+            onclick: move |_| ctx.set(None),
+            oncontextmenu: {
+                let mut ctx = ctx.clone();
+                move |e| {
+                    e.prevent_default();
+                    ctx.set(None);
+                }
+            },
+            div {
+                class: "ctx-menu",
+                style: "left:{c.x}px; top:{c.y}px;",
+                onclick: move |e| e.stop_propagation(),
+                button {
+                    class: "ctx-menu-item danger",
+                    onclick: {
+                        let mut ctx = ctx.clone();
+                        let mut confirm = confirm.clone();
+                        let t = c.target.clone();
+                        move |_| {
+                            ctx.set(None);
+                            confirm.set(Some(t.clone()));
+                        }
+                    },
+                    "🗑 {item_label}"
+                }
+            }
+            // keep the engine state alive for the api calls in confirm modal
+            {let _ = state.clone(); VNode::empty()}
+        }
+    }
+}
+
 fn group_el(
     state: Signal<ClientState>,
     lang: String,
     g: &Group,
     current: Option<usize>,
     confirm: Signal<Option<ConfirmTarget>>,
+    collapsed: Signal<Vec<String>>,
+    ctx: Signal<Option<CtxMenu>>,
 ) -> Element {
     let rows: Vec<Element> = g
         .sessions
         .iter()
-        .map(|(idx, m)| session_row(state, lang.clone(), *idx, m, current, confirm))
+        .map(|(idx, m)| session_row(state.clone(), lang.clone(), *idx, m, current, confirm.clone(), ctx.clone()))
         .collect();
     let title = if g.wd.is_empty() {
         tr(&lang, "noProject").to_string()
@@ -269,17 +338,55 @@ fn group_el(
         g.wd.clone()
     };
     let count = g.sessions.len().to_string();
+    let is_collapsed = collapsed.read().contains(&g.wd);
+    let chev_cls = if is_collapsed {
+        "project-chevron"
+    } else {
+        "project-chevron open"
+    };
 
     rsx! {
         div { class: "project-group",
             button {
                 class: "project-group-header",
                 title: "{title}",
-                span { class: "project-chevron open", "▸" }
+                onclick: {
+                    let mut collapsed = collapsed.clone();
+                    let key = g.wd.clone();
+                    move |_| {
+                        let mut c = collapsed.write();
+                        if c.contains(&key) {
+                            c.retain(|k| k != &key);
+                        } else {
+                            c.push(key.clone());
+                        }
+                    }
+                },
+                oncontextmenu: {
+                    let mut ctx = ctx.clone();
+                    let label = g.label.clone();
+                    let wd = g.wd.clone();
+                    move |e| {
+                        e.prevent_default();
+                        let (x, y) = e.data().client_coordinates();
+                        ctx.set(Some(CtxMenu {
+                            x,
+                            y,
+                            target: ConfirmTarget {
+                                is_project: true,
+                                label: label.clone(),
+                                key: wd.clone(),
+                            },
+                        }));
+                    }
+                },
+                span { class: "{chev_cls}", "▸" }
                 span { class: "project-name", "{g.label}" }
                 span { class: "project-count", "{count}" }
             }
-            {rows.iter().cloned()}
+            if !is_collapsed {
+                {rows.iter().cloned()}
+            }
         }
     }
 }
@@ -291,12 +398,13 @@ fn session_row(
     m: &SessionMeta,
     current: Option<usize>,
     confirm: Signal<Option<ConfirmTarget>>,
+    ctx: Signal<Option<CtxMenu>>,
 ) -> Element {
     let active = current == Some(idx);
     let cls = if active { "session-item active" } else { "session-item" };
 
-    let busy_dot: Element = if m.busy {
-        rsx! { span { class: "session-busy-dot", title: "streaming", "\u{25CF}" } }
+    let busy_el: Element = if m.busy {
+        rsx! { span { class: "session-busy-spinner", title: "streaming" } }
     } else {
         VNode::empty()
     };
@@ -306,6 +414,7 @@ fn session_row(
     let has_acp = m.acp_session_id.is_some();
     let empty = m.message_count == 0;
     let acp_id = m.acp_session_id.clone();
+    let busy = m.busy;
 
     rsx! {
         button {
@@ -330,10 +439,28 @@ fn session_row(
                     }
                 }
             },
+            oncontextmenu: {
+                let mut ctx = ctx.clone();
+                let name = name.clone();
+                let key = key.clone();
+                move |e| {
+                    e.prevent_default();
+                    let (x, y) = e.data().client_coordinates();
+                    ctx.set(Some(CtxMenu {
+                        x,
+                        y,
+                        target: ConfirmTarget {
+                            is_project: false,
+                            label: name.clone(),
+                            key: key.clone(),
+                        },
+                    }));
+                }
+            },
             div { class: "session-item-content",
                 div { class: "session-item-row",
                     span { class: "session-name", "{name}" }
-                    {busy_dot}
+                    {busy_el}
                 }
                 div { class: "session-item-meta",
                     span { class: "session-date", "{date}" }
@@ -341,18 +468,37 @@ fn session_row(
             }
             span {
                 class: "session-cancel-btn",
-                title: "{tr(&lang, \"deleteSessionLabel\")}",
+                title: if busy { "{tr(&lang, \"cancelLabel\")}" } else { "{tr(&lang, \"deleteSessionLabel\")}" },
                 onclick: {
+                    let state = state.clone();
                     let mut confirm = confirm.clone();
+                    let mut ctx = ctx.clone();
                     let key = key.clone();
                     let name = name.clone();
+                    let busy = busy;
                     move |e| {
                         e.stop_propagation();
-                        confirm.set(Some(ConfirmTarget {
-                            is_project: false,
-                            label: name.clone(),
-                            key: key.clone(),
-                        }));
+                        if busy {
+                            // streaming: ✕ = cancel the running prompt
+                            let state = state.clone();
+                            spawn(async move {
+                                let _ = crate::api::api_cancel(token(&state)).await;
+                                crate::state::refresh(state).await;
+                            });
+                        } else {
+                            // idle: open the context menu (hide -> confirm)
+                            let (x, y) = e.data().client_coordinates();
+                            ctx.set(Some(CtxMenu {
+                                x,
+                                y,
+                                target: ConfirmTarget {
+                                    is_project: false,
+                                    label: name.clone(),
+                                    key: key.clone(),
+                                },
+                            }));
+                            confirm.set(None);
+                        }
                     }
                 },
                 "✕"

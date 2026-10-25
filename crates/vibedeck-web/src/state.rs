@@ -195,12 +195,47 @@ pub fn token(state: &Signal<ClientState>) -> String {
     state.read().token.clone().unwrap_or_default()
 }
 
-/// Resolve the UI language code for i18n ("auto"/"system" -> English
-/// for now; the settings tab lets the user pick a concrete language).
+/// The OS/browser language ("pl" out of "pl-PL"), mapped to a supported
+/// UI language code. Sync-safe: a tiny JS interop call on wasm only.
+pub fn os_lang() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let raw = web_sys::window()
+            .map(|w| w.navigator().language())
+            .unwrap_or_default();
+        let l = raw.to_lowercase();
+        let code: String = l.chars().take(2).collect();
+        match code.as_str() {
+            "pl" | "de" | "fr" | "es" | "it" | "en" => code,
+            _ => "en".to_string(),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        "en".to_string()
+    }
+}
+
+/// True when the UI runs inside the desktop webview window (wry injects
+/// `window.ipc`); in a plain browser (remote access) it is false.
+pub fn is_desktop() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Reflect::has(&js_sys::global(), &wasm_bindgen::JsValue::from_str("ipc"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
+/// Resolve the UI language code for i18n ("auto"/"system" -> the OS or
+/// browser language, like Nexus "Auto (System)").
 pub fn lang(state: &Signal<ClientState>) -> String {
     let l = state.read().snapshot.config.language.clone();
     match l.as_str() {
-        "" | "auto" | "system" => "en".to_string(),
+        "" | "auto" | "system" => os_lang(),
         other => other.to_string(),
     }
 }

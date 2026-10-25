@@ -25,6 +25,12 @@ pdf-extract = { version = "0.7", optional = true }
 wry = { version = "0.53.5", optional = true }
 tao = { version = "0.34", optional = true }
 
+# client-side (wasm) browser/OS integration: navigator.language, window.ipc
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Navigator"] }
+
 [features]
 default = []
 web = ["dioxus/web"]

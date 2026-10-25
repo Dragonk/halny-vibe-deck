@@ -158,6 +158,15 @@ impl Engine {
         self.lister.send(AcpCommand::ListSessions);
     }
 
+    /// Warm start: connect the agent and index CLI sessions up front, so
+    /// the first snapshot request does not pay the discovery cost.
+    pub fn prime(&self) {
+        if !self.config().acp_path.is_empty() {
+            self.start_agent();
+        }
+        self.refresh_sessions();
+    }
+
     // ---------------- slots ----------------
 
     /// Spawn a slot for the given local session and start its process.

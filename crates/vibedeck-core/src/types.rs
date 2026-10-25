@@ -171,10 +171,20 @@ impl ChatSession {
 }
 
 pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    // `std::time::SystemTime` panics on wasm ("time not implemented on this
+    // platform") — that crash took down the whole Stats and History views in
+    // the browser. On wasm use JS Date::now() instead.
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() as i64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    }
 }
 
 /// Short random identifier (session/message ids are local-only;

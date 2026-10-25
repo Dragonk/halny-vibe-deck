@@ -10,6 +10,19 @@ pub fn Shell() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let answer = use_signal(String::new);
 
+    // one-shot: install the sidebar/dock panel resize logic (client
+    // only; the server SSR build never evaluates JS)
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        let mut resize_init = use_signal(|| false);
+        if !*resize_init.read() {
+            resize_init.set(true);
+            spawn(async move {
+                dioxus::document::eval(RESIZE_JS);
+            });
+        }
+    }
+
     // The engine event stream (mounted only when authed).
     let tok = token(&state);
     let mut socket = crate::events::use_engine_socket(tok);
@@ -208,3 +221,53 @@ fn approval_el(
         }
     }
 }
+
+/// Sidebar (120–400 px) and dock (260–720 px) resize handles, like Nexus
+/// Sidebar/Dock. The widths live in CSS vars on <html> (`.sidebar` and
+/// `.dock` read them) and persist in localStorage.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const RESIZE_JS: &str = r#"
+(function () {
+  if (window.__vdResizeInit) return; window.__vdResizeInit = 1;
+  var root = document.documentElement;
+  function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function load(k, d) { try { var v = localStorage.getItem(k); return v || d; } catch (e) { return d; } }
+  root.style.setProperty('--vd-sidebar-w', load('vdSidebarW', '220px'));
+  root.style.setProperty('--vd-dock-w', load('vdDockW', '400px'));
+  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+  function arm(handleSel, onDown) {
+    document.addEventListener('mousedown', function (e) {
+      var h = e.target.closest ? e.target.closest(handleSel) : null;
+      if (!h || e.button !== 0) return;
+      e.preventDefault();
+      onDown(e);
+    });
+  }
+  function drag(startX, startW, apply, done) {
+    function move(e) { apply(startX - e.clientX); }
+    function up() {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      done();
+    }
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  }
+  // sidebar: drag right edge -> wider
+  arm('.sidebar-resize-handle', function (e) {
+    var x0 = e.clientX, w0 = parseFloat(load('vdSidebarW', '220'));
+    drag(x0, w0, function (dx) {
+      var w = clamp(w0 + dx, 120, 400);
+      root.style.setProperty('--vd-sidebar-w', w + 'px');
+    }, function () { save('vdSidebarW', root.style.getPropertyValue('--vd-sidebar-w')); });
+  });
+  // dock: drag left edge -> wider
+  arm('.dock-resize-handle', function (e) {
+    var x0 = e.clientX, w0 = parseFloat(load('vdDockW', '400'));
+    drag(x0, w0, function (dx) {
+      var w = clamp(w0 + dx, 260, 720);
+      root.style.setProperty('--vd-dock-w', w + 'px');
+    }, function () { save('vdDockW', root.style.getPropertyValue('--vd-dock-w')); });
+  });
+})();
+"#;
