@@ -128,18 +128,12 @@ export default function App(): React.JSX.Element {
       const d = event.data as Record<string, unknown>
       switch (event.type) {
         case 'InitializationComplete': {
-          const rid = (d.remoteId as string | undefined) ?? null
+          // v0.10.7: priming is owned by the main process (acp:init primes
+          // once per worker lifetime). The renderer used to call newSession
+          // here as well, so every window start / web F5 created a duplicate
+          // ACP session and could hijack the current view in other clients.
           setAcpStatus('connected')
           setAcpError(null)
-          const store = useStore.getState()
-          // Prime one session on the LOCAL agent so configOptions
-          // (model/mode/thinking) are available before the first message.
-          // v0.7.0: remote workers never prime - they start on demand and
-          // the renderer creates their sessions explicitly.
-          if (!rid && !store.sessionStarting && !store.pendingLoadSessionId) {
-            const primeCwd = store.config.workingDirectory || '.'
-            window.api.acp.newSession(primeCwd).catch(console.error)
-          }
           break
         }
 
@@ -167,7 +161,7 @@ export default function App(): React.JSX.Element {
           const currentModeId = d.currentModeId as string | undefined
 
           // While loading a specific historical session, ignore the priming
-          // session that acp:start() creates internally.
+          // session that the main-process boot prime (acp:init) creates.
           if (store.pendingLoadSessionId && acpSessId !== store.pendingLoadSessionId) {
             break
           }

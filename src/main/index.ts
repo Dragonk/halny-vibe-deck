@@ -305,10 +305,37 @@ app.whenReady().then(() => {
 
   // ACP
   ipcMain.handle("acp:init", async (_e, acpPath: string) => {
+    // v0.10.7: single-owner boot. Every client boot (desktop window start,
+    // web/PWA F5) goes through here, so it must be idempotent: a healthy
+    // worker is reused as-is and the boot only re-announces readiness plus
+    // the session list to every view - no restart, no duplicate session.
+    if (acpManager.isRunning()) {
+      let healthy = false
+      try {
+        await acpManager.ping()
+        healthy = true
+      } catch {
+        healthy = false
+      }
+      if (healthy) {
+        acpManager.announceReady()
+        await acpManager.listSessions().catch(() => {})
+        return
+      }
+      // v0.8.0 zombie lesson: a live handle that fails the probe is dead.
+      await acpManager.stop().catch(() => {})
+    }
     await acpManager.start(acpPath).catch((err: Error) => {
       if (err.message === "ACP stopped") return;
       throw err;
     });
+    // v0.10.7: the boot prime is owned by the main process (the renderer
+    // used to prime again on InitializationComplete, duplicating a session
+    // on every window start / web F5). Once per worker lifetime.
+    const bootCfg = loadConfig()
+    const primeCwd = bootCfg.workingDirectory || "."
+    exposeProjectAgentsForCwd(primeCwd)
+    await acpManager.primeBootSession(primeCwd).catch(() => {})
   });
 
   ipcMain.handle("acp:ensure-worker", async (_e, acpPath: string, _cwd: string, remoteId?: string) => {
@@ -346,7 +373,22 @@ app.whenReady().then(() => {
   ipcMain.handle("acp:start", async (_e, acpPath: string, cwd: string, remoteId?: string) => {
     // v0.7.0: start (or reuse) the worker for the connection, then prime a
     // session on it. Workers persist, so several remotes can run at once.
-    const mgr = remoteId ? getRemoteManager(remoteId) : acpManager
+    let mgr = remoteId ? getRemoteManager(remoteId) : acpManager
+    // v0.10.7: probe a live handle before reusing it (v0.8.0 zombie lesson).
+    // acp:start always creates its session on purpose - explicit user
+    // intent (remote start, draft first prompt, settings restart) - so the
+    // boot prime flag is deliberately not consulted here.
+    if (mgr.isRunning()) {
+      try {
+        await mgr.ping()
+      } catch {
+        await mgr.stop().catch(() => {})
+        if (remoteId) {
+          remoteAcpManagers.delete(remoteId)
+          mgr = getRemoteManager(remoteId)
+        }
+      }
+    }
     try {
       if (!mgr.isRunning()) {
         let remote: { sshCmd: string } | undefined

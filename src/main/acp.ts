@@ -85,6 +85,13 @@ export class AcpManager {
   private process: ChildProcess | null = null
   private pending = new Map<string, PendingRequest>()
   private currentSessionId: string | null = null
+  /** v0.10.7: boot session primed by the main process - kept so repeated
+   * client boots (web/PWA F5, second window) reuse the worker instead of
+   * priming duplicate sessions. Null = not primed (yet). */
+  private primedSessionId: string | null = null
+  /** v0.10.7: in-flight cold start - concurrent boots must not stop the
+   * worker another boot just spawned. */
+  private starting: Promise<void> | null = null
   private win: BrowserWindow | null = null
   /** set when this instance drives a remote vibe-acp over ssh */
   private remote: { sshCmd: string } | null = null
@@ -695,7 +702,21 @@ export class AcpManager {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
+  /** v0.10.7: deduplicated cold start - a second boot that arrives while
+   * the first handshake is still in flight awaits it instead of stopping
+   * the freshly spawned worker. */
   async start(acpPath: string, remote?: { sshCmd: string }): Promise<void> {
+    if (this.starting) return this.starting
+    const p = this.doStart(acpPath, remote)
+    this.starting = p
+    try {
+      await p
+    } finally {
+      if (this.starting === p) this.starting = null
+    }
+  }
+
+  private async doStart(acpPath: string, remote?: { sshCmd: string }): Promise<void> {
     if (this.process) await this.stop()
 
     this.remote = remote ?? null
@@ -728,6 +749,7 @@ export class AcpManager {
       if (this.process === proc) {
         this.process = null
         this.currentSessionId = null
+        this.primedSessionId = null
         this.emit({ type: 'Disconnected', data: { code: code ?? -1 } })
       }
     })
@@ -993,6 +1015,7 @@ export class AcpManager {
       this.process.kill()
       this.process = null
       this.currentSessionId = null
+      this.primedSessionId = null
       this._replaying.clear()
     }
     this.pending.forEach((p) => p.reject(new Error('ACP stopped')))
@@ -1001,6 +1024,26 @@ export class AcpManager {
     this.pendingApprovals.clear()
     this.toolCallNames.clear()
     this.streamSent.clear()
+  }
+
+  /** v0.10.7: re-announce worker readiness to a booting client without
+   * touching the worker (single-owner boot, see acp:init). */
+  announceReady(): void {
+    this.emit({ type: 'InitializationComplete', data: { protocolVersion: 1 } })
+  }
+
+  /** v0.10.7: prime the boot session once per worker lifetime. The claim is
+   * taken synchronously so concurrent client boots cannot double-prime. */
+  async primeBootSession(cwd: string): Promise<void> {
+    if (this.primedSessionId !== null) return
+    this.primedSessionId = '' // claimed
+    try {
+      await this.newSession(cwd)
+      this.primedSessionId = this.currentSessionId
+    } catch (err) {
+      this.primedSessionId = null
+      throw err
+    }
   }
 
   isRemote(): boolean {
