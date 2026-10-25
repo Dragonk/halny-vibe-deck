@@ -157,6 +157,35 @@ function translateToolTitleEnglish(title: string): string {
   return title;
 }
 
+// v0.10.2: some tool inputs arrive with fields as structured blocks (arrays
+// of {type:"text", text} etc.) instead of plain strings - coerce them so
+// string operations (.match/.includes) cannot crash the renderer.
+function asStr(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) {
+    return v
+      .map((b) => {
+        if (typeof b === "string") return b;
+        if (b && typeof b === "object") {
+          const o = b as Record<string, unknown>;
+          if (typeof o.text === "string") return o.text;
+        }
+        return "";
+      })
+      .join("");
+  }
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (typeof o.text === "string") return o.text;
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
 // Maps raw ACP function name (e.g. "read_file") + parsed input to a display title matching active session format.
 function rawFunctionNameToTitleFromInput(
   name: string,
@@ -683,27 +712,29 @@ function ToolCallRichContent({
         );
 
     // Extract old/new content from input
-    let oldStr = (inp.oldString ??
-      inp.old_string ??
-      inp.old_str ??
-      inp.oldText ??
-      inp.search ??
-      inp.search_text ??
-      inp.target ??
-      inp.old_content ??
-      "") as string;
-    let newStr = (inp.newString ??
-      inp.new_string ??
-      inp.new_str ??
-      inp.newText ??
-      inp.replace ??
-      inp.replace_text ??
-      inp.new_content ??
-      "") as string;
+    let oldStr = asStr(
+      inp.oldString ??
+        inp.old_string ??
+        inp.old_str ??
+        inp.oldText ??
+        inp.search ??
+        inp.search_text ??
+        inp.target ??
+        inp.old_content,
+    );
+    let newStr = asStr(
+      inp.newString ??
+        inp.new_string ??
+        inp.new_str ??
+        inp.newText ??
+        inp.replace ??
+        inp.replace_text ??
+        inp.new_content,
+    );
 
     // inp.content may hold the full SEARCH/REPLACE block (vibe-acp format)
     if (!oldStr && !newStr) {
-      const text = (inp.text ?? inp.content ?? "") as string;
+      const text = asStr(inp.text ?? inp.content);
       const m = text.match(
         /<<<<<<<[^\n]*\n([\s\S]*?)\n?=======\n?([\s\S]*?)\n?>>>>>>>[^\n]*/,
       );
@@ -738,8 +769,8 @@ function ToolCallRichContent({
     if (Array.isArray(inp.changes)) {
       for (const ch of inp.changes as Array<Record<string, unknown>>) {
         if (!ch) continue;
-        const o = (ch.oldString ?? ch.old_string ?? "") as string;
-        const n = (ch.newString ?? ch.new_string ?? "") as string;
+        const o = asStr(ch.oldString ?? ch.old_string);
+        const n = asStr(ch.newString ?? ch.new_string);
         batchPairs.push({
           oldStr: o,
           newStr: n,

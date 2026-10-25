@@ -7,6 +7,12 @@ export interface AcpConfigOptionChoice {
   description?: string
 }
 
+export interface AcpApplyConfig {
+  model?: string
+  mode?: string
+  thinking?: string
+}
+
 export interface AcpConfigOption {
   id: string
   name: string
@@ -118,10 +124,10 @@ const api = {
     ensureWorker: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:ensure-worker', acpPath, cwd, remoteId ?? undefined),
     stopWorker: (remoteId?: string): Promise<void> => ipcRenderer.invoke('acp:stop-worker', remoteId ?? undefined),
-    newSession: (cwd: string, remoteId?: string): Promise<void> =>
-      ipcRenderer.invoke('acp:new-session', cwd, remoteId ?? undefined),
-    loadSession: (sessionId: string, cwd: string, remoteId?: string): Promise<void> =>
-      ipcRenderer.invoke('acp:load-session', sessionId, cwd, remoteId ?? undefined),
+    newSession: (cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
+      ipcRenderer.invoke('acp:new-session', cwd, remoteId ?? undefined, applyConfig ?? undefined),
+    loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
+      ipcRenderer.invoke('acp:load-session', sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined),
     sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined),
     cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
@@ -235,6 +241,8 @@ const api = {
       ipcRenderer.invoke('vibe:save-raw-config', content, scope ?? 'global', cwd ?? '', remoteId ?? ''),
     getAgents: (scope?: VibeScope, cwd?: string, remoteId?: string): Promise<unknown[]> =>
       ipcRenderer.invoke('vibe:get-agents', scope ?? 'global', cwd ?? '', remoteId ?? ''),
+    exposeProjectAgent: (name: string, cwd: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('vibe:expose-project-agent', name, cwd, remoteId ?? ''),
     saveAgent: (name: string, config: unknown, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('vibe:save-agent', name, config, scope ?? 'global', cwd ?? '', remoteId ?? ''),
     deleteAgent: (name: string, scope?: VibeScope, cwd?: string, remoteId?: string): Promise<void> =>

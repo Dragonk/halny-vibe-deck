@@ -1,4 +1,4 @@
-import type { AppAPI } from '../../preload/index'
+import type { AppAPI, AcpApplyConfig } from '../../preload/index'
 
 /**
  * Web bridge: when the renderer runs in a browser (serve mode), preload
@@ -143,10 +143,10 @@ function buildApi(): AppAPI {
         invoke('acp:ensure-worker', [acpPath, cwd, remoteId ?? undefined]).then(() => undefined),
       stopWorker: (remoteId?: string): Promise<void> =>
         invoke('acp:stop-worker', [remoteId ?? undefined]).then(() => undefined),
-      newSession: (cwd: string, remoteId?: string): Promise<void> =>
-        invoke('acp:new-session', [cwd, remoteId ?? undefined]).then(() => undefined),
-      loadSession: (sessionId: string, cwd: string, remoteId?: string): Promise<void> =>
-        invoke('acp:load-session', [sessionId, cwd, remoteId ?? undefined]).then(() => undefined),
+      newSession: (cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
+        invoke('acp:new-session', [cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
+      loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
+        invoke('acp:load-session', [sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
       sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
         invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined]).then(() => undefined),
       cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
@@ -237,6 +237,8 @@ function buildApi(): AppAPI {
       saveRawConfig: (content: string, scope?: string, cwd?: string, remoteId?: string): Promise<unknown> =>
         invoke('vibe:save-raw-config', [content, ...scopeArgs(scope, cwd, remoteId)]),
       getAgents: (scope?: string, cwd?: string, remoteId?: string): Promise<unknown> => invoke('vibe:get-agents', scopeArgs(scope, cwd, remoteId)),
+      exposeProjectAgent: (name: string, cwd: string, remoteId?: string): Promise<void> =>
+        invoke('vibe:expose-project-agent', [name, cwd, remoteId ?? '']).then(() => undefined),
       saveAgent: (name: string, config: unknown, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>
         invoke('vibe:save-agent', [name, config, ...scopeArgs(scope, cwd, remoteId)]).then(() => undefined),
       deleteAgent: (name: string, scope?: string, cwd?: string, remoteId?: string): Promise<void> =>

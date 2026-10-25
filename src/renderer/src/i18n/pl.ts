@@ -125,6 +125,7 @@ export const pl = {
   thinking: 'Myślenie',
   thinkingThinking: 'Myślę...',
   thoughtForLabel: 'Przemyślane przez {{seconds}}s',
+  projectAgentBadge: 'Agent projektu',
   off: 'Wyłączone',
   low: 'Niskie',
   medium: 'Średnie',
@@ -462,6 +463,8 @@ export const pl = {
   remoteNoConnections: 'Brak połączeń zdalnych.',
   remoteInstallOk: 'vibe-acp zainstalowany pomyślnie.',
   usageContextTooltip: 'Kontekst: {{used}} / {{total}} tokenów',
+  usageGaugeTooltip: 'Kontekst: {{used}} / {{window}} tokenÃ³w Â· auto-kompresja od {{compact}}',
+  usageCompactOff: 'auto-kompresja wyÅÄczona',
   usageCacheTooltip: 'Cache: {{cached}} z {{total}} tokenów wejścia',
   usagePromptTooltip: 'Tokeny wejściowe',
   usageCompletionTooltip: 'Tokeny wyjściowe',

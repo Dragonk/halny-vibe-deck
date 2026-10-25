@@ -211,13 +211,26 @@ export default function App(): React.JSX.Element {
             }
           }
           setSessionStarting(false)
-          // A session with a recorded model/mode/thinking wins over the
-          // CLI-reported defaults (sessions without their own turns would
-          // otherwise fall back to the global active_model).
+          // v0.10.2: when the main process already applied the recorded
+          // config inside session/new|load, skip syncSessionChips - its
+          // async set_config_option could race the first prompt and hang
+          // the CLI turn.
+          const appliedConfig = d.appliedConfig as
+            | { model?: string; mode?: string; thinking?: string }
+            | undefined
           const cur = useStore.getState().currentSession()
           if (cur?.acpSessionId === acpSessId) {
             useStore.getState().markSessionLive(cur.id)
-            void useStore.getState().syncSessionChips(cur.id)
+            if (appliedConfig) {
+              if (appliedConfig.model) store.setCurrentModel(appliedConfig.model)
+              if (appliedConfig.mode) store.setCurrentMode(appliedConfig.mode)
+              if (appliedConfig.thinking) store.setCurrentThinking(appliedConfig.thinking)
+            } else {
+              // A session with a recorded model/mode/thinking wins over the
+              // CLI-reported defaults (sessions without their own turns would
+              // otherwise fall back to the global active_model).
+              void useStore.getState().syncSessionChips(cur.id)
+            }
           }
           break
         }
@@ -321,6 +334,9 @@ export default function App(): React.JSX.Element {
             state = { msgId, thinkingBlockId: null, acpMsgId: acpMsgId ?? null }
             streamingState.current.set(localId, state)
           }
+          // v0.10.2: the CLI never emits agent_thought_end - once the answer
+          // text streams, all thinking blocks of this message are done.
+          store.finalizeAllThinking(localId, state.msgId)
           store.appendChunk(localId, state.msgId, text)
           break
         }
@@ -368,6 +384,10 @@ export default function App(): React.JSX.Element {
           const localId = local?.id ?? store.currentSessionId
           const state = localId ? streamingState.current.get(localId) : null
           if (localId && state) {
+            // v0.10.2: close open thinking blocks and stuck tool calls -
+            // the CLI does not always emit their end updates.
+            store.finalizeAllThinking(localId, state.msgId)
+            store.completeToolCalls(localId, state.msgId)
             store.finalizeAiMessage(localId, state.msgId)
             streamingState.current.delete(localId)
           }
@@ -411,6 +431,11 @@ export default function App(): React.JSX.Element {
               thinkingBlockId: null,
               acpMsgId: null,
             })
+          }
+          const tcState = streamingState.current.get(localId)
+          if (tcState) {
+            // v0.10.2: tool activity means thinking is over (no thought_end).
+            store.finalizeAllThinking(localId, tcState.msgId)
           }
           updateToolCall(localId, {
             id: d.toolCallId as string,
@@ -463,6 +488,9 @@ export default function App(): React.JSX.Element {
           // worker failing must not mark the whole app disconnected.
           if (!rid) setAcpStatus('error')
           streamingState.current.forEach(({ msgId }, localId) => {
+            // v0.10.2: on error, close open thinking blocks and tool calls.
+            useStore.getState().finalizeAllThinking(localId, msgId)
+            useStore.getState().completeToolCalls(localId, msgId)
             finalizeAiMessage(localId, msgId)
           })
           streamingState.current.clear()

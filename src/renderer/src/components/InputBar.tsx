@@ -3,7 +3,7 @@ import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 import { resolveLanguage, translateModeName, translateModeDescription, translateThinkingLevel, translateThinkingDescription } from '../i18n/terms'
 import type { TermsLang } from '../i18n/terms'
-import type { AppConfig, ConfigOption } from '../types'
+import type { AppConfig, ConfigOption, ConfigOptionChoice } from '../types'
 import UsageBar from './UsageBar'
 
 interface Props {
@@ -257,6 +257,38 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAtPicker, atQuery, currentSessionId, config.workingDirectory])
+
+  // v0.10.2: project agents (<cwd>/.vibe/agents/*.toml) are not reported by
+  // the CLI in configOptions, but they are selectable once exposed to the
+  // global agents dir - load them so the mode dropdown can offer them.
+  const [projectAgents, setProjectAgents] = useState<Array<{ name: string; displayName: string; description?: string }>>([])
+  const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+  const projectRemoteId = currentSession()?.remoteId ?? null
+  useEffect(() => {
+    let cancelled = false
+    if (!projectCwd) {
+      setProjectAgents([])
+      return
+    }
+    window.api.vibe
+      .getAgents('project', projectCwd, projectRemoteId ?? undefined)
+      .then((list) => {
+        if (cancelled) return
+        const agents = (list as Array<Record<string, unknown>>)
+          .filter((a) => a && a.agent_type === 'agent')
+          .map((a) => ({
+            name: String(a.name ?? ''),
+            displayName: String(a.display_name ?? a.name ?? ''),
+            description: typeof a.description === 'string' ? a.description : undefined,
+          }))
+          .filter((a) => a.name.length > 0)
+        setProjectAgents(agents)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [projectCwd, projectRemoteId])
 
   // Load skills and prompts when slash picker first opens
   useEffect(() => {
@@ -518,9 +550,18 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           if (currentSess?.acpSessionId && currentSess.id) {
             unlinkAcpSession(currentSess.id)
           }
+          // v0.10.2: hand the recorded config to the main process - it is
+          // applied inside session/new, deterministically BEFORE the first
+          // prompt (a mid-turn set_config_option hangs the CLI turn).
+          const applyCfg = {
+            model: currentSess?.lastModel,
+            mode: currentSess?.lastMode,
+            thinking: currentSess?.lastThinking
+          }
+          const hasApplyCfg = !!(applyCfg.model || applyCfg.mode || applyCfg.thinking)
           // v0.7.0: remote drafts need their own worker alive first
           if (rid) await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', cwd, rid)
-          await window.api.acp.newSession(cwd, rid ?? undefined)
+          await window.api.acp.newSession(cwd, rid ?? undefined, hasApplyCfg ? applyCfg : undefined)
         } else if (rid) {
           setAcpStatus('connecting')
           await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', cwd, rid)
@@ -635,16 +676,24 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             // v0.7.0: revive the remote worker first (idempotent, no prime)
             await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', sessionWd, rid)
           }
+          // v0.10.2: recorded config is applied inside session/load
+          // (main process) - before the prompt resend, never mid-turn.
+          const retryCfg = {
+            model: currentSess.lastModel,
+            mode: currentSess.lastMode,
+            thinking: currentSess.lastThinking
+          }
+          const hasRetryCfg = !!(retryCfg.mode || retryCfg.model || retryCfg.thinking)
           try {
             // Real resume: session/load replays the full history
-            await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined)
+            await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
             useStore.getState().markSessionLive(currentSess.id)
             useStore.getState().markSessionBusy(currentSess.id)
             await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
           } catch (loadErr) {
             // session/load failed (log missing) → fall back to a new session
             console.log('[InputBar] loadSession failed:', loadErr, '— creating new session')
-            await window.api.acp.newSession(sessionWd, rid ?? undefined)
+            await window.api.acp.newSession(sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
             await window.api.acp.sendPrompt(promptText, undefined, rid ?? undefined)
           }
           setSessionStarting(false)
@@ -866,6 +915,16 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
   // ---- Config options (model / mode / thinking) ----
   const handleConfigSelect = async (key: string, value: string): Promise<void> => {
+    // v0.10.2: selecting a project agent requires exposing its file to the
+    // CLI's global agents dir first - the CLI cannot see project agents.
+    if (key === 'mode' && projectAgents.some((a) => a.name === value)) {
+      const cliHasIt = configOptions.find((o) => o.id === 'mode')?.options.some((o) => o.value === value)
+      if (!cliHasIt) {
+        const cwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+        const rid = currentSession()?.remoteId ?? undefined
+        await window.api.vibe.exposeProjectAgent(value, cwd, rid).catch(console.error)
+      }
+    }
     if (key === 'model') setCurrentModel(value)
     if (key === 'mode') setCurrentMode(value)
     if (key === 'thinking') setCurrentThinking(value)
@@ -883,7 +942,15 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     const acpSessId = useStore.getState().activeAcpSessionId ?? sess?.acpSessionId
     await window.api.acp
       .setConfigOption(key, value, acpSessId ?? undefined, sess?.remoteId ?? undefined)
-      .catch(console.error)
+      .catch((err: Error) => {
+        // v0.10.2: the CLI validates mode values against the agents it knew
+        // when the ACP session was created. A freshly exposed project agent
+        // is rejected for the current session, but the recorded lastMode is
+        // applied when the next session starts (syncSessionChips), so this
+        // specific failure is expected and must not alarm the user.
+        if (key === 'mode' && /Unsupported config option/.test(String(err?.message ?? err))) return
+        console.error(err)
+      })
   }
 
   const isSending = acpStatus === 'connecting' || isStarting
@@ -925,6 +992,20 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
   const modelOption = configOptions.find((o) => o.id === 'model')
   const modeOption = configOptions.find((o) => o.id === 'mode')
+  // v0.10.2: project agents join the mode dropdown; selecting one exposes
+  // the agent file globally first (see handleConfigSelect).
+  const extraModeChoices: ConfigOptionChoice[] = projectAgents
+    .filter((a) => !modeOption?.options.some((o) => o.value === a.name))
+    .map((a) => ({
+      value: a.name,
+      name: a.displayName,
+      description: a.description
+        ? tr.projectAgentBadge + ' — ' + a.description
+        : tr.projectAgentBadge,
+    }))
+  const modeOptionMerged: ConfigOption | undefined = modeOption
+    ? { ...modeOption, options: [...modeOption.options, ...extraModeChoices] }
+    : undefined
   const thinkingOption = configOptions.find((o) => o.id === 'thinking')
   const pickersReady = configOptions.length > 0
 
@@ -1100,7 +1181,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               onSelect={(v) => handleConfigSelect('model', v)}
             />
             <ConfigChip
-              option={modeOption}
+              option={modeOptionMerged}
               currentValue={currentMode}
               label={tr.modePicker}
               disabled={!pickersReady}

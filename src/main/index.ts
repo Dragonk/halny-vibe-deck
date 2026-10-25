@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
 import { join } from "path";
 import fs from "fs";
-import { acpManager, AcpManager } from "./acp";
+import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { loadConfig, saveConfig, AppConfig } from "./config";
 import { menuLabels } from "./i18n";
 import {
@@ -46,6 +46,9 @@ import {
   saveRemoteRawConfig,
   getRemoteVibeDir,
   getRemoteAgents,
+  listRemoteProjectAgents,
+  exposeRemoteProjectAgent,
+  exposeRemoteProjectAgents,
   saveRemoteAgent,
   deleteRemoteAgent,
   getRemotePrompts,
@@ -360,15 +363,26 @@ app.whenReady().then(() => {
       if (err instanceof Error && err.message === "ACP stopped") return
       throw err
     }
+    // v0.10.2: expose project agents before priming (see acp:new-session).
+    if (remoteId) await exposeRemoteProjectAgents(remoteId, cwd).catch(console.error)
+    else exposeProjectAgentsForCwd(cwd)
     await mgr.newSession(cwd)
   })
 
-  ipcMain.handle("acp:new-session", async (_e, cwd: string, remoteId?: string) => {
-    await getManager(remoteId).newSession(cwd)
+  ipcMain.handle("acp:new-session", async (_e, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig) => {
+    // v0.10.2: the CLI reads agent files at session/new - expose the
+    // project's agents first so the new session can select them.
+    if (remoteId) await exposeRemoteProjectAgents(remoteId, cwd).catch(console.error)
+    else exposeProjectAgentsForCwd(cwd)
+    await getManager(remoteId).newSession(cwd, applyConfig)
   })
 
-  ipcMain.handle("acp:load-session", async (_e, sessionId: string, cwd: string, remoteId?: string) => {
-    await getManager(remoteId).loadSession(sessionId, cwd)
+  ipcMain.handle("acp:load-session", async (_e, sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig) => {
+    // v0.10.2: expose project agents so a resumed session can keep a
+    // project-agent mode (the CLI reads agent files at session/load).
+    if (remoteId) await exposeRemoteProjectAgents(remoteId, cwd).catch(console.error)
+    else exposeProjectAgentsForCwd(cwd)
+    await getManager(remoteId).loadSession(sessionId, cwd, applyConfig)
   })
 
   ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string) => {
@@ -651,6 +665,51 @@ app.whenReady().then(() => {
   const resolveScopeDir = (scope: string, cwd: string): string =>
     resolveVibeDir(scope === "project" ? "project" : "global", cwd || undefined);
 
+  // v0.10.2: the CLI reads agent files when a session is created, but only
+  // from the global agents dir (~/.vibe/agents). Expose a project's agents
+  // there (symlink, copy fallback) so session/new picks them up. Existing
+  // real global agent files are never shadowed; dangling links are cleaned.
+  const exposeProjectAgentsForCwd = (cwd: string): void => {
+    try {
+      if (!cwd) return;
+      const srcDir = join(cwd, ".vibe", "agents");
+      if (!fs.existsSync(srcDir)) return;
+      const dstDir = join(getVibeDirPath(), "agents");
+      fs.mkdirSync(dstDir, { recursive: true });
+      for (const f of fs.readdirSync(dstDir)) {
+        const dst = join(dstDir, f);
+        try {
+          if (fs.lstatSync(dst).isSymbolicLink() && !fs.existsSync(dst)) fs.rmSync(dst, { force: true });
+        } catch {
+          /* not a link entry - ignore */
+        }
+      }
+      for (const f of fs.readdirSync(srcDir)) {
+        if (!f.endsWith(".toml") || !/^[A-Za-z0-9._-]+\.toml$/.test(f)) continue;
+        const dst = join(dstDir, f);
+        let isLink = false;
+        try {
+          isLink = fs.lstatSync(dst).isSymbolicLink();
+        } catch {
+          isLink = false;
+        }
+        if (!isLink && fs.existsSync(dst)) continue;
+        fs.rmSync(dst, { force: true });
+        try {
+          fs.symlinkSync(join(srcDir, f), dst);
+        } catch {
+          try {
+            fs.copyFileSync(join(srcDir, f), dst);
+          } catch {
+            /* copy failed - skip this agent */
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[agents] project agent exposure failed:", err);
+    }
+  };
+
   ipcMain.handle("vibe:get-config", async (_e, scope: string, cwd: string, remoteId?: string) =>
     scope === "remote" ? getRemoteVibeConfig(remoteId ?? "") : loadVibeConfig(resolveScopeDir(scope, cwd)));
   ipcMain.handle("vibe:save-config", async (_e, config: VibeConfig, scope: string, cwd: string, remoteId?: string) => {
@@ -667,8 +726,38 @@ app.whenReady().then(() => {
       ? saveRemoteRawConfig(content, remoteId ?? "")
       : saveVibeConfigRaw(content, resolveScopeDir(scope, cwd)));
 
-  ipcMain.handle("vibe:get-agents", async (_e, scope: string, cwd: string, remoteId?: string) =>
-    scope === "remote" ? getRemoteAgents(remoteId ?? "") : loadAgentFiles(resolveScopeDir(scope, cwd)));
+  ipcMain.handle("vibe:get-agents", async (_e, scope: string, cwd: string, remoteId?: string) => {
+    if (scope === "remote") return getRemoteAgents(remoteId ?? "");
+    // v0.10.2: project agents of a remote host (mode picker for remote sessions)
+    if (remoteId) return listRemoteProjectAgents(remoteId, cwd);
+    return loadAgentFiles(resolveScopeDir(scope, cwd));
+  });
+  // v0.10.2: make a project agent visible to the CLI by exposing its file in
+  // the global agents dir (~/.vibe/agents) - the CLI cannot see project agents.
+  ipcMain.handle("vibe:expose-project-agent", async (_e, name: string, cwd: string, remoteId?: string) => {
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error("Invalid agent name");
+    if (remoteId) return exposeRemoteProjectAgent(remoteId, cwd, name);
+    const src = join(resolveScopeDir("project", cwd), "agents", name + ".toml");
+    if (!fs.existsSync(src)) throw new Error("Project agent file not found: " + src);
+    const dstDir = join(getVibeDirPath(), "agents");
+    fs.mkdirSync(dstDir, { recursive: true });
+    const dst = join(dstDir, name + ".toml");
+    // Never shadow an existing real global agent file with the same name.
+    let isLink = false;
+    try {
+      isLink = fs.lstatSync(dst).isSymbolicLink();
+    } catch {
+      isLink = false;
+    }
+    if (!isLink && fs.existsSync(dst)) throw new Error("A global agent named " + name + " already exists");
+    fs.rmSync(dst, { force: true });
+    try {
+      fs.symlinkSync(src, dst);
+    } catch {
+      // Windows without developer mode cannot symlink - copy instead.
+      fs.copyFileSync(src, dst);
+    }
+  });
   ipcMain.handle("vibe:save-agent", async (_e, name: string, config: VibeAgentFileConfig, scope: string, cwd: string, remoteId?: string) => {
     if (scope === "remote") {
       await saveRemoteAgent(name, config, remoteId ?? "");

@@ -10,6 +10,12 @@ export interface AcpConfigOptionChoice {
   description?: string
 }
 
+export interface AcpApplyConfig {
+  model?: string
+  mode?: string
+  thinking?: string
+}
+
 export interface AcpConfigOption {
   id: string
   name: string
@@ -347,8 +353,9 @@ export class AcpManager {
         break
 
       case 'agent_message_chunk': {
-        const text = this.contentText(update.content)
         const messageId = (update.messageId as string | undefined) ?? 'current'
+        const raw = this.contentText(update.content)
+        const text = this.dedupChunk(sessionId, 'm', messageId, raw)
         if (text) {
           this.emit({ type: 'MessageChunk', data: { sessionId, text, messageId } })
         }
@@ -356,8 +363,9 @@ export class AcpManager {
       }
 
       case 'agent_thought_chunk': {
-        const text = this.contentText(update.content)
         const blockId = (update.messageId as string | undefined) ?? 'thinking'
+        const raw = this.contentText(update.content)
+        const text = this.dedupChunk(sessionId, 't', blockId, raw)
         if (text) {
           this.emit({ type: 'ThinkingChunk', data: { sessionId, blockId, text } })
         }
@@ -365,7 +373,12 @@ export class AcpManager {
       }
 
       case 'agent_thought_end':
-        this.emit({ type: 'ThinkingComplete', data: { sessionId, blockId: 'thinking' } })
+        // v0.10.2: CLI 3.0.2 never emits this for real thoughts, but keep the
+        // handler correct for future versions - use the actual block id.
+        this.emit({
+          type: 'ThinkingComplete',
+          data: { sessionId, blockId: (update.messageId as string | undefined) ?? 'thinking' },
+        })
         break
 
       case 'tool_call': {
@@ -501,6 +514,17 @@ export class AcpManager {
     const messages: AcpHistoryMessage[] = []
     const toolCallsById = new Map<string, AcpHistoryToolCall>()
     let currentAi: AcpHistoryMessage | null = null
+    // v0.10.2: some CLI replays resend entries as the full accumulated text;
+    // slice off the already-appended prefix instead of duplicating it.
+    const msgSent = new Map<string, string>()
+    const thoughtSent = new Map<string, string>()
+    const dedup = (sent: Map<string, string>, key: string, text: string): string => {
+      const prev = sent.get(key) ?? ''
+      let out = text
+      if (prev.length >= 40 && text.startsWith(prev)) out = text.slice(prev.length)
+      sent.set(key, prev + out)
+      return out
+    }
 
     const ensureAi = (): AcpHistoryMessage => {
       if (!currentAi) {
@@ -523,20 +547,26 @@ export class AcpManager {
           currentAi = null
         }
       } else if (kind === 'agent_message_chunk') {
-        const text = this.contentText(update.content) || this.contentText(update.chunk)
+        const raw = this.contentText(update.content) || this.contentText(update.chunk)
+        const mid = (update.messageId as string | undefined) ?? 'm'
+        const text = raw ? dedup(msgSent, mid, raw) : ''
         if (text) {
           ensureAi().content += text
         }
       } else if (kind === 'agent_thought_chunk') {
-        const text = this.contentText(update.content) || this.contentText(update.chunk)
+        const raw = this.contentText(update.content) || this.contentText(update.chunk)
+        const bid = (update.messageId as string | undefined) ?? 'thinking'
+        const text = raw ? dedup(thoughtSent, bid, raw) : ''
         if (text) {
           const ai = ensureAi()
           const blocks = (ai.thinking ??= [])
           const last = blocks[blocks.length - 1]
-          if (last) {
+          // v0.10.2: one block per thought messageId (segment), matching
+          // the live path - appended to, not merged across different ids.
+          if (last && last.id === bid) {
             last.content += text
           } else {
-            blocks.push({ id: 'thinking', content: text })
+            blocks.push({ id: bid, content: text })
           }
         }
       } else if (kind === 'tool_call') {
@@ -587,6 +617,19 @@ export class AcpManager {
 
   private pendingApprovals = new Map<string, boolean>()
   private toolCallNames = new Map<string, string>()
+  // v0.10.2: guard against full-entry resends from the CLI - a delta chunk
+  // followed by the full accumulated text would otherwise duplicate content.
+  private streamSent = new Map<string, string>()
+
+  private dedupChunk(sessionId: string, kind: string, entryId: string, text: string): string {
+    if (!text) return text
+    const key = sessionId + '|' + kind + '|' + entryId
+    const sent = this.streamSent.get(key) ?? ''
+    let out = text
+    if (sent.length >= 40 && text.startsWith(sent)) out = text.slice(sent.length)
+    this.streamSent.set(key, sent + out)
+    return out
+  }
 
   private handleAgentRequest(id: string, method: string, params: unknown): void {
     const isQuestion =
@@ -727,7 +770,7 @@ export class AcpManager {
     }
   }
 
-  async newSession(cwd: string): Promise<void> {
+  async newSession(cwd: string, applyConfig?: AcpApplyConfig): Promise<void> {
     const result = (await this.sendRequest('session/new', {
       cwd,
       mcpServers: []
@@ -736,6 +779,9 @@ export class AcpManager {
     this.currentSessionId = result.sessionId as string
     const { modes, currentModeId } = this.parseModes(result)
     const configOptions = this.parseConfigOptions(result.configOptions)
+    // v0.10.2: apply the recorded config inside session/new - a
+    // set_config_option racing the first prompt hangs the CLI turn.
+    await this.applyRecordedConfig(applyConfig, configOptions)
 
     this.emit({
       type: 'SessionInitialized',
@@ -743,17 +789,22 @@ export class AcpManager {
         sessionId: this.currentSessionId,
         modes,
         currentModeId,
-        configOptions
+        configOptions,
+        appliedConfig: applyConfig ?? undefined
       }
     })
   }
 
-  async loadSession(sessionId: string, cwd: string): Promise<void> {
+  async loadSession(sessionId: string, cwd: string, applyConfig?: AcpApplyConfig): Promise<void> {
     console.log('[ACP] loadSession:', sessionId, 'cwd:', cwd)
     // Buffer replayed updates while the request is in flight; vibe-acp replays
     // the whole history via session/update BEFORE the session/load response
     // arrives, so emitting them live would lose them.
     this._replaying.set(sessionId, [])
+    // v0.10.2: fresh stream after a reload - drop stale dedup prefixes.
+    for (const k of Array.from(this.streamSent.keys())) {
+      if (k.startsWith(sessionId + '|')) this.streamSent.delete(k)
+    }
     try {
       const result = (await this.sendRequest('session/load', {
         sessionId,
@@ -769,6 +820,8 @@ export class AcpManager {
 
       const { modes, currentModeId } = this.parseModes(result)
       const configOptions = this.parseConfigOptions(result.configOptions)
+      // v0.10.2: deterministic config apply before any prompt can race it.
+      await this.applyRecordedConfig(applyConfig, configOptions)
 
       this.emit({
         type: 'SessionHistory',
@@ -776,7 +829,7 @@ export class AcpManager {
       })
       this.emit({
         type: 'SessionInitialized',
-        data: { sessionId, modes, currentModeId, configOptions, sessionTitle: title }
+        data: { sessionId, modes, currentModeId, configOptions, sessionTitle: title, appliedConfig: applyConfig ?? undefined }
       })
     } catch (err) {
       this._replaying.delete(sessionId)
@@ -812,6 +865,34 @@ export class AcpManager {
       params: { sessionId: acpSessionId }
     }) + '\n'
     this.process.stdin.write(notification)
+  }
+
+  /**
+   * v0.10.2: apply a session's recorded model/mode/thinking right after
+   * session/new|load resolves. Doing this in the main process keeps the
+   * ordering deterministic (config BEFORE the first prompt); a
+   * set_config_option sent mid-turn hangs the CLI turn.
+   */
+  private async applyRecordedConfig(
+    applyConfig: AcpApplyConfig | undefined,
+    configOptions: AcpConfigOption[]
+  ): Promise<void> {
+    if (!applyConfig) return
+    const entries: Array<[string, string]> = [
+      ['model', applyConfig.model ?? ''],
+      ['mode', applyConfig.mode ?? ''],
+      ['thinking', applyConfig.thinking ?? '']
+    ]
+    for (const [key, value] of entries) {
+      if (!value) continue
+      try {
+        await this.setConfigOption(key, value, this.currentSessionId ?? undefined)
+        const opt = configOptions.find((o) => o.id === key)
+        if (opt) opt.currentValue = value
+      } catch (err) {
+        console.log('[ACP] applyConfig skipped:', key, err)
+      }
+    }
   }
 
   async setConfigOption(key: string, value: string, sessionId?: string): Promise<void> {
@@ -910,6 +991,7 @@ export class AcpManager {
     // v0.9.0: drop request bookkeeping so a restarted worker starts clean.
     this.pendingApprovals.clear()
     this.toolCallNames.clear()
+    this.streamSent.clear()
   }
 
   isRemote(): boolean {

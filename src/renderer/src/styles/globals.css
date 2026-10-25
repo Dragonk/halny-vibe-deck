@@ -3350,6 +3350,11 @@ code {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    /* v0.10.2: match the chat column width (768px) and center it */
+    width: 100%;
+    max-width: 768px;
+    margin: 0 auto;
+    box-sizing: border-box;
 }
 
 .input-card {
@@ -4810,28 +4815,34 @@ code {
     font-variant-numeric: tabular-nums;
 }
 .usage-context {
-    min-width: 140px;
+    gap: 6px;
 }
-.usage-context-track {
-    position: relative;
+/* v0.10.2: Zed-style circular context gauge with an auto-compact marker */
+.usage-gauge {
+    flex: none;
     display: inline-block;
-    width: 80px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border);
-    overflow: hidden;
+    width: 16px;
+    height: 16px;
 }
-.usage-context-fill {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    border-radius: 2px;
-    background: var(--accent);
-    transition: width 0.3s ease;
+.usage-gauge-track {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 2.5;
 }
-.usage-context-fill.warn {
-    background: var(--color-danger);
+.usage-gauge-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.3s ease;
+}
+.usage-gauge-fill.warn {
+    stroke: var(--color-danger);
+}
+.usage-gauge-mark {
+    fill: none;
+    stroke: var(--text-dim);
+    stroke-width: 3;
 }
 .usage-cache .usage-bar-value {
     color: var(--color-success);
@@ -5276,7 +5287,7 @@ code {
 .usage-bar-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.3px; }
 .usage-bar-value { color: var(--text-muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 .usage-context { min-width: 104px; }
-.usage-context-track { width: 56px; height: 3px; border-radius: 2px; }
+.usage-gauge { width: 14px; height: 14px; }
 
 /* ── v0.4.2: anchor the CodeMirror host inside the preview body ── */
 .file-preview-body { position: relative; }
@@ -5772,7 +5783,7 @@ code {
     /* usage bar: compact */
     .usage-bar { gap: 8px; padding: 2px 6px 6px; font-size: 10px; }
     .usage-context { min-width: 0; }
-    .usage-context-track { width: 56px; }
+    .usage-gauge { width: 13px; height: 13px; }
 }
 
 /* == v0.8.0: new-session dialog + serve LAN URLs == */

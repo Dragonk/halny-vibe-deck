@@ -203,6 +203,10 @@ interface AppStore {
   startThinking: (sessionId: string, messageId: string, blockId: string) => void;
   appendThinkingChunk: (sessionId: string, messageId: string, blockId: string, chunk: string) => void;
   finalizeThinking: (sessionId: string, messageId: string, blockId: string) => void;
+  /** v0.10.2: the CLI never emits agent_thought_end - close every open thinking block. */
+  finalizeAllThinking: (sessionId: string, messageId: string) => void;
+  /** v0.10.2: close tool calls still marked running when the turn ends. */
+  completeToolCalls: (sessionId: string, messageId: string) => void;
   linkAcpSession: (localSessionId: string, acpSessionId: string) => void;
   unlinkAcpSession: (localSessionId: string) => void;
   getSessionByAcpId: (acpSessionId: string) => Session | null;
@@ -540,6 +544,10 @@ export const useStore = create<AppStore>((set, get) => ({
       if (id === "mode") get().setCurrentMode(value);
       if (id === "thinking") get().setCurrentThinking(value);
       get().patchConfigOption(id, value);
+      // v0.10.2: never send config changes mid-turn - a set_config_option
+      // racing an in-flight prompt hangs the CLI turn. Display-only here;
+      // the main process applies recorded config inside session/new|load.
+      if (get().busySessions.includes(localSessionId)) return;
       window.api.acp.setConfigOption(id, value, acpSessionId, chipRid ?? undefined).catch(console.error);
     };
     apply("model", model, get().currentModel);
@@ -956,6 +964,12 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   startThinking: (sessionId, messageId, blockId) => {
+    // v0.10.2: guard against duplicate blocks when the CLI resends a chunk
+    // with the same block id (re-sync after subagent handoffs).
+    const msg0 = get()
+      .sessions.find((s) => s.id === sessionId)
+      ?.messages.find((m) => m.id === messageId)
+    if (msg0?.thinking?.some((b) => b.id === blockId)) return
     const block: ThinkingBlock = {
       id: blockId,
       content: "",
@@ -1000,6 +1014,42 @@ export const useStore = create<AppStore>((set, get) => ({
             b.id === blockId ? { ...b, isComplete: true, completedAt: Date.now() } : b,
           );
           return { ...m, thinking };
+        });
+        return { ...sess, messages };
+      }),
+    }));
+  },
+
+  // v0.10.2: the CLI never finalizes thinking blocks, so the renderer closes
+  // them when the answer text / tool calls / turn end arrive.
+  finalizeAllThinking: (sessionId, messageId) => {
+    set((s) => ({
+      sessions: s.sessions.map((sess) => {
+        if (sess.id !== sessionId) return sess;
+        const messages = sess.messages.map((m) => {
+          if (m.id !== messageId) return m;
+          const thinking = (m.thinking ?? []).map((b) =>
+            b.isComplete ? b : { ...b, isComplete: true, completedAt: Date.now() },
+          );
+          return { ...m, thinking };
+        });
+        return { ...sess, messages };
+      }),
+    }));
+  },
+
+  // v0.10.2: a turn can end while a tool call is still "running" (lost
+  // update, cancel) - close them so the steps timeline has no spinners.
+  completeToolCalls: (sessionId, messageId) => {
+    set((s) => ({
+      sessions: s.sessions.map((sess) => {
+        if (sess.id !== sessionId) return sess;
+        const messages = sess.messages.map((m) => {
+          if (m.id !== messageId) return m;
+          const toolCalls = (m.toolCalls ?? []).map((tc) =>
+            tc.status === "running" ? { ...tc, status: "done" as const } : tc,
+          );
+          return { ...m, toolCalls };
         });
         return { ...sess, messages };
       }),
@@ -1131,8 +1181,16 @@ export const useStore = create<AppStore>((set, get) => ({
       // v0.7.0: workers persist per connection - resuming only makes sure
       // the right worker is alive (no prime, no restart churn).
       await get().ensureAcpWorker(rid, cwd);
+      // v0.10.2: recorded config is applied inside session/load (main),
+      // deterministically before any prompt can race it.
+      const applyCfg = {
+        model: session.lastModel,
+        mode: session.lastMode,
+        thinking: session.lastThinking
+      };
+      const hasApplyCfg = !!(applyCfg.model || applyCfg.mode || applyCfg.thinking);
       // Real resume: session/load replays the full history via events
-      await window.api.acp.loadSession(acpSessionId, cwd, rid ?? undefined);
+      await window.api.acp.loadSession(acpSessionId, cwd, rid ?? undefined, hasApplyCfg ? applyCfg : undefined);
       set({ activeAcpSessionId: acpSessionId });
       get().markSessionLive(localSessionId);
       // Per-session isolation: restore this session’s recorded model/mode/thinking.

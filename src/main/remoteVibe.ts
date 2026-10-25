@@ -110,12 +110,7 @@ function agentFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, "_") + ".toml";
 }
 
-export async function getRemoteAgents(remoteId: string): Promise<VibeAgentFileConfig[]> {
-  const out = await runSoft(
-    remoteId,
-    "for f in \"$HOME\"/.vibe/agents/*.toml; do [ -f \"$f\" ] || continue; " +
-      "echo \"@@@F:$f\"; cat \"$f\"; echo; done",
-  );
+function parseRemoteAgentBlocks(out: string): VibeAgentFileConfig[] {
   const agents: VibeAgentFileConfig[] = [];
   for (const block of out.split("@@@F:")) {
     const head = block.indexOf(NL);
@@ -149,6 +144,61 @@ export async function getRemoteAgents(remoteId: string): Promise<VibeAgentFileCo
     });
   }
   return agents;
+}
+
+export async function getRemoteAgents(remoteId: string): Promise<VibeAgentFileConfig[]> {
+  const out = await runSoft(
+    remoteId,
+    "for f in \"$HOME\"/.vibe/agents/*.toml; do [ -f \"$f\" ] || continue; " +
+      "echo \"@@@F:$f\"; cat \"$f\"; echo; done",
+  );
+  return parseRemoteAgentBlocks(out);
+}
+
+// v0.10.2: project agents (<cwd>/.vibe/agents) on the remote host - the CLI
+// only reports global agents, but the mode picker can offer these as well.
+export async function listRemoteProjectAgents(
+  remoteId: string,
+  cwd: string,
+): Promise<VibeAgentFileConfig[]> {
+  const out = await runSoft(
+    remoteId,
+    "for f in " + shq(cwd) + "/.vibe/agents/*.toml; do [ -f \"$f\" ] || continue; " +
+      "echo \"@@@F:$f\"; cat \"$f\"; echo; done",
+  );
+  return parseRemoteAgentBlocks(out);
+}
+
+// v0.10.2: expose a remote project agent to the remote CLI's global agents
+// dir (~/.vibe/agents) so set_config_option accepts it.
+export async function exposeRemoteProjectAgent(
+  remoteId: string,
+  cwd: string,
+  name: string,
+): Promise<void> {
+  const src = shq(cwd + "/.vibe/agents/" + name + ".toml");
+  const dst = shq(HOME_VIBE + "/agents/" + name + ".toml");
+  const conn = await connOrThrow(remoteId);
+  const r = await sshRun(
+    conn,
+    "mkdir -p " + HOME_VIBE + "/agents && ln -sfn " + src + " " + dst + " || cp " + src + " " + dst,
+    15000,
+  );
+  if (r.code !== 0) throw new Error(r.stderr || "Remote agent expose failed");
+}
+
+// v0.10.2: expose every agent of a remote project (<cwd>/.vibe/agents) to
+// the remote CLI's global agents dir before a session is created there.
+export async function exposeRemoteProjectAgents(remoteId: string, cwd: string): Promise<void> {
+  const conn = await connOrThrow(remoteId);
+  const cmd =
+    "D=" + HOME_VIBE + "/agents; mkdir -p " + "\"$D\"" + "; " +
+      "for l in " + "\"$D\"" + "/*; do [ -L " + "\"$l\"" + " ] && [ ! -e " + "\"$l\"" + " ] && rm -f " + "\"$l\"" + "; done; " +
+      "for f in " + shq(cwd) + "/.vibe/agents/*.toml; do [ -f " + "\"$f\"" + " ] || continue; " +
+      "b=$(basename " + "\"$f\"" + "); [ -e " + "\"$D\"/\"$b\"" + " ] && [ ! -L " + "\"$D\"/\"$b\"" + " ] && continue; " +
+      "ln -sfn " + "\"$f\" \"$D\"/\"$b\"" + " || cp " + "\"$f\" \"$D\"/\"$b\"" + "; done";
+  const r = await sshRun(conn, cmd, 15000);
+  if (r.code !== 0) throw new Error(r.stderr || "Remote project agent expose failed");
 }
 
 export async function saveRemoteAgent(
