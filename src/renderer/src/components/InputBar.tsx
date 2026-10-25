@@ -932,7 +932,19 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   }, [currentSession])
 
   const currentWd = currentSessionWorkingDirectory()
-  const modelOption = configOptions.find((o) => o.id === 'model')
+  const rawModelOption = configOptions.find((o) => o.id === 'model')
+  // v0.12: the CLI can list the same model twice - once under the user's
+  // alias (from config.toml [[models]]) and once under its catalog name,
+  // both with the same display name. Collapse duplicate display names,
+  // keeping the first (user-configured alias) entry.
+  const modelOption = rawModelOption
+    ? {
+        ...rawModelOption,
+        options: rawModelOption.options.filter(
+          (o, i, arr) => arr.findIndex((b) => b.name === o.name) === i,
+        ),
+      }
+    : rawModelOption
   const modeOption = configOptions.find((o) => o.id === 'mode')
   // v0.10.2: project agents join the mode dropdown; selecting one exposes
   // the agent file globally first (see handleConfigSelect).
