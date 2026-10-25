@@ -160,8 +160,6 @@ interface AppStore {
   workingDirectory: string;
   setWorkingDirectory: (dir: string) => void;
 
-  sandboxEnabled: boolean;
-  setSandboxEnabled: (v: boolean) => void;
 
   // Dock (right panel)
   dockOpen: boolean;
@@ -648,13 +646,6 @@ export const useStore = create<AppStore>((set, get) => ({
     const cfg = get().config;
     set({ workingDirectory, config: { ...cfg, workingDirectory } });
     window.api.config.save({ ...cfg, workingDirectory }).catch(console.error);
-  },
-
-  sandboxEnabled: false,
-  setSandboxEnabled: (sandboxEnabled) => {
-    const cfg = get().config;
-    set({ sandboxEnabled, config: { ...cfg, sandboxEnabled } });
-    window.api.config.save({ ...cfg, sandboxEnabled }).catch(console.error);
   },
 
   dockOpen: defaultConfig.dockOpen,

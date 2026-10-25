@@ -2,14 +2,6 @@ import { app } from 'electron'
 import * as fs from 'fs'
 import * as path from 'path'
 
-export interface SandboxConfig {
-  enabled: boolean
-  network: 'none' | 'whitelist' | 'unrestricted'
-  whitelistDomains: string[]
-  timeoutSeconds: number
-  memoryLimitMb: number
-}
-
 export interface AgentConfig {
   id: string
   name: string
@@ -82,8 +74,6 @@ export interface AppConfig {
   version: string
   language: 'auto' | 'en' | 'pl' | 'fr' | 'es' | 'de' | 'it'
   theme: ThemeMode
-  sandboxEnabled: boolean
-  sandbox: SandboxConfig
   acpPath: string
   workingDirectory: string
   recentFolders: string[]
@@ -105,14 +95,6 @@ const defaultConfig: AppConfig = {
   version: '0.2.0',
   language: 'auto',
   theme: 'auto',
-  sandboxEnabled: false,
-  sandbox: {
-    enabled: false,
-    network: 'none',
-    whitelistDomains: [],
-    timeoutSeconds: 300,
-    memoryLimitMb: 512
-  },
   acpPath: '',
   workingDirectory: '',
   recentFolders: [],

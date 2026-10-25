@@ -8,7 +8,7 @@ import { isWebMode } from '../webBridge'
 import { defaultConfig } from '../types'
 import type { AppConfig, RemoteConnection, RemoteTestResult, ServeStatus, CliUpdateInfo } from '../types'
 
-type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw' | 'serve' | 'remote'
+type Tab = 'general' | 'acp' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw' | 'serve' | 'remote'
 
 // Built-in tools of the mistral-vibe CLI that work without any config.toml entry.
 const DEFAULT_VIBE_TOOLS = [
@@ -219,7 +219,7 @@ function mcpOauthUpdate(
 }
 
 export default function SettingsView(): React.JSX.Element {
-  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, currentSessionRemoteId, openFilePreview, remoteStatuses } = useStore()
+  const { config, setConfig, setWorkingDirectory, setCurrentView, acpStatus, currentSessionWorkingDirectory, currentSessionRemoteId, openFilePreview, remoteStatuses } = useStore()
   const updateInfo = useStore((s) => s.updateInfo)
   const updateProgress = useStore((s) => s.updateProgress)
   const tr = useTranslation(config.language)
@@ -341,7 +341,6 @@ export default function SettingsView(): React.JSX.Element {
     await window.api.config.save(local)
     setConfig(local)
     setWorkingDirectory(local.workingDirectory)
-    setSandboxEnabled(local.sandboxEnabled)
     await window.api.vibe.saveConfig(vibeConfig, scope, projectCwd, vibeRemoteId)
     
     if (tab !== 'general' && acpStatus === 'connected') {
@@ -1374,16 +1373,6 @@ export default function SettingsView(): React.JSX.Element {
               })}
             </div>
             {updatesError && <p className="field-hint">{updatesError}</p>}
-          </div>
-        )}
-
-        {tab === 'general' && (
-          <div className="settings-section">
-            <div className="sandbox-planned-card">
-              <span className="sandbox-planned-badge">{tr.sandboxPlannedBadge}</span>
-              <h3 className="sandbox-planned-title">{tr.sandbox}</h3>
-              <p className="field-hint">{tr.sandboxPlannedDesc}</p>
-            </div>
           </div>
         )}
 

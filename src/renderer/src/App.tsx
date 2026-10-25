@@ -51,7 +51,6 @@ export default function App(): React.JSX.Element {
     setAvailableCommands,
     setConfigOptions,
     setWorkingDirectory,
-    setSandboxEnabled,
     startAiMessage,
     appendChunk,
     finalizeAiMessage,
@@ -602,7 +601,6 @@ export default function App(): React.JSX.Element {
         const cfg = cfgRaw as AppConfig
         setConfig(cfg)
         setWorkingDirectory(cfg.workingDirectory || '')
-        setSandboxEnabled(cfg.sandboxEnabled)
 
         // Resolve acpPath: prefer config, fall back to auto-detected vibe-acp
         const acpPath = cfg.acpPath || setupStatus.vibAcpPath || null

@@ -151,14 +151,6 @@ export interface AppConfig {
   version: string
   language: 'auto' | 'en' | 'pl' | 'fr' | 'es' | 'de' | 'it'
   theme: ThemeMode
-  sandboxEnabled: boolean
-  sandbox: {
-    enabled: boolean
-    network: 'none' | 'whitelist' | 'unrestricted'
-    whitelistDomains: string[]
-    timeoutSeconds: number
-    memoryLimitMb: number
-  }
   acpPath: string
   workingDirectory: string
   recentFolders: string[]
@@ -273,14 +265,6 @@ export const defaultConfig: AppConfig = {
   version: '0.3.0',
   language: 'auto',
   theme: 'auto',
-  sandboxEnabled: false,
-  sandbox: {
-    enabled: false,
-    network: 'none',
-    whitelistDomains: [],
-    timeoutSeconds: 300,
-    memoryLimitMb: 512
-  },
   acpPath: '',
   workingDirectory: '',
   recentFolders: [],
