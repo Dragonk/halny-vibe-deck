@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
 import type { AcpHistoryMessage } from './store'
-import { useTranslation, t } from './i18n'
+import { useTranslation, t, resolveLanguage } from './i18n'
 import type { AppConfig, ConfigOption, ToolCallDiff } from './types'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
@@ -11,6 +11,7 @@ import StatsView from './components/StatsView'
 import HistoryView from './components/HistoryView'
 import SetupView from './components/SetupView'
 import Dock from './components/Dock'
+import { isWebMode } from './webBridge'
 
 interface SetupStatus {
   vibAcpFound: boolean
@@ -76,6 +77,17 @@ export default function App(): React.JSX.Element {
   } = useStore()
 
   const tr = useTranslation(config.language)
+
+  // v0.7.2: in web mode remember the resolved UI language so the pre-auth
+  // login page can greet the user in their language on the next visit.
+  useEffect(() => {
+    if (!isWebMode()) return
+    try {
+      localStorage.setItem('nexusLang', resolveLanguage(config.language))
+    } catch {
+      /* private mode: storage unavailable */
+    }
+  }, [config.language])
 
   // Per-session streaming state: localSessionId → streaming info
   const streamingState = useRef<Map<string, StreamingState>>(new Map())

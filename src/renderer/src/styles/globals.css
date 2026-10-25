@@ -5666,7 +5666,14 @@ code {
 .session-item { -webkit-touch-callout: none; }
 
 @media (max-width: 768px) {
+    /* ===== v0.7.2: mobile refinements (PWA / serve mode) ===== */
+    /* dvh: the URL bar must not eat the input card on mobile browsers */
+    .app-root { height: 100dvh; }
+
     .header-menu-btn { display: flex; }
+    /* the text does not fit next to the brand on a narrow bar; the dot stays */
+    .activity-text { display: none; }
+
     .sidebar {
         position: fixed;
         top: 40px;
@@ -5696,4 +5703,66 @@ code {
         overflow: hidden;
         text-overflow: ellipsis;
     }
+
+    /* chat column: tighter rhythm on small screens */
+    .chat-inner { padding: 14px 8px 4px; }
+    .message-list { gap: 20px; }
+
+    /* input card: safe-area aware, no iOS focus zoom (16px inputs) */
+    .input-card-wrap {
+        padding: 6px 8px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+    }
+    .input-card-editor {
+        font-size: 16px;
+        padding: 10px 12px 6px;
+    }
+    .input-card-toolbar {
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 4px 6px 6px;
+    }
+    .input-card-left,
+    .input-card-right { flex-wrap: wrap; }
+    .ic-folder-name { max-width: 96px; }
+    .ic-btn { width: 32px; height: 32px; }
+    .ic-send-btn,
+    .ic-stop-btn { width: 36px; height: 36px; }
+
+    /* chips: value only (the label is in the title tooltip) */
+    .ic-chip { max-width: 130px; padding: 3px 8px; font-size: 10px; }
+    .ic-chip-label { display: none; }
+    .ic-chip-dropdown {
+        min-width: min(240px, 86vw);
+        max-width: min(360px, 92vw);
+        max-height: 40vh;
+        overflow-y: auto;
+    }
+    /* chips wrap onto their own row on narrow screens: anchor each
+       dropdown so it stays inside the viewport (model/mode from the left,
+       thinking from the right edge) */
+    .input-card-right .ic-chip-wrap:nth-child(1) .ic-chip-dropdown {
+        left: 0;
+        right: auto;
+    }
+    .input-card-right .ic-chip-wrap:nth-child(2) .ic-chip-dropdown,
+    .input-card-right .ic-chip-wrap:nth-child(3) .ic-chip-dropdown {
+        left: auto;
+        right: 0;
+    }
+    .folder-picker-dropdown {
+        max-width: 92vw;
+        max-height: 40vh;
+        overflow-y: auto;
+    }
+    .input-picker-dropdown {
+        max-width: 92vw;
+        max-height: 40vh;
+        overflow-y: auto;
+    }
+
+    /* usage bar: compact */
+    .usage-bar { gap: 8px; padding: 2px 6px 6px; font-size: 10px; }
+    .usage-context { min-width: 0; }
+    .usage-context-track { width: 56px; }
 }

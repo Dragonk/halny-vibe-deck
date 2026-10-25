@@ -435,4 +435,10 @@ export const fr = {
   remoteSave: 'Enregistrer la connexion',
   remoteNoConnections: 'Aucune connexion distante.',
   remoteInstallOk: 'vibe-acp installé avec succès.',
+  usageContextTooltip: 'Contexte : {{used}} / {{total}} tokens',
+  usageCacheTooltip: 'Cache : {{cached}} sur {{total}} tokens d\'entrée',
+  usagePromptTooltip: 'Tokens d\'entrée',
+  usageCompletionTooltip: 'Tokens de sortie',
+  usageTpsTooltip: 'Tokens par seconde',
+  usageCostTooltip: 'Coût de la session : ${{cost}}',
 }

@@ -27,6 +27,12 @@ function getDeviceLanguage(): Exclude<Language, 'auto'> {
   return 'en'
 }
 
+/** Resolved UI language for a config value ('auto' -> device language). */
+export function resolveLanguage(language: Language): Exclude<Language, 'auto'> {
+  if (language === 'auto') return getDeviceLanguage()
+  return translations[language] ? language : 'en'
+}
+
 export function useTranslation(language: Language) {
   return useMemo(() => {
     if (language === 'auto') {

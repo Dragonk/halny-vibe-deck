@@ -164,28 +164,101 @@ export async function regenerateCertificate(serve: ServeConfig): Promise<{ certP
 
 // ---------- login page ----------
 
-function loginPageHtml(): string {
+/**
+ * Login page strings per supported language (the same set the app UI
+ * translates). The page is served before authentication, so the language
+ * cannot come from the app config: the server picks the best match from
+ * the Accept-Language header and renders translated HTML directly. The
+ * client script refines the choice from localStorage (language remembered
+ * from the previous logged-in session) and navigator.languages.
+ */
+const LOGIN_LANGS: Record<string, Record<string, string>> = {
+  en: {
+    sub: "Sign in to access the hosted instance.",
+    user: "Username", pass: "Password", login: "Sign in",
+    invalid: "Invalid username or password.",
+    tooMany: "Too many attempts - try again later.",
+    conn: "Connection error.",
+  },
+  pl: {
+    sub: "Zaloguj si\u0119, aby uzyska\u0107 dost\u0119p do hostowanej instancji.",
+    user: "Login", pass: "Has\u0142o", login: "Zaloguj si\u0119",
+    invalid: "Nieprawid\u0142owy login lub has\u0142o.",
+    tooMany: "Zbyt wiele pr\u00f3b - spr\u00f3buj ponownie p\u00f3\u017aniej.",
+    conn: "B\u0142\u0105d po\u0142\u0105czenia.",
+  },
+  fr: {
+    sub: "Connectez-vous pour acc\u00e9der \u00e0 l'instance h\u00e9berg\u00e9e.",
+    user: "Identifiant", pass: "Mot de passe", login: "Se connecter",
+    invalid: "Identifiant ou mot de passe incorrect.",
+    tooMany: "Trop de tentatives - r\u00e9essayez plus tard.",
+    conn: "Erreur de connexion.",
+  },
+  es: {
+    sub: "Inicia sesi\u00f3n para acceder a la instancia alojada.",
+    user: "Usuario", pass: "Contrase\u00f1a", login: "Iniciar sesi\u00f3n",
+    invalid: "Usuario o contrase\u00f1a incorrectos.",
+    tooMany: "Demasiados intentos - int\u00e9ntalo de nuevo m\u00e1s tarde.",
+    conn: "Error de conexi\u00f3n.",
+  },
+  de: {
+    sub: "Melde dich an, um auf die gehostete Instanz zuzugreifen.",
+    user: "Benutzername", pass: "Passwort", login: "Anmelden",
+    invalid: "Ung\u00fcltiger Benutzername oder falsches Passwort.",
+    tooMany: "Zu viele Versuche - versuche es sp\u00e4ter erneut.",
+    conn: "Verbindungsfehler.",
+  },
+  it: {
+    sub: "Accedi per utilizzare l'istanza ospitata.",
+    user: "Nome utente", pass: "Password", login: "Accedi",
+    invalid: "Nome utente o password non validi.",
+    tooMany: "Troppi tentativi - riprova pi\u00f9 tardi.",
+    conn: "Errore di connessione.",
+  },
+}
+
+/** Best supported-language match from an Accept-Language header value. */
+function pickLoginLang(acceptLanguage: string | undefined): string {
+  const entries = (acceptLanguage ?? "")
+    .split(",")
+    .map((part) => {
+      const [tag = "", q] = part.trim().split(";q=")
+      return { tag: tag.toLowerCase(), q: q ? parseFloat(q) : 1 }
+    })
+    .filter((e) => e.tag)
+    .sort((a, b) => b.q - a.q)
+  for (const e of entries) {
+    const base = e.tag.split("-")[0]
+    if (base in LOGIN_LANGS) return base
+  }
+  return "en"
+}
+
+function loginPageHtml(acceptLanguage: string | undefined): string {
+  const serverLang = pickLoginLang(acceptLanguage)
+  const L = LOGIN_LANGS[serverLang] ?? LOGIN_LANGS.en
   return `<!doctype html>
-<html lang="en">
+<html lang="${serverLang}">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mistral Vibe Nexus</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    background:#111115; color:#e8e8ef; font-family:'Segoe UI',system-ui,sans-serif; }
-  .card { width:340px; padding:36px 34px; background:#1a1a22; border:1px solid #2a2a36;
+  body { margin:0; min-height:100vh; min-height:100dvh; display:flex; align-items:center; justify-content:center;
+    background:#111115; color:#e8e8ef; font-family:'Segoe UI',system-ui,sans-serif;
+    padding:16px; padding-left:max(16px, env(safe-area-inset-left)); padding-right:max(16px, env(safe-area-inset-right)); }
+  .card { width:min(340px, 100%); padding:36px 34px; background:#1a1a22; border:1px solid #2a2a36;
     border-radius:14px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
   h1 { margin:0 0 6px; font-size:19px; font-weight:700; }
   .sub { margin:0 0 24px; color:#8a8a98; font-size:12.5px; line-height:1.5; }
   label { display:block; margin:14px 0 6px; font-size:12px; color:#a0a0b0; }
   input { width:100%; padding:10px 12px; background:#111115; border:1px solid #2a2a36;
-    border-radius:8px; color:#e8e8ef; font-size:14px; outline:none; }
+    border-radius:8px; color:#e8e8ef; font-size:16px; outline:none; }
   input:focus { border-color:#5b6cff; }
   button { margin-top:22px; width:100%; padding:11px; background:#5b6cff; color:#fff;
-    border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
+    border:none; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; }
   button:hover { background:#6d7cff; }
   button:disabled { opacity:.6; cursor:default; }
   .err { margin-top:14px; color:#ff6b6b; font-size:12.5px; min-height:16px; }
@@ -196,43 +269,60 @@ function loginPageHtml(): string {
 <div class="card">
   <div class="lock">&#128274;</div>
   <h1>Mistral Vibe Nexus</h1>
-  <div class="sub">Sign in to access the hosted instance. / Zaloguj si&ecirc;, aby uzyska&cacute; dost&eogon;p do hostowanej instancji.</div>
+  <div class="sub">${L.sub}</div>
   <form id="f" autocomplete="off">
-    <label for="u" data-i18n="user">Username</label>
+    <label for="u">${L.user}</label>
     <input id="u" name="username" type="text" autocomplete="username" required>
-    <label for="p" data-i18n="pass">Password</label>
+    <label for="p">${L.pass}</label>
     <input id="p" name="password" type="password" autocomplete="current-password" required>
-    <button id="b" type="submit" data-i18n="login">Sign in</button>
+    <button id="b" type="submit">${L.login}</button>
     <div class="err" id="e"></div>
   </form>
 </div>
 <script>
   (function(){
-    var pl = (navigator.language||'').toLowerCase().indexOf('pl')===0;
-    if (pl) {
-      document.querySelector('[data-i18n=user]').textContent='Login';
-      document.querySelector('[data-i18n=pass]').textContent='Has\u0142o';
-      document.querySelector('[data-i18n=login]').textContent='Zaloguj si\u0119';
+    var SERVER = ${JSON.stringify(serverLang)};
+    var DICT = ${JSON.stringify(LOGIN_LANGS)};
+    var want = null;
+    try { want = localStorage.getItem('nexusLang'); } catch (err) {}
+    if (!want || !DICT[want]) {
+      var ls = (navigator.languages || [navigator.language || 'en']);
+      for (var i = 0; i < ls.length; i++) {
+        var base = String(ls[i]).toLowerCase().split('-')[0];
+        if (DICT[base]) { want = base; break; }
+      }
+    }
+    var CUR = (want && DICT[want]) ? want : SERVER;
+    if (CUR !== SERVER) {
+      var d = DICT[CUR];
+      document.documentElement.lang = CUR;
+      document.querySelector('.sub').textContent = d.sub;
+      document.querySelectorAll('label')[0].textContent = d.user;
+      document.querySelectorAll('label')[1].textContent = d.pass;
+      document.getElementById('b').textContent = d.login;
     }
     document.getElementById('f').addEventListener('submit', function(ev){
       ev.preventDefault();
       var b=document.getElementById('b'); b.disabled=true;
+      var d = DICT[CUR];
       fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({username:document.getElementById('u').value,
         password:document.getElementById('p').value})})
       .then(function(r){
         if (r.ok) { location.href='/'; return; }
         b.disabled=false;
-        document.getElementById('e').textContent = pl ?
-          'Nieprawid\u0142owy login lub has\u0142o.' : 'Invalid username or password.';
+        document.getElementById('e').textContent =
+          r.status === 429 ? d.tooMany : d.invalid;
       }).catch(function(){ b.disabled=false;
-        document.getElementById('e').textContent='Connection error.'; });
+        document.getElementById('e').textContent=d.conn; });
     });
   })();
 </script>
 </body>
 </html>`
 }
+
+// ---------- static renderer ----------
 
 // ---------- static renderer ----------
 
@@ -417,7 +507,7 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
         return
       }
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" })
-      res.end(loginPageHtml())
+      res.end(loginPageHtml(req.headers["accept-language"]))
       return
     }
 
