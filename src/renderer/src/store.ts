@@ -16,6 +16,7 @@ import type {
   PreviewTab,
 } from "./types";
 import { defaultConfig } from "./types";
+import type { RemoteConnection, RemoteStatus, RemoteSessionInfo } from "./types";
 
 /** ACP history message (from SessionHistory event) */
 export interface AcpHistoryToolCall {
@@ -121,6 +122,9 @@ interface AppStore {
   dockOpen: boolean;
   setDockOpen: (v: boolean) => void;
   ensureDockOpen: () => void;
+  /** v0.6.0: mobile (narrow viewport) sidebar drawer */
+  mobileSidebarOpen: boolean;
+  setMobileSidebarOpen: (v: boolean) => void;
   dockWidth: number;
   setDockWidth: (w: number) => void;
   dockTab: DockTabKind;
@@ -186,6 +190,21 @@ interface AppStore {
   loadAcpSession: (localSessionId: string) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
+  // ---- v0.6.0: remote SSH connections ----
+  /** Currently active remote ACP (connection id + the cwd it was started with) */
+  remoteActive: { id: string; cwd: string } | null;
+  setRemoteActive: (v: { id: string; cwd: string } | null) => void;
+  /** Latest reachability status per connection id */
+  remoteStatuses: Record<string, RemoteStatus>;
+  /** Switch back to the local ACP (restarts the agent process locally). */
+  ensureLocalAcp: () => Promise<void>;
+  /** Poll status + session lists for all enabled remote connections. */
+  refreshRemoteData: () => Promise<void>;
+  startRemoteSession: (remoteId: string, cwd: string) => Promise<void>;
+  loadRemoteSession: (remoteId: string, info: RemoteSessionInfo) => Promise<void>;
+  importRemoteSessions: (remoteId: string, infos: RemoteSessionInfo[]) => void;
+  /** True when the given connection is the one the ACP process is bound to. */
+  isRemoteConnected: (remoteId: string) => boolean;
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -254,6 +273,8 @@ export const useStore = create<AppStore>((set, get) => ({
   streamingMessage: null,
   streamingSessions: [],
   busySessions: [],
+  mobileSidebarOpen: false,
+  setMobileSidebarOpen: (v) => set({ mobileSidebarOpen: v }),
   markSessionBusy: (sessionId) =>
     set((s) => ({
       busySessions: s.busySessions.includes(sessionId) ? s.busySessions : [...s.busySessions, sessionId],
@@ -883,10 +904,22 @@ export const useStore = create<AppStore>((set, get) => ({
     try {
       const cfg = get().config;
       const cwd = session.workingDirectory || cfg.workingDirectory || ".";
+      const wantRemoteId = session.remoteId ?? null;
       const running = await window.api.acp.isRunning();
-      if (!running) {
-        if (!cfg.acpPath) throw new Error("ACP path not configured. Go to Settings.");
-        await window.api.acp.start(cfg.acpPath, cwd);
+      const curRemote = running ? await window.api.acp.isRemote() : false;
+      const needStart =
+        !running ||
+        Boolean(wantRemoteId) !== curRemote ||
+        (wantRemoteId !== null && get().remoteActive?.id !== wantRemoteId);
+      if (needStart) {
+        if (wantRemoteId) {
+          set({ remoteActive: { id: wantRemoteId, cwd } });
+          await window.api.acp.start(cfg.acpPath || "vibe-acp", cwd, wantRemoteId);
+        } else {
+          if (!cfg.acpPath) throw new Error("ACP path not configured. Go to Settings.");
+          set({ remoteActive: null });
+          await window.api.acp.start(cfg.acpPath, cwd);
+        }
       }
       // Real resume: session/load replays the full history via events
       await window.api.acp.loadSession(acpSessionId, cwd);
@@ -1056,6 +1089,7 @@ export const useStore = create<AppStore>((set, get) => ({
         const cfg = get().config;
         if (!cfg.acpPath) return;
         const cwd = session.workingDirectory || cfg.workingDirectory || ".";
+        set({ remoteActive: null });
         await window.api.acp.start(cfg.acpPath, cwd);
       }
 
@@ -1079,5 +1113,124 @@ export const useStore = create<AppStore>((set, get) => ({
     } catch (err) {
       console.error("Failed to fetch context summary:", err);
     }
+  },
+
+  // ---- v0.6.0: remote SSH connections ----
+  remoteActive: null,
+  setRemoteActive: (v) => set({ remoteActive: v }),
+  remoteStatuses: {},
+  isRemoteConnected: (remoteId) => get().remoteActive?.id === remoteId,
+
+  ensureLocalAcp: async () => {
+    const running = await window.api.acp.isRunning();
+    const curRemote = running ? await window.api.acp.isRemote() : false;
+    if (running && !curRemote) return;
+    const cfg = get().config;
+    if (!cfg.acpPath) throw new Error("ACP path not configured. Go to Settings.");
+    set({ remoteActive: null });
+    get().setAcpStatus("connecting");
+    await window.api.acp.start(cfg.acpPath, cfg.workingDirectory || ".");
+  },
+
+  refreshRemoteData: async () => {
+    const conns = (get().config.remoteConnections ?? []).filter((c) => c.enabled);
+    if (conns.length === 0) {
+      if (Object.keys(get().remoteStatuses).length > 0) set({ remoteStatuses: {} });
+      return;
+    }
+    try {
+      const statuses = (await window.api.remote.statusNow(
+        conns.map((c) => c.id),
+      )) as Record<string, RemoteStatus>;
+      set({ remoteStatuses: statuses });
+      for (const c of conns) {
+        if (!statuses[c.id]?.ok) continue;
+        try {
+          const infos = (await window.api.remote.sessions(c.id)) as RemoteSessionInfo[];
+          get().importRemoteSessions(c.id, infos);
+        } catch (err) {
+          console.error("[store] remote sessions failed:", c.name, err);
+        }
+      }
+    } catch (err) {
+      console.error("[store] remote status failed:", err);
+    }
+  },
+
+  startRemoteSession: async (remoteId, cwd) => {
+    const conn = (get().config.remoteConnections ?? []).find(
+      (c: RemoteConnection) => c.id === remoteId,
+    );
+    if (!conn) return;
+    set({ remoteActive: { id: remoteId, cwd }, pendingNewSession: false });
+    get().setAcpStatus("connecting");
+    get().setAcpError(null);
+    try {
+      const cfg = get().config;
+      await window.api.acp.start(cfg.acpPath || "vibe-acp", cwd, remoteId);
+    } catch (err) {
+      set({ remoteActive: null });
+      get().setAcpStatus("error");
+      get().setAcpError((err as Error).message);
+      return;
+    }
+    const session = get().addSession(cwd);
+    get().updateSession(session.id, { remoteId });
+    get().setPendingNewSession(true);
+    get().setCurrentView("chat");
+  },
+
+  loadRemoteSession: async (remoteId, info) => {
+    let local = get().sessions.find(
+      (s) => s.remoteId === remoteId && s.acpSessionId === info.sessionId,
+    );
+    if (!local) {
+      const session = get().addSession(info.cwd || ".");
+      get().updateSession(session.id, {
+        remoteId,
+        acpSessionId: info.sessionId,
+        name: info.title || info.sessionId.slice(0, 16) + "…",
+        updatedAt: info.updatedAt ? new Date(info.updatedAt).getTime() : undefined,
+      });
+      local = get().sessions.find((s) => s.id === session.id)!;
+    }
+    set({
+      pendingNewSession: false,
+      remoteActive: { id: remoteId, cwd: info.cwd || local.workingDirectory || "." },
+    });
+    get().setCurrentSessionId(local.id);
+    get().setCurrentView("chat");
+    await get().loadAcpSession(local.id);
+  },
+
+  importRemoteSessions: (remoteId, infos) => {
+    set((s) => {
+      const now = Date.now();
+      const sessions = [...s.sessions];
+      for (const a of infos) {
+        if (!a.sessionId) continue;
+        const ts = a.updatedAt ? new Date(a.updatedAt).getTime() : now;
+        const idx = sessions.findIndex(
+          (x) => x.acpSessionId === a.sessionId && x.remoteId === remoteId,
+        );
+        if (idx >= 0) {
+          sessions[idx] = { ...sessions[idx], updatedAt: Math.max(sessions[idx].updatedAt ?? 0, ts) };
+        } else {
+          sessions.push({
+            id: uuid(),
+            name: a.title || a.sessionId.slice(0, 16) + "…",
+            acpSessionId: a.sessionId,
+            messages: [],
+            createdAt: ts,
+            lastActive: ts,
+            updatedAt: ts,
+            workingDirectory: a.cwd || undefined,
+            remoteId,
+          });
+        }
+      }
+      sessions.sort((a, b) => (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive));
+      return { sessions };
+    });
   },
 }));

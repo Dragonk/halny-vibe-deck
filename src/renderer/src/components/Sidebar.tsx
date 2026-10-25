@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
-import type { Session } from '../types'
+import type { Session, RemoteConnection } from '../types'
 
 const MIN_SIDEBAR_WIDTH = 120
 const DEFAULT_SIDEBAR_WIDTH = 220
@@ -42,6 +42,10 @@ export default function Sidebar(): React.JSX.Element {
     toggleProjectCollapse,
     hideSession,
     hideProject,
+    remoteStatuses,
+    startRemoteSession,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
   } = useStore()
   const tr = useTranslation(config.language)
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
@@ -56,6 +60,47 @@ export default function Sidebar(): React.JSX.Element {
     e.stopPropagation()
     setCtxMenu({ x: e.clientX, y: e.clientY, target })
   }, [])
+
+  // Long-press (touch) opens the same context menu as right-click (v0.6.0).
+  const longPressTimer = useRef<number | null>(null)
+  const suppressClick = useRef(false)
+  const clearLongPress = useCallback((): void => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }, [])
+
+  // v0.6.0: called on touchMove/touchEnd. When the long-press already fired,
+  // prevent the default so Chromium does NOT synthesize mousedown/mouseup/click
+  // after the finger is lifted - those synthesized events would immediately
+  // close the context menu the long-press just opened.
+  const endLongPress = useCallback((e: React.TouchEvent): void => {
+    clearLongPress()
+    if (suppressClick.current) e.preventDefault()
+  }, [clearLongPress])
+  const sessionTarget = (session: Session): DeleteTarget => ({
+    kind: 'session',
+    key: session.acpSessionId ?? session.id,
+    label: session.name,
+    wd: session.workingDirectory ?? '',
+    count: 1,
+  })
+  const startLongPress = useCallback(
+    (e: React.TouchEvent, target: DeleteTarget): void => {
+      const t = e.touches[0]
+      if (!t) return
+      const x = t.clientX
+      const y = t.clientY
+      clearLongPress()
+      longPressTimer.current = window.setTimeout(() => {
+        longPressTimer.current = null
+        suppressClick.current = true
+        setCtxMenu({ x, y, target })
+      }, 550)
+    },
+    [clearLongPress],
+  )
 
   // Close the context menu on any click outside of it
   useEffect(() => {
@@ -105,6 +150,11 @@ export default function Sidebar(): React.JSX.Element {
   }, [isResizing])
 
   const handleNewSession = (): void => {
+    setMobileSidebarOpen(false)
+    // Leaving remote mode: make sure the local agent process is back
+    if (useStore.getState().remoteActive) {
+      void useStore.getState().ensureLocalAcp().catch(console.error)
+    }
     // Reuse an existing empty draft (e.g. the priming session) if any
     const emptyDraft = sessions.find(
       (s) =>
@@ -129,8 +179,13 @@ export default function Sidebar(): React.JSX.Element {
     setCurrentSessionId(id)
     setPendingNewSession(false)
     setCurrentView('chat')
+    setMobileSidebarOpen(false)
 
     const session = sessions.find((s) => s.id === id)
+    // Selecting a local session while a remote ACP is active: switch back.
+    if (session && !session.remoteId && useStore.getState().remoteActive) {
+      void useStore.getState().ensureLocalAcp().catch(console.error)
+    }
     if (session?.acpSessionId && session.messages.length === 0 && !session.loading) {
       // Real resume via ACP session/load (replays the full history)
       await loadAcpSession(id)
@@ -158,8 +213,13 @@ export default function Sidebar(): React.JSX.Element {
       ? visibleSessions.slice(0, config.sidebarSessionsLimit)
       : visibleSessions
 
+  const remoteConns: RemoteConnection[] = (config.remoteConnections ?? []).filter(
+    (c) => c.enabled,
+  )
+  const localDisplayed = displayedSessions.filter((s) => !s.remoteId)
+
   const groups = new Map<string, ProjectGroup>()
-  for (const session of displayedSessions) {
+  for (const session of localDisplayed) {
     const wd = session.workingDirectory ?? ''
     const key = wd || '__none__'
     if (!groups.has(key)) {
@@ -196,18 +256,19 @@ export default function Sidebar(): React.JSX.Element {
       <button
         key={session.id}
         className={`session-item ${isActive ? 'active' : ''}`}
-        onClick={() => handleSelectSession(session.id)}
+        onClick={() => {
+          if (suppressClick.current) {
+            suppressClick.current = false
+            return
+          }
+          handleSelectSession(session.id)
+        }}
         onMouseEnter={() => setHoveredSessionId(session.id)}
         onMouseLeave={() => setHoveredSessionId(null)}
-        onContextMenu={(e) =>
-          openCtx(e, {
-            kind: 'session',
-            key: session.acpSessionId ?? session.id,
-            label: session.name,
-            wd: session.workingDirectory ?? '',
-            count: 1,
-          })
-        }
+        onTouchStart={(e) => startLongPress(e, sessionTarget(session))}
+        onTouchMove={endLongPress}
+        onTouchEnd={endLongPress}
+        onContextMenu={(e) => openCtx(e, sessionTarget(session))}
       >
         <div className="session-item-content">
           <div className="session-item-row">
@@ -225,6 +286,7 @@ export default function Sidebar(): React.JSX.Element {
               </svg>
             )}
             {session.loading && <span className="session-loading-dot">⟳</span>}
+            {session.remoteId && <span className="remote-badge-mini" title="SSH">📍</span>}
             <span className="session-name">{session.name}</span>
           </div>
           <div className="session-item-meta">
@@ -250,7 +312,7 @@ export default function Sidebar(): React.JSX.Element {
   return (
     <aside
       ref={sidebarRef}
-      className={`sidebar ${isResizing ? 'sidebar-resizing' : ''}`}
+      className={`sidebar ${isResizing ? 'sidebar-resizing' : ''} ${mobileSidebarOpen ? 'mobile-open' : ''}`}
       style={{ width: sidebarWidth }}
     >
       <div className="sidebar-header">
@@ -294,6 +356,53 @@ export default function Sidebar(): React.JSX.Element {
                 <span className="project-count">{group.sessions.length}</span>
               </button>
               {!collapsed && group.sessions.map(renderSession)}
+            </div>
+          )
+        })}
+        {remoteConns.map((conn) => {
+          const collapsed = collapsedProjects.includes('remote:' + conn.id)
+          const st = remoteStatuses[conn.id]
+          const connSessions = displayedSessions.filter((s) => s.remoteId === conn.id)
+          return (
+            <div key={'remote-' + conn.id} className="project-group remote-project-group">
+              <button
+                className="project-group-header"
+                onClick={() => toggleProjectCollapse('remote:' + conn.id)}
+                title={conn.sshCmd}
+              >
+                <span className={`project-chevron ${collapsed ? '' : 'open'}`}>▸</span>
+                <span className="remote-badge">📍</span>
+                <span className="project-name">{conn.name}</span>
+                <span
+                  className={`remote-dot ${st?.ok ? 'ok' : 'down'}`}
+                  title={st?.ok ? tr.remoteConnUp : tr.remoteConnDown}
+                />
+              </button>
+              {!collapsed && (
+                <>
+                  {conn.locations.map((loc) => (
+                    <button
+                      key={conn.id + '-loc-' + loc}
+                      className="session-item remote-location-item"
+                      title={loc}
+                      onClick={() => {
+                        setMobileSidebarOpen(false)
+                        void startRemoteSession(conn.id, loc)
+                      }}
+                    >
+                      <div className="session-item-content">
+                        <div className="session-item-row">
+                          <span className="remote-loc-icon">📁</span>
+                          <span className="session-name">
+                            {loc.split(/[/\\]/).filter(Boolean).pop() || loc}
+                          </span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                  {connSessions.map((s) => renderSession(s))}
+                </>
+              )}
             </div>
           )
         })}

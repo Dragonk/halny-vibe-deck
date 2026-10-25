@@ -49,6 +49,53 @@ export interface GitCommit {
 /** Config scope for vibe settings: global (~/.vibe) or project (<cwd>/.vibe). */
 export type VibeScope = 'global' | 'project'
 
+/** Serve (HTTPS web hosting) status */
+export interface ServeStatus {
+  running: boolean
+  port: number
+  url: string
+}
+
+/** Serve settings editable from the local UI (credentials excluded) */
+export interface ServePatch {
+  enabled?: boolean
+  port?: number
+  certPath?: string
+  keyPath?: string
+}
+
+/** SSH remote connection (draft or saved) */
+export interface RemoteConnection {
+  id: string
+  name: string
+  enabled: boolean
+  sshCmd: string
+  locations: string[]
+  installCommand: string
+}
+
+export interface RemoteTestResult {
+  reachable: boolean
+  acpInstalled: boolean
+  acpPath: string | null
+  version: string | null
+  error: string | null
+}
+
+export interface RemoteSessionInfo {
+  sessionId: string
+  title: string
+  cwd: string
+  updatedAt: string
+}
+
+export interface RemoteStatus {
+  id: string
+  ok: boolean
+  checkedAt: number
+  latencyMs: number | null
+}
+
 const api = {
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
@@ -65,7 +112,8 @@ const api = {
   },
   acp: {
     init: (acpPath: string): Promise<void> => ipcRenderer.invoke('acp:init', acpPath),
-    start: (acpPath: string, cwd: string): Promise<void> => ipcRenderer.invoke('acp:start', acpPath, cwd),
+    start: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:start', acpPath, cwd, remoteId ?? undefined),
     newSession: (cwd: string): Promise<void> => ipcRenderer.invoke('acp:new-session', cwd),
     loadSession: (sessionId: string, cwd: string): Promise<void> =>
       ipcRenderer.invoke('acp:load-session', sessionId, cwd),
@@ -81,6 +129,7 @@ const api = {
       ipcRenderer.invoke('acp:answer-question', requestId, answer),
     stop: (): Promise<void> => ipcRenderer.invoke('acp:stop'),
     isRunning: (): Promise<boolean> => ipcRenderer.invoke('acp:is-running'),
+    isRemote: (): Promise<boolean> => ipcRenderer.invoke('acp:is-remote'),
     getContextSummary: (messages: Array<{ role: string; content: string }>): Promise<string> =>
       ipcRenderer.invoke('acp:get-context-summary', messages),
     onEvent: (cb: (event: AcpEvent) => void): (() => void) => {
@@ -196,6 +245,25 @@ const api = {
       ipcRenderer.invoke('vibe:delete-skill-file', name, relPath, scope ?? 'global', cwd ?? ''),
     importSkill: (src: string, isZip: boolean, scope?: VibeScope, cwd?: string): Promise<string | null> =>
       ipcRenderer.invoke('vibe:import-skill', src, isZip, scope ?? 'global', cwd ?? '')
+  },
+  serve: {
+    status: (): Promise<ServeStatus> => ipcRenderer.invoke('serve:status'),
+    start: (): Promise<ServeStatus> => ipcRenderer.invoke('serve:start'),
+    stop: (): Promise<ServeStatus> => ipcRenderer.invoke('serve:stop'),
+    saveConfig: (patch: ServePatch): Promise<ServeStatus> => ipcRenderer.invoke('serve:save-config', patch),
+    setCredentials: (username: string, password: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('serve:set-credentials', username, password),
+    regenCert: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('serve:regen-cert')
+  },
+  remote: {
+    test: (draft: RemoteConnection): Promise<RemoteTestResult> => ipcRenderer.invoke('remote:test', draft),
+    installAcp: (id: string): Promise<{ ok: boolean; error: string | null; log: string }> =>
+      ipcRenderer.invoke('remote:install-acp', id),
+    sessions: (id: string): Promise<RemoteSessionInfo[]> => ipcRenderer.invoke('remote:sessions', id),
+    statusNow: (ids?: string[]): Promise<Record<string, RemoteStatus>> =>
+      ipcRenderer.invoke('remote:status-now', ids ?? null),
+    save: (conn: RemoteConnection): Promise<RemoteConnection> => ipcRenderer.invoke('remote:save', conn),
+    delete: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('remote:delete', id)
   }
 }
 

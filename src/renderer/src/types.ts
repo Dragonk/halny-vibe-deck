@@ -1,3 +1,7 @@
+import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus } from '../../preload/index'
+
+export type { RemoteConnection, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus }
+
 export interface FileChange {
   path: string
   action: 'added' | 'modified' | 'deleted'
@@ -64,6 +68,8 @@ export interface Session {
   lastModel?: string
   lastMode?: string
   lastThinking?: string
+  /** set when this session runs on a remote SSH connection */
+  remoteId?: string
 }
 
 export type AppView = 'chat' | 'settings' | 'stats' | 'history'
@@ -126,6 +132,17 @@ export function cacheHitRatio(u: UsageStats): number | null {
   return Math.min(1, cached / prompt)
 }
 
+/** Serve (HTTPS web hosting) section of the config */
+export interface ServeSection {
+  enabled: boolean
+  port: number
+  username: string
+  salt: string
+  hash: string
+  certPath: string
+  keyPath: string
+}
+
 export interface AppConfig {
   version: string
   language: 'auto' | 'en' | 'pl' | 'fr' | 'es' | 'de' | 'it'
@@ -155,6 +172,8 @@ export interface AppConfig {
   collapsedProjects: string[]
   hiddenSessions: string[]
   hiddenProjects: string[]
+  serve: ServeSection
+  remoteConnections: RemoteConnection[]
 }
 
 export interface AgentConfig {
@@ -273,5 +292,7 @@ export const defaultConfig: AppConfig = {
   dockWidth: 400,
   collapsedProjects: [],
   hiddenSessions: [],
-  hiddenProjects: []
+  hiddenProjects: [],
+  serve: { enabled: false, port: 8765, username: '', salt: '', hash: '', certPath: '', keyPath: '' },
+  remoteConnections: []
 }

@@ -38,6 +38,19 @@ import {
   VibeAgentFileConfig,
 } from "./vibeConfig";
 import { gitStatus, gitLog, gitDiffFile, gitDiffAll, gitStage, gitUnstage, gitCommit, gitPush } from "./git";
+import { randomUUID } from "crypto";
+import { broadcastToWeb } from "./bus";
+import { installIpcCapture } from "./ipc-registry";
+import {
+  startServe,
+  stopServe,
+  serveStatus,
+  regenerateCertificate,
+  makeSalt,
+  hashPassword,
+} from "./serve";
+import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus } from "./remote";
+import type { ServeConfig, RemoteConnection } from "./config";
 
 const MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -96,6 +109,16 @@ function createWindow(): BrowserWindow {
 
   acpManager.setWindow(win);
 
+  // v0.6.0: mirror all renderer-bound events to web (serve) clients
+  const origSend = win.webContents.send.bind(win.webContents);
+  ;(win.webContents as unknown as { send: (channel: string, ...args: unknown[]) => void }).send = (
+    channel: string,
+    ...args: unknown[]
+  ) => {
+    origSend(channel, ...args);
+    if (channel !== "acp:event") broadcastToWeb(channel, args);
+  };
+
   // Native context menu for text inputs (copy / cut / paste / select-all)
   win.webContents.on("context-menu", (_e, props) => {
     const { editFlags } = props;
@@ -112,16 +135,36 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+// v0.6.0: CLI flags (--serve, --headless, --port, --user, --password, --cert, --key)
+const argv = process.argv;
+const hasArg = (name: string): boolean => argv.includes("--" + name);
+const argVal = (name: string): string | null => {
+  const i = argv.indexOf("--" + name);
+  if (i < 0 || i + 1 >= argv.length) return null;
+  const v = argv[i + 1];
+  return v && !v.startsWith("--") ? v : null;
+};
+const headless = hasArg("headless");
+const serveFlag = hasArg("serve");
+const cliPort = argVal("port");
+const cliUser = argVal("user");
+const cliPass = argVal("password");
+const cliCert = argVal("cert");
+const cliKey = argVal("key");
+
 app.whenReady().then(() => {
-  const win = createWindow();
+  installIpcCapture();
+  const win: BrowserWindow | null = headless ? null : createWindow();
+  if (!win) acpManager.setWindow(null);
 
   // Window controls
-  ipcMain.handle("window:minimize", () => win.minimize());
+  ipcMain.handle("window:minimize", () => win?.minimize());
   ipcMain.handle("window:maximize", () => {
+    if (!win) return;
     if (win.isMaximized()) win.unmaximize();
     else win.maximize();
   });
-  ipcMain.handle("window:close", () => win.close());
+  ipcMain.handle("window:close", () => win?.close());
 
   // Config
   ipcMain.handle("config:get", () => loadConfig());
@@ -131,6 +174,7 @@ app.whenReady().then(() => {
 
   // Dialogs
   ipcMain.handle("dialog:open-folder", async () => {
+    if (!win) return null;
     const result = await dialog.showOpenDialog(win, {
       properties: ["openDirectory"],
     });
@@ -138,6 +182,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("dialog:open-file", async () => {
+    if (!win) return null;
     const result = await dialog.showOpenDialog(win, {
       properties: ["openFile"],
       filters: [
@@ -158,11 +203,20 @@ app.whenReady().then(() => {
     });
   });
 
-  ipcMain.handle("acp:start", async (_e, acpPath: string, cwd: string) => {
-    await acpManager.start(acpPath).catch((err: Error) => {
-      if (err.message === "ACP stopped") return;
+  ipcMain.handle("acp:start", async (_e, acpPath: string, cwd: string, remoteId?: string) => {
+    let remote: { sshCmd: string } | undefined;
+    if (remoteId) {
+      const cfg = loadConfig();
+      const conn = cfg.remoteConnections.find((c) => c.id === remoteId);
+      if (!conn) throw new Error("Remote connection not found: " + remoteId);
+      remote = { sshCmd: conn.sshCmd };
+    }
+    try {
+      await acpManager.start(acpPath, remote);
+    } catch (err) {
+      if (err instanceof Error && err.message === "ACP stopped") return;
       throw err;
-    });
+    }
     await acpManager.newSession(cwd);
   });
 
@@ -199,6 +253,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("acp:is-running", () => acpManager.isRunning());
+  ipcMain.handle("acp:is-remote", () => acpManager.isRemote());
 
   ipcMain.handle("acp:get-context-summary", async (_e, messages: Array<{ role: string; content: string }>) => {
     return acpManager.getContextSummary(messages);
@@ -373,7 +428,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("setup:install", async () => {
     await installDependencies((message, type) => {
-      win.webContents.send("setup:progress", { message, type });
+      win?.webContents.send("setup:progress", { message, type });
     });
     return checkSetup();
   });
@@ -424,8 +479,138 @@ app.whenReady().then(() => {
       ? importSkillFromZip(src, resolveScopeDir(scope, cwd))
       : importSkillFromFolder(src, resolveScopeDir(scope, cwd)));
 
+  // ---------- v0.6.0: serve (HTTPS web hosting) ----------
+  const rendererDir = (): string => join(__dirname, "..", "renderer");
+  const applyServeSection = (mutate: (serve: ServeConfig) => ServeConfig): void => {
+    const cfg = loadConfig();
+    cfg.serve = mutate({ ...cfg.serve });
+    saveConfig(cfg);
+  };
+
+  ipcMain.handle("serve:status", () => serveStatus());
+  ipcMain.handle("serve:start", async () => {
+    const cfg = loadConfig();
+    await startServe(cfg.serve, rendererDir());
+    return serveStatus();
+  });
+  ipcMain.handle("serve:stop", () => {
+    stopServe();
+    return serveStatus();
+  });
+  ipcMain.handle("serve:save-config", (_e, patch: Partial<ServeConfig>) => {
+    applyServeSection((serve) => ({
+      ...serve,
+      ...patch,
+      username: serve.username,
+      salt: serve.salt,
+      hash: serve.hash,
+    }));
+    return serveStatus();
+  });
+  ipcMain.handle("serve:set-credentials", (_e, username: string, password: string) => {
+    const u = String(username || "").trim();
+    const p = String(password || "");
+    if (u.length < 3) throw new Error("Username must be at least 3 characters");
+    if (p.length < 6) throw new Error("Password must be at least 6 characters");
+    const salt = makeSalt();
+    applyServeSection((serve) => ({ ...serve, username: u, salt, hash: hashPassword(p, salt) }));
+    return { ok: true };
+  });
+  ipcMain.handle("serve:regen-cert", async () => {
+    const cfg = loadConfig();
+    await regenerateCertificate(cfg.serve);
+    if (serveStatus().running) {
+      stopServe();
+      await startServe(loadConfig().serve, rendererDir());
+    }
+    return { ok: true };
+  });
+
+  // ---------- v0.6.0: remote SSH connections ----------
+  ipcMain.handle("remote:test", (_e, draft: RemoteConnection) => testRemoteConnection(draft));
+  ipcMain.handle("remote:install-acp", (_e, id: string) => {
+    const conn = loadConfig().remoteConnections.find((c) => c.id === id);
+    if (!conn) throw new Error("Remote connection not found");
+    return installRemoteAcp(conn);
+  });
+  ipcMain.handle("remote:sessions", (_e, id: string) => {
+    const conn = loadConfig().remoteConnections.find((c) => c.id === id);
+    if (!conn) throw new Error("Remote connection not found");
+    return listRemoteSessions(conn);
+  });
+  ipcMain.handle("remote:status-now", async (_e, ids?: string[]) => {
+    const conns = loadConfig().remoteConnections.filter(
+      (c) => c.enabled && (!ids || ids.includes(c.id)),
+    );
+    const out: Record<string, unknown> = {};
+    for (const c of conns) {
+      out[c.id] = await checkRemoteStatus(c);
+    }
+    return out;
+  });
+  ipcMain.handle("remote:save", (_e, conn: RemoteConnection) => {
+    const cfg = loadConfig();
+    const clean: RemoteConnection = {
+      ...conn,
+      id: conn.id || randomUUID(),
+      name: String(conn.name || "").trim(),
+      sshCmd: String(conn.sshCmd || "").trim(),
+      locations: (conn.locations ?? []).filter((l: string) => l && l.trim()),
+      installCommand: conn.installCommand ?? "",
+    };
+    if (!clean.name || !clean.sshCmd) throw new Error("Name and ssh command are required");
+    const i = cfg.remoteConnections.findIndex((c) => c.id === clean.id);
+    if (i >= 0) cfg.remoteConnections[i] = clean;
+    else cfg.remoteConnections.push(clean);
+    saveConfig(cfg);
+    return clean;
+  });
+  ipcMain.handle("remote:delete", (_e, id: string) => {
+    const cfg = loadConfig();
+    cfg.remoteConnections = cfg.remoteConnections.filter((c) => c.id !== id);
+    saveConfig(cfg);
+    return { ok: true };
+  });
+
+  // ---------- v0.6.0: CLI credentials + serve autostart ----------
+  if (cliUser && cliPass) {
+    const salt = makeSalt();
+    applyServeSection((serve) => ({
+      ...serve,
+      username: cliUser,
+      salt,
+      hash: hashPassword(cliPass, salt),
+    }));
+    console.log("[serve] credentials saved for user:", cliUser);
+  }
+  if (cliCert && cliKey) {
+    applyServeSection((serve) => ({ ...serve, certPath: cliCert, keyPath: cliKey }));
+    console.log("[serve] custom certificate configured:", cliCert);
+  }
+  if (cliPort) {
+    const port = parseInt(cliPort, 10);
+    if (Number.isNaN(port) || port < 1 || port > 65535) {
+      console.error("[serve] invalid port:", cliPort);
+    } else {
+      applyServeSection((serve) => ({ ...serve, port }));
+    }
+  }
+  const cfgAtBoot = loadConfig();
+  if (serveFlag || cfgAtBoot.serve.enabled) {
+    void (async () => {
+      try {
+        await startServe(loadConfig().serve, rendererDir());
+      } catch (err) {
+        console.error(
+          "[serve] failed to start:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+  }
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0 && !headless) createWindow();
   });
 });
 

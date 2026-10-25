@@ -1,0 +1,256 @@
+import type { AppAPI } from '../../preload/index'
+
+/**
+ * Web bridge: when the renderer runs in a browser (serve mode), preload
+ * does not exist. This module rebuilds window.api on top of the /ws
+ * websocket: every method call becomes an RPC invoke that the serve
+ * server dispatches to the same ipcMain handlers.
+ */
+
+interface WsMsg {
+  t: 'invoke' | 'res' | 'ev'
+  id?: string
+  ch?: string
+  args?: unknown[]
+  ok?: boolean
+  value?: unknown
+  error?: string
+}
+
+let ws: WebSocket | null = null
+let nextId = 1
+let wsReady = false
+const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+const eventSubs = new Map<string, Set<(...args: unknown[]) => void>>()
+
+function dispatchEvent(ch: string, args: unknown[]): void {
+  const subs = eventSubs.get(ch)
+  if (!subs) return
+  for (const cb of subs) {
+    try {
+      cb(...args)
+    } catch {
+      /* listener errors must not kill the bridge */
+    }
+  }
+}
+
+export function subscribeWebEvent(ch: string, cb: (...args: unknown[]) => void): () => void {
+  let set = eventSubs.get(ch)
+  if (!set) {
+    set = new Set()
+    eventSubs.set(ch, set)
+  }
+  set.add(cb)
+  return () => {
+    set.delete(cb)
+  }
+}
+
+function invoke(ch: string, args: unknown[]): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    if (!ws || !wsReady) {
+      reject(new Error('Connection to the app server was lost'))
+      return
+    }
+    const id = String(nextId++)
+    pending.set(id, { resolve, reject })
+    ws.send(JSON.stringify({ t: 'invoke', id, ch, args } satisfies WsMsg))
+  })
+}
+
+function connectOnce(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const sock = new WebSocket(`${proto}://${location.host}/ws`)
+    let settled = false
+    sock.onopen = (): void => {
+      ws = sock
+      wsReady = true
+      settled = true
+      resolve()
+    }
+    sock.onerror = (): void => {
+      if (!settled) {
+        settled = true
+        reject(new Error('Cannot connect to the app server websocket'))
+      }
+    }
+    sock.onclose = (): void => {
+      wsReady = false
+      if (ws === sock) ws = null
+      for (const [, p] of pending) p.reject(new Error('Connection closed'))
+      pending.clear()
+      // auto-reconnect with backoff
+      window.setTimeout(() => {
+        void connectOnce().catch(() => {
+          /* keep retrying silently */
+        })
+      }, 3000)
+    }
+    sock.onmessage = (ev: MessageEvent): void => {
+      let msg: WsMsg
+      try {
+        msg = JSON.parse(String(ev.data)) as WsMsg
+      } catch {
+        return
+      }
+      if (msg.t === 'res' && msg.id) {
+        const p = pending.get(msg.id)
+        if (!p) return
+        pending.delete(msg.id)
+        if (msg.ok) p.resolve(msg.value)
+        else p.reject(new Error(msg.error ?? 'Request failed'))
+      } else if (msg.t === 'ev' && msg.ch) {
+        dispatchEvent(msg.ch, msg.args ?? [])
+      }
+    }
+  })
+}
+
+export function isWebMode(): boolean {
+  return Boolean((window as unknown as { __NEXUS_WEB__?: boolean }).__NEXUS_WEB__)
+}
+
+export async function initWebApi(): Promise<void> {
+  await connectOnce()
+  const impl = buildApi()
+  ;(window as unknown as { api: AppAPI }).api = impl
+  ;(window as unknown as { __NEXUS_WEB__: boolean }).__NEXUS_WEB__ = true
+}
+
+function buildApi(): AppAPI {
+  const scopeArgs = (scope?: string, cwd?: string): unknown[] => [scope ?? 'global', cwd ?? '']
+  return {
+    window: {
+      minimize: (): Promise<void> => invoke('window:minimize', []).then(() => undefined),
+      maximize: (): Promise<void> => invoke('window:maximize', []).then(() => undefined),
+      close: (): Promise<void> => invoke('window:close', []).then(() => undefined)
+    },
+    config: {
+      get: (): Promise<unknown> => invoke('config:get', []),
+      save: (config: unknown): Promise<void> => invoke('config:save', [config]).then(() => undefined)
+    },
+    dialog: {
+      openFolder: (): Promise<string | null> => Promise.resolve(null),
+      openFile: (): Promise<string | null> => Promise.resolve(null)
+    },
+    acp: {
+      init: (acpPath: string): Promise<void> => invoke('acp:init', [acpPath]).then(() => undefined),
+      start: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
+        invoke('acp:start', [acpPath, cwd, remoteId ?? undefined]).then(() => undefined),
+      newSession: (cwd: string): Promise<void> => invoke('acp:new-session', [cwd]).then(() => undefined),
+      loadSession: (sessionId: string, cwd: string): Promise<void> =>
+        invoke('acp:load-session', [sessionId, cwd]).then(() => undefined),
+      sendPrompt: (text: string, acpSessionId?: string): Promise<void> =>
+        invoke('acp:send-prompt', [text, acpSessionId]).then(() => undefined),
+      cancelSession: (acpSessionId: string): Promise<void> =>
+        invoke('acp:cancel-session', [acpSessionId]).then(() => undefined),
+      setConfigOption: (key: string, value: string, sessionId?: string): Promise<void> =>
+        invoke('acp:set-config-option', [key, value, sessionId]).then(() => undefined),
+      approveTool: (requestId: string, optionId: string): Promise<void> =>
+        invoke('acp:approve-tool', [requestId, optionId]).then(() => undefined),
+      answerQuestion: (requestId: string, answer: string): Promise<void> =>
+        invoke('acp:answer-question', [requestId, answer]).then(() => undefined),
+      stop: (): Promise<void> => invoke('acp:stop', []).then(() => undefined),
+      isRunning: (): Promise<boolean> => invoke('acp:is-running', []) as Promise<boolean>,
+      isRemote: (): Promise<boolean> => invoke('acp:is-remote', []) as Promise<boolean>,
+      getContextSummary: (messages: Array<{ role: string; content: string }>): Promise<string> =>
+        invoke('acp:get-context-summary', [messages]) as Promise<string>,
+      onEvent: (cb: (event: unknown) => void): (() => void) => {
+        return subscribeWebEvent('acp:event', cb as (...args: unknown[]) => void)
+      }
+    },
+    stats: {
+      vibeSessions: (): Promise<unknown[]> => invoke('stats:vibe-sessions', []) as Promise<unknown[]>,
+      vibeSessionLastModel: (sessionId: string): Promise<string | null> =>
+        invoke('stats:vibe-session-last-model', [sessionId]) as Promise<string | null>,
+      vibeSessionLastConfig: (sessionId: string): Promise<unknown> =>
+        invoke('stats:vibe-session-last-config', [sessionId]),
+      searchSessionContent: (query: string): Promise<unknown[]> =>
+        invoke('stats:search-session-content', [query]) as Promise<unknown[]>,
+      vibeSessionMessages: (sessionId: string): Promise<unknown[]> =>
+        invoke('stats:vibe-session-messages', [sessionId]) as Promise<unknown[]>,
+      vibeSessionMetadata: (sessionId: string): Promise<unknown> =>
+        invoke('stats:vibe-session-metadata', [sessionId]),
+      vibeSubagentSessions: (parentSessionId: string): Promise<unknown[]> =>
+        invoke('stats:vibe-subagent-sessions', [parentSessionId]) as Promise<unknown[]>,
+    },
+    setup: {
+      check: (): Promise<unknown> => invoke('setup:check', []),
+      install: (): Promise<unknown> => invoke('setup:install', []),
+      onProgress: (cb: (event: { message: string; type: string }) => void): (() => void) => {
+        return subscribeWebEvent('setup:progress', cb as (...args: unknown[]) => void)
+      }
+    },
+    fs: {
+      listDir: (dir: string): Promise<unknown> => invoke('fs:list-dir', [dir]),
+      searchFiles: (rootDir: string, query: string): Promise<unknown> => invoke('fs:search-files', [rootDir, query]),
+      readFile: (filePath: string): Promise<unknown> => invoke('fs:read-file', [filePath]),
+      stat: (filePath: string): Promise<unknown> => invoke('fs:stat', [filePath]),
+      readText: (filePath: string): Promise<unknown> => invoke('fs:read-text', [filePath]),
+      readBinary: (filePath: string): Promise<unknown> => invoke('fs:read-binary', [filePath]),
+      writeText: (filePath: string, content: string): Promise<unknown> => invoke('fs:write-text', [filePath, content])
+    },
+    git: {
+      status: (cwd: string): Promise<unknown> => invoke('git:status', [cwd]),
+      log: (cwd: string, max: number): Promise<unknown> => invoke('git:log', [cwd, max]),
+      diffFile: (cwd: string, filePath: string): Promise<unknown> => invoke('git:diff-file', [cwd, filePath]),
+      diffAll: (cwd: string): Promise<unknown> => invoke('git:diff-all', [cwd]),
+      stage: (cwd: string, paths: string[]): Promise<unknown> => invoke('git:stage', [cwd, paths]),
+      unstage: (cwd: string, paths: string[]): Promise<unknown> => invoke('git:unstage', [cwd, paths]),
+      commit: (cwd: string, message: string): Promise<unknown> => invoke('git:commit', [cwd, message]),
+      push: (cwd: string): Promise<unknown> => invoke('git:push', [cwd])
+    },
+    shell: {
+      openPath: (path: string): Promise<string> => invoke('shell:open-path', [path]) as Promise<string>
+    },
+    vibe: {
+      getConfig: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-config', scopeArgs(scope, cwd)),
+      saveConfig: (config: unknown, scope?: string, cwd?: string): Promise<void> =>
+        invoke('vibe:save-config', [config, ...scopeArgs(scope, cwd)]).then(() => undefined),
+      getRawConfig: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-raw-config', scopeArgs(scope, cwd)),
+      saveRawConfig: (content: string, scope?: string, cwd?: string): Promise<unknown> =>
+        invoke('vibe:save-raw-config', [content, ...scopeArgs(scope, cwd)]),
+      getAgents: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-agents', scopeArgs(scope, cwd)),
+      saveAgent: (name: string, config: unknown, scope?: string, cwd?: string): Promise<void> =>
+        invoke('vibe:save-agent', [name, config, ...scopeArgs(scope, cwd)]).then(() => undefined),
+      deleteAgent: (name: string, scope?: string, cwd?: string): Promise<void> =>
+        invoke('vibe:delete-agent', [name, ...scopeArgs(scope, cwd)]).then(() => undefined),
+      getPrompts: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-prompts', scopeArgs(scope, cwd)),
+      savePrompt: (name: string, content: string, scope?: string, cwd?: string): Promise<void> =>
+        invoke('vibe:save-prompt', [name, content, ...scopeArgs(scope, cwd)]).then(() => undefined),
+      deletePrompt: (name: string, scope?: string, cwd?: string): Promise<void> =>
+        invoke('vibe:delete-prompt', [name, ...scopeArgs(scope, cwd)]).then(() => undefined),
+      getSkills: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:get-skills', scopeArgs(scope, cwd)),
+      getDir: (scope?: string, cwd?: string): Promise<string> =>
+        invoke('vibe:get-dir', scopeArgs(scope, cwd)) as Promise<string>,
+      listConfigFiles: (scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:list-config-files', scopeArgs(scope, cwd)),
+      createSkill: (name: string, scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:create-skill', [name, ...scopeArgs(scope, cwd)]),
+      deleteSkill: (name: string, scope?: string, cwd?: string): Promise<unknown> => invoke('vibe:delete-skill', [name, ...scopeArgs(scope, cwd)]),
+      writeSkillFile: (name: string, relPath: string, content: string, scope?: string, cwd?: string): Promise<unknown> =>
+        invoke('vibe:write-skill-file', [name, relPath, content, ...scopeArgs(scope, cwd)]),
+      deleteSkillFile: (name: string, relPath: string, scope?: string, cwd?: string): Promise<unknown> =>
+        invoke('vibe:delete-skill-file', [name, relPath, ...scopeArgs(scope, cwd)]),
+      importSkill: (src: string, isZip: boolean, scope?: string, cwd?: string): Promise<unknown> =>
+        invoke('vibe:import-skill', [src, isZip, ...scopeArgs(scope, cwd)])
+    },
+    serve: {
+      status: (): Promise<unknown> => invoke('serve:status', []),
+      start: (): Promise<unknown> => invoke('serve:start', []),
+      stop: (): Promise<unknown> => invoke('serve:stop', []),
+      saveConfig: (patch: unknown): Promise<unknown> => invoke('serve:save-config', [patch]),
+      setCredentials: (username: string, password: string): Promise<unknown> =>
+        invoke('serve:set-credentials', [username, password]),
+      regenCert: (): Promise<unknown> => invoke('serve:regen-cert', [])
+    },
+    remote: {
+      test: (draft: unknown): Promise<unknown> => invoke('remote:test', [draft]),
+      installAcp: (id: string): Promise<unknown> => invoke('remote:install-acp', [id]),
+      sessions: (id: string): Promise<unknown> => invoke('remote:sessions', [id]),
+      statusNow: (ids?: string[]): Promise<unknown> => invoke('remote:status-now', [ids ?? null]),
+      save: (conn: unknown): Promise<unknown> => invoke('remote:save', [conn]),
+      delete: (id: string): Promise<unknown> => invoke('remote:delete', [id])
+    }
+  } as unknown as AppAPI
+}

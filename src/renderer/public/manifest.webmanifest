@@ -1,0 +1,25 @@
+{
+  "name": "Mistral Vibe Nexus",
+  "short_name": "Nexus",
+  "description": "Mistral Vibe Nexus — client for the Mistral Vibe agent",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111115",
+  "theme_color": "#111115",
+  "icons": [
+    {
+      "src": "/icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

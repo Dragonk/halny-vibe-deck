@@ -1,10 +1,31 @@
 import React from 'react'
 import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
+import { isWebMode } from '../webBridge'
 
 export default function Header(): React.JSX.Element {
-  const { theme, toggleTheme, acpStatus, acpError, config, dockOpen, setDockOpen } = useStore()
+  const {
+    theme,
+    toggleTheme,
+    acpStatus,
+    acpError,
+    config,
+    dockOpen,
+    setDockOpen,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
+  } = useStore()
   const tr = useTranslation(config.language)
+  const web = isWebMode()
+
+  const handleLogout = async (): Promise<void> => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      /* best effort */
+    }
+    window.location.href = '/login'
+  }
 
   const getThemeIcon = () => {
     if (theme === 'auto') return '◑'
@@ -35,6 +56,26 @@ export default function Header(): React.JSX.Element {
   return (
     <header className="header" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <div className="header-left">
+        <button
+          className="header-btn header-menu-btn"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+          title={tr.menuLabel}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <div className="header-brand">
           <img src="./icon.png" alt="" className="header-brand-img" />
           <span className="header-brand-name">{tr.appName}</span>
@@ -82,15 +123,24 @@ export default function Header(): React.JSX.Element {
         <button className="header-btn theme-btn" onClick={toggleTheme} title={getThemeTitle()}>
           {getThemeIcon()}
         </button>
-        <button className="header-btn" onClick={() => window.api.window.minimize()} title={tr.minimize}>
-          ─
-        </button>
-        <button className="header-btn" onClick={() => window.api.window.maximize()} title={tr.maximize}>
-          □
-        </button>
-        <button className="header-btn close-btn" onClick={() => window.api.window.close()} title={tr.close}>
-          ✕
-        </button>
+        {!web && (
+          <>
+            <button className="header-btn" onClick={() => window.api.window.minimize()} title={tr.minimize}>
+              ─
+            </button>
+            <button className="header-btn" onClick={() => window.api.window.maximize()} title={tr.maximize}>
+              □
+            </button>
+            <button className="header-btn close-btn" onClick={() => window.api.window.close()} title={tr.close}>
+              ✕
+            </button>
+          </>
+        )}
+        {web && (
+          <button className="header-btn" onClick={() => void handleLogout()} title={tr.logoutLabel}>
+            ⏻
+          </button>
+        )}
       </div>
     </header>
   )

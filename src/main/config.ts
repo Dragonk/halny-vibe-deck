@@ -51,6 +51,33 @@ export interface SkillConfig {
 
 export type ThemeMode = 'auto' | 'dark' | 'light'
 
+/** HTTPS serve (host in browser) settings. Credentials are scrypt hashes. */
+export interface ServeConfig {
+  enabled: boolean
+  port: number
+  username: string
+  /** scrypt salt (hex) */
+  salt: string
+  /** scrypt hash of password (hex) */
+  hash: string
+  /** optional custom certificate (PEM); both must be set to take effect */
+  certPath: string
+  keyPath: string
+}
+
+/** One SSH remote where vibe-acp runs (Codex-style remote projects). */
+export interface RemoteConnection {
+  id: string
+  name: string
+  enabled: boolean
+  /** e.g. \\"ssh user@host -p 2222\\" (no remote command part) */
+  sshCmd: string
+  /** remote working directories shown as sub-projects */
+  locations: string[]
+  /** optional custom install command for vibe-acp */
+  installCommand: string
+}
+
 export interface AppConfig {
   version: string
   language: 'auto' | 'en' | 'pl' | 'fr' | 'es' | 'de' | 'it'
@@ -69,6 +96,8 @@ export interface AppConfig {
   sidebarSessionsLimit: number | null
   hiddenSessions: string[]
   hiddenProjects: string[]
+  serve: ServeConfig
+  remoteConnections: RemoteConnection[]
 }
 
 const defaultConfig: AppConfig = {
@@ -94,7 +123,17 @@ const defaultConfig: AppConfig = {
   skills: [],
   sidebarSessionsLimit: null,
   hiddenSessions: [],
-  hiddenProjects: []
+  hiddenProjects: [],
+  serve: {
+    enabled: false,
+    port: 8765,
+    username: '',
+    salt: '',
+    hash: '',
+    certPath: '',
+    keyPath: '',
+  },
+  remoteConnections: []
 }
 
 function getConfigPath(): string {

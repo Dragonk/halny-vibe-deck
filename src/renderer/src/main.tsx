@@ -66,10 +66,29 @@ class ErrorBoundary extends React.Component<
   }
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
-  </React.StrictMode>,
-)
+async function boot(): Promise<void> {
+  // Web mode (UI served over HTTPS by serve mode): preload does not exist,
+  // so we rebuild window.api on top of the /ws websocket bridge.
+  const w = window as unknown as { api?: unknown; __NEXUS_WEB__?: boolean }
+  if (!w.api) {
+    const webBridge = await import('./webBridge')
+    await webBridge.initWebApi()
+  }
+  // PWA service worker — only meaningful in web mode (HTTPS origin).
+  if (w.__NEXUS_WEB__ && 'serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.register('/sw.js')
+    } catch (err) {
+      console.warn('[renderer] service worker registration failed:', err)
+    }
+  }
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </React.StrictMode>,
+  )
+}
+
+void boot()

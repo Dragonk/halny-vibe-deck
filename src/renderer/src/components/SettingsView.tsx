@@ -4,8 +4,11 @@ import { useTranslation, t } from '../i18n'
 import { CodeMirrorPane } from './CodeEditor'
 import DirTree from './DirTree'
 import type { Language } from '../i18n'
+import { isWebMode } from '../webBridge'
+import { defaultConfig } from '../types'
+import type { AppConfig, RemoteConnection, RemoteTestResult, ServeStatus } from '../types'
 
-type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw'
+type Tab = 'general' | 'acp' | 'sandbox' | 'agents' | 'mcp' | 'tools' | 'prompts' | 'skills' | 'providers' | 'models' | 'raw' | 'serve' | 'remote'
 
 // Built-in tools of the mistral-vibe CLI that work without any config.toml entry.
 const DEFAULT_VIBE_TOOLS = [
@@ -212,7 +215,7 @@ function mcpOauthUpdate(
 }
 
 export default function SettingsView(): React.JSX.Element {
-  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview } = useStore()
+  const { config, setConfig, setWorkingDirectory, setSandboxEnabled, setCurrentView, acpStatus, currentSessionWorkingDirectory, openFilePreview, remoteStatuses } = useStore()
   const tr = useTranslation(config.language)
   const [tab, setTab] = useState<Tab>('general')
   const [local, setLocal] = useState({ ...config })
@@ -248,6 +251,18 @@ export default function SettingsView(): React.JSX.Element {
   const [skillFileReady, setSkillFileReady] = useState<string | null>(null)
   const [skillTreeRev, setSkillTreeRev] = useState(0)
   const [skillMsg, setSkillMsg] = useState<string | null>(null)
+  // ---- v0.6.0: serve (HTTPS hosting) + remote SSH connections ----
+  const web = isWebMode()
+  const [serveStatus, setServeStatus] = useState<ServeStatus | null>(null)
+  const [serveUsername, setServeUsername] = useState('')
+  const [servePassword, setServePassword] = useState('')
+  const [serveCredsSaved, setServeCredsSaved] = useState(false)
+  const [remoteDraft, setRemoteDraft] = useState<RemoteConnection | null>(null)
+  const [remoteTestResult, setRemoteTestResult] = useState<RemoteTestResult | null>(null)
+  const [remoteTesting, setRemoteTesting] = useState(false)
+  const [remoteInstalling, setRemoteInstalling] = useState(false)
+  const [remoteInstallMsg, setRemoteInstallMsg] = useState<string | null>(null)
+  const [remoteNewLocation, setRemoteNewLocation] = useState('')
   const rawDocRef = React.useRef<(() => string) | null>(null)
   const skillDocRef = React.useRef<(() => string) | null>(null)
   const registerRawDoc = useCallback((getDoc: (() => string) | null): void => { rawDocRef.current = getDoc }, [])
@@ -318,12 +333,135 @@ export default function SettingsView(): React.JSX.Element {
       return
     }
     setAcpStatus('connecting')
+    useStore.setState({ remoteActive: null })
     try {
       await window.api.acp.start(local.acpPath, local.workingDirectory || '')
       setCurrentView('chat')
     } catch (err) {
       setAcpStatus('error')
       setAcpError((err as Error).message)
+    }
+  }
+
+  // ---- v0.6.0: serve handlers ----
+  useEffect(() => {
+    if (tab === 'serve' && !web) {
+      window.api.serve.status()
+        .then((s) => setServeStatus(s as ServeStatus))
+        .catch(console.error)
+    }
+  }, [tab, web])
+
+  const handleServeToggle = async (): Promise<void> => {
+    try {
+      const st = serveStatus?.running
+        ? await window.api.serve.stop()
+        : await window.api.serve.start()
+      setServeStatus(st as ServeStatus)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleServeApply = async (): Promise<void> => {
+    const serve = local.serve ?? defaultConfig.serve
+    try {
+      const st = await window.api.serve.saveConfig({
+        enabled: serve.enabled,
+        port: serve.port,
+        certPath: serve.certPath || undefined,
+        keyPath: serve.keyPath || undefined,
+      })
+      setServeStatus(st as ServeStatus)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleServeCredentials = async (): Promise<void> => {
+    if (!serveUsername || !servePassword) return
+    try {
+      await window.api.serve.setCredentials(serveUsername, servePassword)
+      setServeCredsSaved(true)
+      setServePassword('')
+      setTimeout(() => setServeCredsSaved(false), 2500)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleServeCertBrowse = async (which: 'certPath' | 'keyPath'): Promise<void> => {
+    const file = await window.api.dialog.openFile()
+    if (file) {
+      setLocal((p) => ({ ...p, serve: { ...(p.serve ?? defaultConfig.serve), [which]: file } }))
+    }
+  }
+
+  // ---- v0.6.0: remote SSH handlers ----
+  const handleRemoteTest = async (): Promise<void> => {
+    if (!remoteDraft) return
+    setRemoteTesting(true)
+    setRemoteTestResult(null)
+    setRemoteInstallMsg(null)
+    try {
+      const res = (await window.api.remote.test(remoteDraft)) as RemoteTestResult
+      setRemoteTestResult(res)
+    } catch (err) {
+      setRemoteTestResult({
+        reachable: false,
+        acpInstalled: false,
+        acpPath: null,
+        version: null,
+        error: (err as Error).message,
+      })
+    } finally {
+      setRemoteTesting(false)
+    }
+  }
+
+  const handleRemoteInstall = async (): Promise<void> => {
+    if (!remoteDraft) return
+    setRemoteInstalling(true)
+    setRemoteInstallMsg(null)
+    try {
+      // Install needs a saved connection id — persist first, then install.
+      const saved = (await window.api.remote.save(remoteDraft)) as RemoteConnection
+      setRemoteDraft(saved)
+      await window.api.remote.installAcp(saved.id)
+      setRemoteInstallMsg(tr.remoteInstallOk)
+      void handleRemoteTest()
+    } catch (err) {
+      setRemoteInstallMsg((err as Error).message)
+    } finally {
+      setRemoteInstalling(false)
+    }
+  }
+
+  const handleRemoteSave = async (): Promise<void> => {
+    if (!remoteDraft) return
+    try {
+      await window.api.remote.save(remoteDraft)
+      const cfg = (await window.api.config.get()) as AppConfig
+      setConfig(cfg)
+      setLocal((p) => ({ ...p, remoteConnections: cfg.remoteConnections }))
+      setRemoteDraft(null)
+      void useStore.getState().refreshRemoteData()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleRemoteDelete = async (id: string): Promise<void> => {
+    try {
+      await window.api.remote.delete(id)
+      const cfg = (await window.api.config.get()) as AppConfig
+      setConfig(cfg)
+      setLocal((p) => ({ ...p, remoteConnections: cfg.remoteConnections }))
+      void useStore.getState().refreshRemoteData()
+    } catch (err) {
+      console.error(err)
     }
   }
 
@@ -904,6 +1042,20 @@ export default function SettingsView(): React.JSX.Element {
             }}
           >
             {tr.rawConfig}
+          </button>
+          {!web && (
+            <button
+              className={`settings-tab ${tab === 'serve' ? 'active' : ''}`}
+              onClick={() => setTab('serve')}
+            >
+              {tr.serveTab}
+            </button>
+          )}
+          <button
+            className={`settings-tab ${tab === 'remote' ? 'active' : ''}`}
+            onClick={() => setTab('remote')}
+          >
+            {tr.remoteTab}
           </button>
         </div>
       </div>
@@ -2257,6 +2409,312 @@ export default function SettingsView(): React.JSX.Element {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {tab === 'serve' && !web && (
+          <div className="settings-section">
+            <p className="field-hint">{tr.serveIntro}</p>
+            <div className="field">
+              <label className="field-label">{tr.serveStatusLabel}</label>
+              <div className="field-row">
+                <button className="field-btn" onClick={() => void handleServeToggle()}>
+                  {serveStatus?.running ? tr.serveStop : tr.serveStart}
+                </button>
+                {serveStatus && (
+                  <span className={`serve-status ${serveStatus.running ? 'ok' : ''}`}>
+                    {serveStatus.running ? `${tr.serveRunning} — ${serveStatus.url}` : tr.serveStopped}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">{tr.servePort}</label>
+              <div className="field-row">
+                <input
+                  className="field-input"
+                  type="number"
+                  style={{ width: 110 }}
+                  value={local.serve?.port ?? defaultConfig.serve.port}
+                  onChange={(e) =>
+                    setLocal((p) => ({
+                      ...p,
+                      serve: {
+                        ...(p.serve ?? defaultConfig.serve),
+                        port: parseInt(e.target.value, 10) || 0,
+                      },
+                    }))
+                  }
+                />
+                <button className="field-btn" onClick={() => void handleServeApply()}>
+                  {tr.saveLabel}
+                </button>
+              </div>
+              <p className="field-hint">{tr.servePortHint}</p>
+            </div>
+            <div className="field">
+              <label className="field-label">{tr.serveAutostart}</label>
+              <div className="field-row">
+                <button
+                  className={`field-btn ${(local.serve?.enabled ?? false) ? 'active' : ''}`}
+                  onClick={() =>
+                    setLocal((p) => ({
+                      ...p,
+                      serve: {
+                        ...(p.serve ?? defaultConfig.serve),
+                        enabled: !(p.serve?.enabled ?? false),
+                      },
+                    }))
+                  }
+                >
+                  {(local.serve?.enabled ?? false) ? tr.serveOn : tr.serveOff}
+                </button>
+              </div>
+              <p className="field-hint">{tr.serveAutostartHint}</p>
+            </div>
+            <div className="field">
+              <label className="field-label">{tr.serveCredentials}</label>
+              <p className="field-hint">{tr.serveCredentialsHint}</p>
+              <div className="field-row">
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder={tr.serveUsername}
+                  value={serveUsername}
+                  onChange={(e) => setServeUsername(e.target.value)}
+                />
+                <input
+                  className="field-input"
+                  type="password"
+                  placeholder={tr.serveNewPassword}
+                  value={servePassword}
+                  onChange={(e) => setServePassword(e.target.value)}
+                />
+                <button className="field-btn" onClick={() => void handleServeCredentials()}>
+                  {serveCredsSaved ? tr.serveCredentialsSaved : tr.saveLabel}
+                </button>
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">{tr.serveCert}</label>
+              <p className="field-hint">{tr.serveCertHint}</p>
+              <div className="field-row">
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder="cert.pem"
+                  value={local.serve?.certPath ?? ''}
+                  onChange={(e) =>
+                    setLocal((p) => ({
+                      ...p,
+                      serve: { ...(p.serve ?? defaultConfig.serve), certPath: e.target.value },
+                    }))
+                  }
+                />
+                <button className="field-btn" onClick={() => void handleServeCertBrowse('certPath')}>
+                  {tr.browse}
+                </button>
+              </div>
+              <div className="field-row">
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder="key.pem"
+                  value={local.serve?.keyPath ?? ''}
+                  onChange={(e) =>
+                    setLocal((p) => ({
+                      ...p,
+                      serve: { ...(p.serve ?? defaultConfig.serve), keyPath: e.target.value },
+                    }))
+                  }
+                />
+                <button className="field-btn" onClick={() => void handleServeCertBrowse('keyPath')}>
+                  {tr.browse}
+                </button>
+              </div>
+              <div className="field-row">
+                <button className="field-btn" onClick={() => void handleServeApply()}>
+                  {tr.saveLabel}
+                </button>
+                <button
+                  className="field-btn"
+                  onClick={() => void window.api.serve.regenCert().catch(console.error)}
+                >
+                  {tr.serveRegenCert}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {tab === 'remote' && (
+          <div className="settings-section">
+            <p className="field-hint">{tr.remoteIntro}</p>
+            {remoteDraft === null ? (
+              <>
+                <div className="field">
+                  <button
+                    className="field-btn"
+                    onClick={() => {
+                      setRemoteTestResult(null)
+                      setRemoteInstallMsg(null)
+                      setRemoteDraft({
+                        id: '',
+                        name: '',
+                        enabled: true,
+                        sshCmd: '',
+                        locations: [],
+                        installCommand: 'uv tool install mistral-vibe',
+                      })
+                    }}
+                  >
+                    + {tr.remoteAdd}
+                  </button>
+                </div>
+                {(local.remoteConnections ?? []).length === 0 && (
+                  <p className="field-hint">{tr.remoteNoConnections}</p>
+                )}
+                {(local.remoteConnections ?? []).map((conn) => (
+                  <div key={conn.id} className="remote-conn-row">
+                    <span className={`remote-dot ${remoteStatuses[conn.id]?.ok ? 'ok' : 'down'}`} />
+                    <span className="remote-conn-name">{conn.name}</span>
+                    <span className="remote-conn-cmd" title={conn.sshCmd}>
+                      {conn.sshCmd}
+                    </span>
+                    <button
+                      className="field-btn"
+                      onClick={() => {
+                        setRemoteTestResult(null)
+                        setRemoteInstallMsg(null)
+                        setRemoteDraft({ ...conn, locations: [...conn.locations] })
+                      }}
+                    >
+                      {tr.settings}
+                    </button>
+                    <button className="field-btn" onClick={() => void handleRemoteDelete(conn.id)}>
+                      {tr.deleteLabel}
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <div className="remote-editor">
+                <div className="field">
+                  <label className="field-label">{tr.remoteName}</label>
+                  <input
+                    className="field-input"
+                    type="text"
+                    value={remoteDraft.name}
+                    onChange={(e) => setRemoteDraft((p) => (p ? { ...p, name: e.target.value } : p))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label">{tr.remoteSshCmd}</label>
+                  <input
+                    className="field-input"
+                    type="text"
+                    placeholder="ssh user@host"
+                    value={remoteDraft.sshCmd}
+                    onChange={(e) => setRemoteDraft((p) => (p ? { ...p, sshCmd: e.target.value } : p))}
+                  />
+                  <p className="field-hint">{tr.remoteSshCmdHint}</p>
+                </div>
+                <div className="field">
+                  <label className="field-label">{tr.remoteEnabled}</label>
+                  <button
+                    className={`field-btn ${remoteDraft.enabled ? 'active' : ''}`}
+                    onClick={() => setRemoteDraft((p) => (p ? { ...p, enabled: !p.enabled } : p))}
+                  >
+                    {remoteDraft.enabled ? tr.serveOn : tr.serveOff}
+                  </button>
+                </div>
+                <div className="field">
+                  <label className="field-label">{tr.remoteLocations}</label>
+                  <p className="field-hint">{tr.remoteLocationHint}</p>
+                  {remoteDraft.locations.map((loc) => (
+                    <div key={loc} className="field-row">
+                      <input className="field-input" type="text" readOnly value={loc} />
+                      <button
+                        className="field-btn"
+                        onClick={() =>
+                          setRemoteDraft((p) =>
+                            p ? { ...p, locations: p.locations.filter((l) => l !== loc) } : p,
+                          )
+                        }
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <div className="field-row">
+                    <input
+                      className="field-input"
+                      type="text"
+                      placeholder="/home/user/project"
+                      value={remoteNewLocation}
+                      onChange={(e) => setRemoteNewLocation(e.target.value)}
+                    />
+                    <button
+                      className="field-btn"
+                      onClick={() => {
+                        const loc = remoteNewLocation.trim()
+                        if (!loc) return
+                        setRemoteDraft((p) =>
+                          p && !p.locations.includes(loc)
+                            ? { ...p, locations: [...p.locations, loc] }
+                            : p,
+                        )
+                        setRemoteNewLocation('')
+                      }}
+                    >
+                      + {tr.remoteAddLocation}
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <div className="field-row">
+                    <button
+                      className="field-btn"
+                      disabled={remoteTesting}
+                      onClick={() => void handleRemoteTest()}
+                    >
+                      {remoteTesting ? '…' : tr.remoteTest}
+                    </button>
+                    {!web && remoteTestResult?.reachable && !remoteTestResult.acpInstalled && (
+                      <button
+                        className="field-btn"
+                        disabled={remoteInstalling}
+                        onClick={() => void handleRemoteInstall()}
+                      >
+                        {remoteInstalling ? '…' : tr.remoteInstallAcp}
+                      </button>
+                    )}
+                  </div>
+                  {remoteTesting && <p className="field-hint">…</p>}
+                  {remoteTestResult && (
+                    <p
+                      className={`field-hint ${
+                        remoteTestResult.reachable ? 'remote-test-ok' : 'remote-test-fail'
+                      }`}
+                    >
+                      {remoteTestResult.reachable
+                        ? remoteTestResult.acpInstalled
+                          ? t(tr, 'remoteTestOk', { version: remoteTestResult.version ?? '?' })
+                          : tr.remoteTestNoAcp
+                        : t(tr, 'remoteTestFail', { error: remoteTestResult.error ?? '' })}
+                    </p>
+                  )}
+                  {remoteInstallMsg && <p className="field-hint">{remoteInstallMsg}</p>}
+                </div>
+                <div className="field-row">
+                  <button className="field-btn" onClick={() => void handleRemoteSave()}>
+                    {tr.remoteSave}
+                  </button>
+                  <button className="field-btn" onClick={() => setRemoteDraft(null)}>
+                    {tr.cancelLabel}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

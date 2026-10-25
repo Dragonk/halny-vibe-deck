@@ -71,6 +71,8 @@ export default function App(): React.JSX.Element {
     updateSession,
     markSessionBusy,
     markSessionIdle,
+    mobileSidebarOpen,
+    setMobileSidebarOpen,
   } = useStore()
 
   const tr = useTranslation(config.language)
@@ -100,7 +102,7 @@ export default function App(): React.JSX.Element {
           // available before the first message. Guard against the flows where
           // InputBar/loadAcpSession are already creating their own session.
           if (!store.sessionStarting && !store.pendingLoadSessionId) {
-            const primeCwd = store.config.workingDirectory || '.'
+            const primeCwd = store.remoteActive?.cwd || store.config.workingDirectory || '.'
             window.api.acp.newSession(primeCwd).catch(console.error)
           }
           break
@@ -513,6 +515,58 @@ export default function App(): React.JSX.Element {
     return unsub
   }, [handleAcpEvent])
 
+  // v0.6.0: poll remote SSH connections (status dots + remote session lists).
+  // The store loads the config asynchronously after mount, so the effect must
+  // re-run once the enabled connections become available - and whenever they
+  // are edited in Settings - instead of waiting for the first 60 s tick.
+  const remoteConnIds = useStore(
+    (s) =>
+      (s.config.remoteConnections ?? [])
+        .filter((c) => c.enabled)
+        .map((c) => c.id)
+        .join(','),
+  )
+  useEffect(() => {
+    void useStore.getState().refreshRemoteData()
+    const iv = window.setInterval(() => {
+      void useStore.getState().refreshRemoteData()
+    }, 60000)
+    return () => window.clearInterval(iv)
+  }, [remoteConnIds])
+
+  // v0.6.0: mobile gestures — swipe from the left edge reveals the sidebar,
+  // swipe from the right edge opens the dock (touch devices / PWA).
+  useEffect(() => {
+    let startX = 0
+    let startY = 0
+    let viewW = window.innerWidth
+    let fromEdge = false
+    const onTouchStart = (e: TouchEvent): void => {
+      if (e.touches.length !== 1) return
+      const t = e.touches[0]
+      startX = t.clientX
+      startY = t.clientY
+      viewW = window.innerWidth
+      fromEdge = startX <= 36 || startX >= viewW - 36
+    }
+    const onTouchEnd = (e: TouchEvent): void => {
+      if (!fromEdge) return
+      fromEdge = false
+      const t = e.changedTouches[0]
+      const dx = t.clientX - startX
+      const dy = Math.abs(t.clientY - startY)
+      if (dy > 80) return
+      if (startX <= 36 && dx > 60) useStore.getState().setMobileSidebarOpen(true)
+      else if (startX >= viewW - 36 && dx < -60) useStore.getState().ensureDockOpen()
+    }
+    window.addEventListener('touchstart', onTouchStart, { passive: true })
+    window.addEventListener('touchend', onTouchEnd, { passive: true })
+    return () => {
+      window.removeEventListener('touchstart', onTouchStart)
+      window.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
+
   // Apply theme
   useEffect(() => {
     const isDark =
@@ -571,6 +625,9 @@ export default function App(): React.JSX.Element {
       }`}
     >
       <Header />
+      {mobileSidebarOpen && (
+        <div className="mobile-scrim" onClick={() => setMobileSidebarOpen(false)} />
+      )}
       <div className="app-body">
         <Sidebar />
         <main className="app-main">

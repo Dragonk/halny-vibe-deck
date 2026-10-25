@@ -519,6 +519,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             return
           }
           setAcpStatus('connecting')
+          useStore.setState({ remoteActive: null })
           await window.api.acp.start(config.acpPath, cwd)
         }
       } catch (err) {
@@ -563,6 +564,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       try {
         // start() creates the session with the right cwd; the draft re-binding
         // logic in App keeps the current local session attached to it.
+        useStore.setState({ remoteActive: null })
         await window.api.acp.start(config.acpPath, sessionWd)
       } catch (err) {
         setAcpStatus('error')

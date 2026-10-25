@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { BrowserWindow } from 'electron'
 import * as readline from 'readline'
 import { randomUUID } from 'crypto'
+import { broadcastToWeb } from './bus'
 
 export interface AcpConfigOptionChoice {
   value: string
@@ -79,16 +80,19 @@ export class AcpManager {
   private pending = new Map<string, PendingRequest>()
   private currentSessionId: string | null = null
   private win: BrowserWindow | null = null
+  /** set when this instance drives a remote vibe-acp over ssh */
+  private remote: { sshCmd: string } | null = null
   private _pendingSummaryChunks: string[] | null = null
   private _pendingSummaryId: string | null = null
   /** session/load in flight for these ACP session ids — replay is buffered, not emitted */
   private _replaying = new Map<string, RawUpdate[]>()
 
-  setWindow(win: BrowserWindow): void {
+  setWindow(win: BrowserWindow | null): void {
     this.win = win
   }
 
   private emit(event: AcpEvent): void {
+    broadcastToWeb('acp:event', [event])
     if (process.env.NEXUS_DEBUG_EVENTS) {
       const dbg = event as unknown as Record<string, unknown>
       console.log('[ACP] <<<', String(dbg.type), JSON.stringify(dbg.data ?? {}).slice(0, 160))
@@ -631,13 +635,26 @@ export class AcpManager {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  async start(acpPath: string): Promise<void> {
+  async start(acpPath: string, remote?: { sshCmd: string }): Promise<void> {
     if (this.process) await this.stop()
 
-    const proc = spawn(acpPath, [], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    })
+    this.remote = remote ?? null
+    let proc: ChildProcess
+    if (remote) {
+      const tokens = remote.sshCmd.trim().split(/\s+/).filter(Boolean)
+      if (tokens.length === 0) throw new Error('Empty ssh command for remote connection')
+      console.log('[ACP] remote start over ssh:', remote.sshCmd)
+      // Login shell (-l) so the remote PATH includes ~/.local/bin (uv tools).
+      proc = spawn(tokens[0], [...tokens.slice(1), 'bash -lc "exec vibe-acp"'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true
+      })
+    } else {
+      proc = spawn(acpPath, [], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true
+      })
+    }
     this.process = proc
 
     const rl = readline.createInterface({ input: proc.stdout! })
@@ -866,6 +883,10 @@ export class AcpManager {
     }
     this.pending.forEach((p) => p.reject(new Error('ACP stopped')))
     this.pending.clear()
+  }
+
+  isRemote(): boolean {
+    return this.remote !== null
   }
 
   isRunning(): boolean {
