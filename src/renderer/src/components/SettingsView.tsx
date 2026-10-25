@@ -2433,6 +2433,14 @@ export default function SettingsView(): React.JSX.Element {
                 )}
                 {serveError && <div className="git-error">{serveError}</div>}
               </div>
+            {serveStatus?.running && (serveStatus.lanUrls?.length ?? 0) > 0 && (
+              <div className="serve-lan-urls">
+                <div className="serve-lan-label">{tr.serveLanUrls}</div>
+                {serveStatus.lanUrls.map((u) => (
+                  <div key={u} className="serve-lan-url">{u}</div>
+                ))}
+              </div>
+            )}
             </div>
             <div className="field">
               <label className="field-label">{tr.servePort}</label>

@@ -115,7 +115,7 @@ export class AcpManager {
     }
   }
 
-  private sendRequest(method: string, params: unknown): Promise<unknown> {
+  private sendRequest(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.process || !this.process.stdin) {
         reject(new Error('ACP process not running'))
@@ -131,7 +131,7 @@ export class AcpManager {
           this.pending.delete(id)
           reject(new Error('ACP request timeout: ' + method))
         }
-      }, REQUEST_TIMEOUT_MS)
+      }, timeoutMs ?? REQUEST_TIMEOUT_MS)
 
       this.pending.get(id)!.resolve = (v) => {
         clearTimeout(timeout)
@@ -882,6 +882,13 @@ export class AcpManager {
 
       this.process!.stdin!.write(msg)
     })
+  }
+
+  /** v0.8.0: cheap liveness probe. An ssh transport can go stale (network
+   *  change, sleep, remote reboot) without the process ever exiting, and
+   *  isRunning() alone cannot tell a healthy worker from such a zombie. */
+  async ping(timeoutMs = 8000): Promise<void> {
+    await this.sendRequest('session/list', {}, timeoutMs)
   }
 
   async stop(): Promise<void> {

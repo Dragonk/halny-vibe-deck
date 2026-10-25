@@ -441,4 +441,10 @@ export const es = {
   usageCompletionTooltip: 'Tokens de salida',
   usageTpsTooltip: 'Tokens por segundo',
   usageCostTooltip: 'Coste de la sesión: ${{cost}}',
+  newSessionDialogTitle: 'Nueva sesión',
+  newSessionLocalSection: 'Este equipo',
+  newSessionRemoteSection: 'Equipos remotos',
+  newSessionDefault: 'Proyecto predeterminado',
+  newSessionChooseFolder: 'Elegir carpeta…',
+  serveLanUrls: 'Disponible en tu red:',
 }

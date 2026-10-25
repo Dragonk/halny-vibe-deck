@@ -1,4 +1,5 @@
 import https from "https"
+import os from "os"
 import fs from "fs"
 import path from "path"
 import crypto from "crypto"
@@ -403,8 +404,20 @@ export function isServeRunning(): boolean {
   return server !== null && server.listening
 }
 
-export function serveStatus(): { running: boolean; port: number; url: string } {
-  return { running: isServeRunning(), port: servePort, url: servePort ? `https://<host>:${servePort}` : "" }
+export function serveStatus(): { running: boolean; port: number; url: string; lanUrls: string[] } {
+  // v0.8.0: also advertise LAN addresses (e.g. https://192.168.1.39:8443)
+  // so the user knows exactly which URL to open on the phone.
+  const lanUrls: string[] = servePort
+    ? Array.from(
+        new Set(
+          Object.values(os.networkInterfaces())
+            .flat()
+            .filter((n) => !!n && !n.internal && (String(n.family) === "IPv4" || Number(n.family) === 4))
+            .map((n) => `https://${n!.address}:${servePort}`),
+        ),
+      )
+    : []
+  return { running: isServeRunning(), port: servePort, url: servePort ? `https://<host>:${servePort}` : "", lanUrls }
 }
 
 /** Channels a web client may NEVER invoke (local-only features). */

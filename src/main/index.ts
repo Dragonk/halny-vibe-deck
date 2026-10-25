@@ -277,7 +277,18 @@ app.whenReady().then(() => {
     // local agent) is running. Never primes a session — resume paths use this
     // so replaying a session does not litter the remote with empty sessions.
     const mgr = remoteId ? getRemoteManager(remoteId) : acpManager
-    if (mgr.isRunning()) return
+    if (mgr.isRunning()) {
+      // v0.8.0: a live process handle is not proof the transport works - a
+      // stale ssh worker never emits exit and used to hang resume for the
+      // full 180 s request timeout. Probe it; restart on failure.
+      try {
+        await mgr.ping()
+        return
+      } catch {
+        await mgr.stop().catch(() => {})
+        if (remoteId) remoteAcpManagers.delete(remoteId)
+      }
+    }
     let remote: { sshCmd: string } | undefined
     if (remoteId) {
       const cfg = loadConfig()

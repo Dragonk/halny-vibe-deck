@@ -54,6 +54,7 @@ export interface ServeStatus {
   running: boolean
   port: number
   url: string
+  lanUrls: string[]
 }
 
 /** Serve settings editable from the local UI (credentials excluded) */

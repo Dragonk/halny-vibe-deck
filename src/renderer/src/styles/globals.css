@@ -5766,3 +5766,19 @@ code {
     .usage-context { min-width: 0; }
     .usage-context-track { width: 56px; }
 }
+
+/* == v0.8.0: new-session dialog + serve LAN URLs == */
+.new-session-box { max-height: min(560px, 80vh); overflow-y: auto; }
+.nsd-section-label { font-size: 11px; font-weight: 600; color: var(--text-muted); margin: 12px 2px 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.nsd-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: none; color: var(--text); font-size: 13px; cursor: pointer; text-align: left; }
+.nsd-item:hover { background: var(--panel-hover); }
+.nsd-icon { flex: none; width: 20px; text-align: center; }
+.nsd-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.nsd-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.nsd-path { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nsd-conn { margin-top: 2px; }
+.nsd-conn-header { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: var(--text); }
+.nsd-conn-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.serve-lan-urls { margin-top: 6px; }
+.serve-lan-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+.serve-lan-url { font-size: 13px; color: var(--text); opacity: 0.9; word-break: break-all; }

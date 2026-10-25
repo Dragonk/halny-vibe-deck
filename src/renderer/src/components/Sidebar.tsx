@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
+import { isWebMode } from '../webBridge'
 import type { Session, RemoteConnection } from '../types'
 
 const MIN_SIDEBAR_WIDTH = 120
@@ -149,10 +150,25 @@ export default function Sidebar(): React.JSX.Element {
     }
   }, [isResizing])
 
-  const handleNewSession = (): void => {
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+
+  // v0.8.0: the + button opens a New session dialog (like Zed / VS Code)
+  // where the user first picks the context: local default / recent folder /
+  // chosen folder, or a remote connection location. The old
+  // reuse-empty-draft behavior is preserved for the default local option.
+  const startLocalDraft = (cwd?: string): void => {
     setMobileSidebarOpen(false)
-    // v0.7.0: the local agent keeps running alongside remote workers,
-    // so starting a new local session needs no worker switching anymore.
+    setNewSessionOpen(false)
+    if (cwd) {
+      const store = useStore.getState()
+      store.addRecentFolder(cwd)
+      const draft = store.addSession(cwd)
+      setPendingNewSession(true)
+      setSessionStarting(false)
+      setCurrentSessionId(draft.id)
+      setCurrentView('chat')
+      return
+    }
     // Reuse an existing empty draft (e.g. the priming session) if any
     const emptyDraft = sessions.find(
       (s) =>
@@ -171,6 +187,16 @@ export default function Sidebar(): React.JSX.Element {
     setSessionStarting(false)
     setCurrentSessionId(null)
     setCurrentView('chat')
+  }
+
+  const chooseFolderForSession = async (): Promise<void> => {
+    const folder = await window.api.dialog.openFolder()
+    if (!folder) return
+    startLocalDraft(folder)
+  }
+
+  const handleNewSession = (): void => {
+    setNewSessionOpen(true)
   }
 
   const handleSelectSession = async (id: string): Promise<void> => {
@@ -459,6 +485,82 @@ export default function Sidebar(): React.JSX.Element {
       </nav>
 
       <div className="sidebar-resize-handle" onMouseDown={handleMouseDown} />
+
+      {newSessionOpen && (
+        <div className="modal-overlay" onClick={() => setNewSessionOpen(false)}>
+          <div className="modal-box new-session-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{tr.newSessionDialogTitle}</div>
+            <div className="nsd-section-label">{tr.newSessionLocalSection}</div>
+            <button className="nsd-item" onClick={() => startLocalDraft()}>
+              <span className="nsd-icon">&#128172;</span>
+              <span className="nsd-body">
+                <span className="nsd-name">{tr.newSessionDefault}</span>
+                {config.workingDirectory ? (
+                  <span className="nsd-path">{config.workingDirectory}</span>
+                ) : null}
+              </span>
+            </button>
+            {config.recentFolders
+              .filter((f) => f !== config.workingDirectory)
+              .map((f) => (
+                <button
+                  key={'nsd-rec-' + f}
+                  className="nsd-item"
+                  onClick={() => startLocalDraft(f)}
+                >
+                  <span className="nsd-icon">&#128193;</span>
+                  <span className="nsd-body">
+                    <span className="nsd-name">{f.split(/[/\\]/).filter(Boolean).pop() || f}</span>
+                    <span className="nsd-path">{f}</span>
+                  </span>
+                </button>
+              ))}
+            {!isWebMode() && (
+              <button
+                className="nsd-item"
+                onClick={() => void chooseFolderForSession()}
+              >
+                <span className="nsd-icon">&#128194;</span>
+                <span className="nsd-body">
+                  <span className="nsd-name">{tr.newSessionChooseFolder}</span>
+                </span>
+              </button>
+            )}
+            {remoteConns.length > 0 && (
+              <>
+                <div className="nsd-section-label">{tr.newSessionRemoteSection}</div>
+                {remoteConns.map((conn) => {
+                  const st = remoteStatuses[conn.id]
+                  return (
+                    <div key={'nsd-conn-' + conn.id} className="nsd-conn">
+                      <div className="nsd-conn-header">
+                        <span className={`remote-dot ${st?.ok ? 'ok' : 'down'}`} />
+                        <span className="nsd-conn-name">{conn.name}</span>
+                      </div>
+                      {conn.locations.map((loc) => (
+                        <button
+                          key={conn.id + '-nsd-' + loc}
+                          className="nsd-item"
+                          onClick={() => {
+                            setNewSessionOpen(false)
+                            void startRemoteSession(conn.id, loc)
+                          }}
+                        >
+                          <span className="nsd-icon">&#128193;</span>
+                          <span className="nsd-body">
+                            <span className="nsd-name">{loc.split(/[/\\]/).filter(Boolean).pop() || loc}</span>
+                            <span className="nsd-path">{loc}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {ctxMenu && (
         <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>

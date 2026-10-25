@@ -934,14 +934,19 @@ export const useStore = create<AppStore>((set, get) => ({
         if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);
         const sess = st.sessions.find((x) => x.id === localSessionId);
         if (sess?.loading) st.updateSession(localSessionId, { loading: false });
-      }, 2500);
+      }, rid ? 15000 : 2500);
     } catch (err) {
       console.error("[store] ACP session/load failed:", err);
       get().setPendingLoadSessionId(null);
       get().updateSession(localSessionId, { loading: false });
       // Local sessions can still fall back to the on-disk vibe logs;
-      // remote ones have no local logs - just clear the flags.
+      // remote ones have no local logs - surface the failure so the user
+      // sees why the history did not render instead of an empty chat.
       if (!rid) await get().loadVibeSessionMessages(localSessionId);
+      else {
+        get().setAcpStatus("error");
+        get().setAcpError("Resume failed: " + String((err as Error)?.message ?? err));
+      }
     }
   },
 

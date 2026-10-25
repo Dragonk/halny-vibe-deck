@@ -443,4 +443,10 @@ export const it = {
   usageCompletionTooltip: 'Token di output',
   usageTpsTooltip: 'Token al secondo',
   usageCostTooltip: 'Costo della sessione: ${{cost}}',
+  newSessionDialogTitle: 'Nuova sessione',
+  newSessionLocalSection: 'Questo computer',
+  newSessionRemoteSection: 'Computer remoti',
+  newSessionDefault: 'Progetto predefinito',
+  newSessionChooseFolder: 'Scegli cartella…',
+  serveLanUrls: 'Disponibile nella tua rete:',
 }
