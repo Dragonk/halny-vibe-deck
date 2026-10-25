@@ -15,3 +15,6 @@
 - CI: new `ci-dioxus.yml` (workspace tests + windows-gnu check with icon build
   script) and `tag-on-marker.yml` (commit messages containing `[tag vX.Y.Z]`
   create that tag automatically).
+- Build & release pipeline: artifacts are built by GitHub Actions only (no local builds);
+  a commit whose message contains `[release vX.Y.Z]` creates/moves the tag and runs the
+  full release pipeline (test -> bundles -> GitHub release).
