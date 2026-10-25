@@ -56,7 +56,7 @@ fn main() {
     assert!(status.success(), "ar failed to archive the icon object");
 
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=vibedeck_icon");
+    println!("cargo:rustc-link-lib=static:+whole-archive=vibedeck_icon");
 }
 
 /// Minimal standard-alphabet base64 decoder (no dependencies).
