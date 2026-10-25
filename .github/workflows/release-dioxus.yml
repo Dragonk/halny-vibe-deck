@@ -1,10 +1,24 @@
 name: release-dioxus
 
+# Two ways to start a release:
+#   1. Push a tag matching v*-dioxus* (classic).
+#   2. Push a commit to dioxus whose message contains a marker
+#      `[release vX.Y.Z]` — the "tag" job resolves the version, creates the
+#      tag (or moves it to the pushed commit) and the pipeline continues.
+#      (workflows started by GITHUB_TOKEN never trigger other workflows, so
+#      tag-on-marker-created tags cannot start this workflow — hence marker #2.)
+#   3. workflow_dispatch with a tag input (full pipeline, tag is created/moved).
 on:
   push:
     tags:
       - "v*-dioxus*"
+    branches:
+      - dioxus
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.8.3-dioxus.5)"
+        required: true
 
 permissions:
   contents: write
@@ -14,8 +28,53 @@ env:
   PDFIUM_TAG: chromium/7881
 
 jobs:
+  tag:
+    name: Resolve release tag
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      contains(github.event.head_commit.message, '[release v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve tag name
+        id: resolve
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="$(printf '%s' "$COMMIT_MSG" | grep -oP '\[release \K[^\]]+' | head -n1 || true)"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "ERROR: could not resolve release tag"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release tag: $TAG"
+      - name: Ensure tag points at this commit
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          if gh api "repos/${REPO}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} exists; moving it to ${GITHUB_SHA}"
+            gh api -X PATCH "repos/${REPO}/git/refs/tags/${TAG}" -f "sha=${GITHUB_SHA}" -F force=true >/dev/null
+          else
+            echo "Creating tag ${TAG} on ${GITHUB_SHA}"
+            gh api -X POST "repos/${REPO}/git/refs" -f "ref=refs/tags/${TAG}" -f "sha=${GITHUB_SHA}" >/dev/null
+          fi
+
   test:
     name: Test workspace
+    needs: tag
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -114,9 +173,8 @@ jobs:
 
   release:
     name: Create release
-    needs: bundles
+    needs: [tag, bundles]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -127,8 +185,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: VibeDeck ${{ github.ref_name }}
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name: VibeDeck ${{ needs.tag.outputs.tag }}
           prerelease: true
           files: dist/*
           body: |
@@ -149,7 +207,7 @@ jobs:
             - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
             - First Windows build (`vibedeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
             - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
-            - Bundled `WebView2Loader.dll` next to `vibedeck.exe` — required by the Windows webview (fixes the “WebView2Loader.dll not found” system error).
+            - Bundled `WebView2Loader.dll` next to `vibedeck.exe` — required by the Windows webview (fixes the "WebView2Loader.dll not found" system error).
             - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
 
             ## M9 fixes (v0.8.3-dioxus.5)

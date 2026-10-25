@@ -1,10 +1,17 @@
 name: tag-on-marker
 
 # Convenience tagger: push a commit to dioxus whose message contains a
-# marker `[tag vX.Y.Z-dioxus.N]` and this workflow creates that tag on the
-# pushed commit (if it does not exist yet). The tag push then triggers the
-# release-dioxus workflow (test -> bundles -> release).
-# Allows cutting a release without a local git checkout / gh CLI.
+# marker and this workflow applies it:
+#   [tag vX.Y.Z]  -> create that tag on the pushed commit (if it does not
+#                    exist yet). NOTE: a tag created here with GITHUB_TOKEN
+#                    does NOT trigger release-dioxus — events created with
+#                    GITHUB_TOKEN never start new workflow runs. To cut a
+#                    release without a local git checkout, use a commit with
+#                    a `[release vX.Y.Z]` marker instead (handled by
+#                    release-dioxus itself, which also creates/moves the tag).
+#   [untag NAME]  -> delete that tag (all occurrences in the message;
+#                    deleting a missing tag is not an error).
+# Allows tag hygiene without a local git checkout / gh CLI.
 
 on:
   push:
@@ -16,11 +23,11 @@ permissions:
 
 jobs:
   maybe-tag:
-    name: Create tag from commit marker
+    name: Apply tag/untag markers
     runs-on: ubuntu-latest
-    if: ${{ contains(github.event.head_commit.message, '[tag ') }}
+    if: ${{ contains(github.event.head_commit.message, '[tag ') || contains(github.event.head_commit.message, '[untag ') }}
     steps:
-      - name: Extract tag name and create tag
+      - name: Create tag from [tag ...] marker
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -29,7 +36,7 @@ jobs:
         run: |
           TAG="$(printf '%s' "$COMMIT_MSG" | grep -oP '\[tag \K[^\]]+' | head -n1 || true)"
           if [ -z "$TAG" ]; then
-            echo "No [tag ...] marker found; nothing to do."
+            echo "No [tag ...] marker found."
             exit 0
           fi
           if git ls-remote --tags "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "refs/tags/${TAG}" | grep -q .; then
@@ -43,3 +50,20 @@ jobs:
             "https://api.github.com/repos/${REPO}/git/refs" \
             -d "{\"ref\": \"refs/tags/${TAG}\", \"sha\": \"${SHA}\"}"
           echo "Tagged ${TAG}."
+
+      - name: Delete tags from [untag ...] markers
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          printf '%s' "$COMMIT_MSG" | grep -oP '\[untag \K[^\]]+' | while read -r TAG; do
+            [ -z "$TAG" ] && continue
+            echo "Deleting tag ${TAG} (if present)"
+            CODE="$(curl -sS -X DELETE \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/git/refs/tags/${TAG}" \
+              -o /dev/null -w '%{http_code}')"
+            echo "  -> HTTP ${CODE}"
+          done
