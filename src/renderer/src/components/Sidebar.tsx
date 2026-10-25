@@ -203,10 +203,10 @@ export default function Sidebar(): React.JSX.Element {
 
     const session = sessions.find((s) => s.id === id)
     if (!session?.acpSessionId) return
-    // v0.11.1: chips (values AND option lists) follow the session being
-    // viewed - also for lazily previewed sessions, without touching ACP.
-    void useStore.getState().restoreSessionChips(id)
     if (liveSessions.includes(id)) {
+      // v0.11.1: chips (values AND option lists) follow the session being
+      // viewed - restore exactly what the ACP reported for a live session.
+      void useStore.getState().restoreSessionChips(id)
       // v0.9.0: only LIVE sessions resume over ACP (loadAcpSession ensures
       // the right worker is alive). A live session without messages is a
       // freshly primed draft - a real load fills its history.
@@ -223,6 +223,9 @@ export default function Sidebar(): React.JSX.Element {
     if (session.messages.length === 0 && !session.loading) {
       await useStore.getState().previewSession(id)
     }
+    // v0.12: rebuild the chip option lists AFTER the preview so they use
+    // the session-file config - never the lists of the previous session.
+    void useStore.getState().restoreSessionChips(id)
   }
 
   // v0.9.0: live (running) sessions first, then newest first

@@ -20,6 +20,23 @@ import type {
 import { defaultConfig } from "./types";
 import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, AppUpdateInfo, CliUpdateInfo } from "./types";
 
+/** Minimal shapes used to rebuild chip option lists for historical sessions. */
+interface HistModelHolder {
+  models?: HistModelCfg[];
+}
+interface HistModelCfg {
+  name: string;
+  alias?: string;
+  display_name?: string;
+  thinking?: string;
+  thinking_levels?: string[];
+}
+interface HistAgentCfg {
+  name: string;
+  agent_type?: string;
+  display_name?: string;
+}
+
 /** ACP history message (from SessionHistory event) */
 export interface AcpHistoryToolCall {
   id: string;
@@ -610,11 +627,99 @@ export const useStore = create<AppStore>((set, get) => ({
   restoreSessionChips: async (localSessionId) => {
     const session = get().sessions.find((s) => s.id === localSessionId);
     if (!session?.acpSessionId) return;
-    // v0.11.1: option LISTS are model/agent specific - restore the ones
-    // recorded for this session, otherwise the thinking chip keeps the
-    // option list of whichever model was active in the previous view.
+    // Active/live session (or one the ACP reported this run): restore
+    // exactly the option lists the ACP sent for it.
     const recorded = get().sessionConfigOptions[session.acpSessionId];
-    if (recorded && recorded.length > 0) get().setConfigOptions(recorded);
+    if (recorded && recorded.length > 0) {
+      get().setConfigOptions(recorded);
+      await get().syncSessionChips(localSessionId);
+      return;
+    }
+    // v0.12: historical session - never inherit the option lists of the
+    // previously viewed session. Build display-only lists from the vibe
+    // config of the session's cwd (global + project, local or remote).
+    const rid = session.remoteId ?? null;
+    const cwd = session.workingDirectory || get().workingDirectory || "";
+    try {
+      const [gcfgRaw, pcfgRaw, gagentsRaw, pagentsRaw] = await Promise.all([
+        window.api.vibe.getConfig(rid ? "remote" : "global", "", rid ?? undefined) as Promise<HistModelHolder | null>,
+        window.api.vibe.getConfig("project", cwd, rid ?? undefined) as Promise<HistModelHolder | null>,
+        window.api.vibe.getAgents(rid ? "remote" : "global", "", rid ?? undefined) as Promise<HistAgentCfg[]>,
+        window.api.vibe.getAgents("project", cwd, rid ?? undefined) as Promise<HistAgentCfg[]>,
+      ]);
+      const gmodels = (gcfgRaw && gcfgRaw.models) || [];
+      const pmodels = (pcfgRaw && pcfgRaw.models) || [];
+      const keyOf = (m: HistModelCfg): string => m.alias || m.name;
+      const merged: HistModelCfg[] = [...gmodels];
+      for (const pm of pmodels) {
+        const i = merged.findIndex((m) => keyOf(m) === keyOf(pm));
+        if (i >= 0) merged[i] = pm;
+        else merged.push(pm);
+      }
+      const lastModel = session.lastModel || "";
+      const cur = lastModel
+        ? merged.find((m) => keyOf(m) === lastModel || m.name === lastModel)
+        : undefined;
+      // CLI defaults: the five levels; an explicitly empty set means "off".
+      const levels =
+        cur && cur.thinking_levels && cur.thinking_levels.length > 0
+          ? cur.thinking_levels
+          : ["off", "low", "medium", "high", "max"];
+      let thinkingCurrent = session.lastThinking || "";
+      if (!levels.includes(thinkingCurrent)) {
+        const dl = cur?.thinking;
+        thinkingCurrent =
+          dl && levels.includes(dl)
+            ? dl
+            : levels.includes("high")
+              ? "high"
+              : levels[levels.length - 1];
+      }
+      const agents = [
+        ...(gagentsRaw || []),
+        ...(pagentsRaw || []),
+      ].filter((a) => (a.agent_type ?? "agent") === "agent");
+      const agentNames = new Set<string>();
+      const agentChoices = agents
+        .filter((a) => (agentNames.has(a.name) ? false : (agentNames.add(a.name), true)))
+        .map((a) => ({ value: a.name, name: a.display_name || a.name }));
+      const options: ConfigOption[] = [
+        {
+          id: "mode",
+          name: "Mode",
+          type: "select",
+          currentValue: session.lastMode || "accept-edits",
+          options: [
+            { value: "ask", name: "Ask" },
+            { value: "accept-edits", name: "Accept Edits" },
+            { value: "smart-approve", name: "Smart Approve" },
+            { value: "auto-approve", name: "Auto Approve" },
+            ...agentChoices,
+          ],
+        },
+        {
+          id: "model",
+          name: "Model",
+          type: "select",
+          currentValue: lastModel,
+          options: merged.map((m) => ({
+            value: keyOf(m),
+            name: m.display_name || m.name,
+            description: m.name,
+          })),
+        },
+        {
+          id: "thinking",
+          name: "Thinking",
+          type: "select",
+          currentValue: thinkingCurrent,
+          options: levels.map((l) => ({ value: l, name: l.charAt(0).toUpperCase() + l.slice(1) })),
+        },
+      ];
+      get().setConfigOptions(options);
+    } catch {
+      // vibe config unavailable (e.g. remote host down) - keep current chips
+    }
     await get().syncSessionChips(localSessionId);
   },
 
