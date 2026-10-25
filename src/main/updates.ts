@@ -320,26 +320,56 @@ export async function updateApp(): Promise<AppUpdateResult> {
     if (process.platform === "win32") {
       const installer = path.join(tmp, "nexus-setup.exe")
       await downloadTo(info.downloadUrl, installer)
-      // The silent NSIS installer closes the running app itself; a detached
-      // PowerShell helper waits for the install to finish and relaunches the
-      // same executable path, so the app comes back with its persisted state
-      // (config.json keeps sessions, serve settings and credentials).
+      const size = fs.statSync(installer).size
+      if (size < 20 * 1024 * 1024) {
+        return {
+          ok: false,
+          error: "Downloaded installer looks invalid (" + Math.round(size / 1024) + " KiB) - aborting update",
+        }
+      }
+      // The NSIS installer is an assisted one (oneClick=false): in silent mode
+      // (/S) it does NOT close a running app and aborts on locked files.
+      // Previous versions launched it while the app was still shutting down,
+      // which silently failed the install and left the app closed. The helper
+      // script now waits for THIS process to fully exit before running the
+      // installer, then relaunches the same executable path. Every step is
+      // appended to nexus-update.log in the temp directory for diagnostics.
       const exe = process.execPath
-      const ps =
-        "Start-Process -FilePath '" + installer + "' -ArgumentList '/S' -Wait; Start-Process -FilePath '" + exe + "'"
+      const logPath = path.join(os.tmpdir(), "nexus-update.log")
+      const scriptPath = path.join(tmp, "nexus-update.ps1")
+      const q = (s: string): string => "'" + s + "'"
+      const ps = [
+        "$ErrorActionPreference = 'Continue'",
+        "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
+        "Log ('nexus update start, pid " + process.pid + ", installer ' + " + q(installer) + ")",
+        "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
+        "Start-Sleep -Milliseconds 1500",
+        "Log 'launching installer'",
+        "$p = Start-Process -FilePath " + q(installer) + " -ArgumentList '/S' -Wait -PassThru",
+        "Log ('installer exit code ' + $p.ExitCode)",
+        "Log 'relaunching app'",
+        "Start-Process -FilePath " + q(exe),
+        "Log 'done'",
+      ].join("\n")
+      fs.writeFileSync(scriptPath, ps, "utf8")
       spawn(
         "powershell.exe",
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
         { detached: true, stdio: "ignore", windowsHide: true }
       ).unref()
-      setTimeout(() => {
-        app.quit()
-      }, 800)
+      app.quit()
       return { ok: true, error: null }
     }
     if (process.platform === "linux") {
       const zipPath = path.join(tmp, "nexus-linux.zip")
       await downloadTo(info.downloadUrl, zipPath)
+      const size = fs.statSync(zipPath).size
+      if (size < 20 * 1024 * 1024) {
+        return {
+          ok: false,
+          error: "Downloaded archive looks invalid (" + Math.round(size / 1024) + " KiB) - aborting update",
+        }
+      }
       // User-dir layout (scripts/install-linux.sh): the app directory is the
       // folder holding the executable. Replacing files of a running Linux
       // process is safe - the kernel keeps the old inode mapped.
@@ -357,4 +387,3 @@ export async function updateApp(): Promise<AppUpdateResult> {
     return { ok: false, error: (err as Error).message }
   }
 }
-

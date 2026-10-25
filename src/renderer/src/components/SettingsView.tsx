@@ -1262,7 +1262,7 @@ export default function SettingsView(): React.JSX.Element {
                 </button>
                 <button
                   className="action-btn"
-                  disabled={updatesBusy || !(updateInfo.app?.updateAvailable ?? false)}
+                  disabled={web || updatesBusy || !(updateInfo.app?.updateAvailable ?? false)}
                   onClick={() => void handleUpdateAppNow()}
                 >
                   {tr.updatesUpdateButton}
@@ -1281,12 +1281,59 @@ export default function SettingsView(): React.JSX.Element {
                 </span>
               </div>
               <div className="updates-actions">
-                <button className="action-btn" disabled={updatesBusy} onClick={() => void handleUpdateCliNow()}>
+                <button
+                  className="action-btn"
+                  disabled={updatesBusy || !(updateInfo.cli?.updateAvailable ?? false)}
+                  onClick={() => void handleUpdateCliNow()}
+                >
                   {tr.updatesUpdateButton}
                 </button>
               </div>
             </div>
             <p className="field-hint">{tr.updatesUpdateHint}</p>
+            <div className="remote-cli-updates">
+              <label className="field-label">{tr.updatesRemoteCliTitle}</label>
+              {(local.remoteConnections ?? []).filter((c) => c.enabled).length === 0 && (
+                <p className="field-hint">{tr.remoteNoConnections}</p>
+              )}
+              {(local.remoteConnections ?? []).filter((c) => c.enabled).map((conn) => {
+                const info = remoteCli[conn.id]
+                return (
+                  <div key={conn.id} className="updates-row">
+                    <div className="updates-info">
+                      <span className="updates-name">{conn.name}</span>
+                      <span className="updates-versions">
+                        {info === 'checking'
+                          ? tr.updatesChecking
+                          : info
+                            ? tr.updatesCurrentLabel.replace('{{version}}', info.currentVersion ?? '?') +
+                              ' · ' +
+                              tr.updatesLatestLabel.replace('{{version}}', info.latestVersion ?? '?')
+                            : tr.updatesNotChecked}
+                      </span>
+                    </div>
+                    <div className="updates-actions">
+                      <button
+                        className="field-btn"
+                        disabled={updatesBusy}
+                        onClick={() => void handleCheckRemoteCli(conn.id)}
+                      >
+                        {tr.updatesCheckButton}
+                      </button>
+                      <button
+                        className="action-btn"
+                        disabled={
+                          updatesBusy || !info || info === 'checking' || !info.updateAvailable
+                        }
+                        onClick={() => void handleUpdateCliNow(conn.id)}
+                      >
+                        {tr.updatesUpdateButton}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
             {updatesError && <p className="field-hint">{updatesError}</p>}
           </div>
         )}
