@@ -82,6 +82,8 @@ export class AcpManager {
   private win: BrowserWindow | null = null
   /** set when this instance drives a remote vibe-acp over ssh */
   private remote: { sshCmd: string } | null = null
+  /** v0.7.0: id of the remote connection this instance drives (null = local) */
+  private remoteTag: string | null = null
   private _pendingSummaryChunks: string[] | null = null
   private _pendingSummaryId: string | null = null
   /** session/load in flight for these ACP session ids — replay is buffered, not emitted */
@@ -91,14 +93,25 @@ export class AcpManager {
     this.win = win
   }
 
+  /** v0.7.0: tag events with the remote connection id (multi-worker support) */
+  setRemoteTag(id: string | null): void {
+    this.remoteTag = id
+  }
+
   private emit(event: AcpEvent): void {
-    broadcastToWeb('acp:event', [event])
+    // v0.7.0: tag every event with the remote connection it came from so the
+    // renderer can run several ACP workers (local + remotes) at once.
+    const ev: AcpEvent =
+      this.remoteTag !== null
+        ? { type: event.type, data: { ...event.data, remoteId: this.remoteTag } }
+        : event
+    broadcastToWeb('acp:event', [ev])
     if (process.env.NEXUS_DEBUG_EVENTS) {
-      const dbg = event as unknown as Record<string, unknown>
+      const dbg = ev as unknown as Record<string, unknown>
       console.log('[ACP] <<<', String(dbg.type), JSON.stringify(dbg.data ?? {}).slice(0, 160))
     }
     if (this.win && !this.win.isDestroyed()) {
-      this.win.webContents.send('acp:event', event)
+      this.win.webContents.send('acp:event', ev)
     }
   }
 

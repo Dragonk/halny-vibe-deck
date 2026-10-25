@@ -151,10 +151,8 @@ export default function Sidebar(): React.JSX.Element {
 
   const handleNewSession = (): void => {
     setMobileSidebarOpen(false)
-    // Leaving remote mode: make sure the local agent process is back
-    if (useStore.getState().remoteActive) {
-      void useStore.getState().ensureLocalAcp().catch(console.error)
-    }
+    // v0.7.0: the local agent keeps running alongside remote workers,
+    // so starting a new local session needs no worker switching anymore.
     // Reuse an existing empty draft (e.g. the priming session) if any
     const emptyDraft = sessions.find(
       (s) =>
@@ -182,10 +180,8 @@ export default function Sidebar(): React.JSX.Element {
     setMobileSidebarOpen(false)
 
     const session = sessions.find((s) => s.id === id)
-    // Selecting a local session while a remote ACP is active: switch back.
-    if (session && !session.remoteId && useStore.getState().remoteActive) {
-      void useStore.getState().ensureLocalAcp().catch(console.error)
-    }
+    // v0.7.0: loadAcpSession ensures the right worker (local or remote)
+    // is alive, so no explicit worker switching is needed here.
     if (session?.acpSessionId && session.messages.length === 0 && !session.loading) {
       // Real resume via ACP session/load (replays the full history)
       await loadAcpSession(id)
@@ -296,10 +292,12 @@ export default function Sidebar(): React.JSX.Element {
         {isBusy && isHovered && session.acpSessionId && (
           <button
             className="session-cancel-btn"
-            title="Cancel"
+            title={tr.cancelLabel}
             onClick={(e) => {
               e.stopPropagation()
-              window.api.acp.cancelSession(session.acpSessionId!).catch(console.error)
+              window.api.acp
+                .cancelSession(session.acpSessionId!, session.remoteId ?? undefined)
+                .catch(console.error)
             }}
           >
             ✕
@@ -400,7 +398,38 @@ export default function Sidebar(): React.JSX.Element {
                       </div>
                     </button>
                   ))}
-                  {connSessions.map((s) => renderSession(s))}
+                  {(() => {
+                    // v0.7.0: group the connection's sessions per project cwd
+                    const wdGroups = new Map<string, typeof connSessions>()
+                    for (const s of connSessions) {
+                      const wd = s.workingDirectory || ''
+                      const list = wdGroups.get(wd)
+                      if (list) list.push(s)
+                      else wdGroups.set(wd, [s])
+                    }
+                    return Array.from(wdGroups.entries()).map(([wd, list]) => {
+                      const grpKey = 'remote:' + conn.id + ':' + wd
+                      const grpCollapsed = collapsedProjects.includes(grpKey)
+                      const label =
+                        wd
+                          ? wd.split(/[\\/]/).filter(Boolean).pop() || wd
+                          : tr.noProject
+                      return (
+                        <div key={grpKey} className="remote-cwd-group">
+                          <button
+                            className="project-group-header remote-cwd-header"
+                            onClick={() => toggleProjectCollapse(grpKey)}
+                            title={wd || tr.noProject}
+                          >
+                            <span className={`project-chevron ${grpCollapsed ? '' : 'open'}`}>▸</span>
+                            <span className="project-name">{label}</span>
+                            <span className="project-count">{list.length}</span>
+                          </button>
+                          {!grpCollapsed && list.map((s) => renderSession(s))}
+                        </div>
+                      )
+                    })
+                  })()}
                 </>
               )}
             </div>

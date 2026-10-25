@@ -88,6 +88,7 @@ export interface PreviewTab {
   name: string
   path: string
   diff?: string
+  remoteId?: string | null
 }
 
 /** One selectable choice of an ACP config option. */

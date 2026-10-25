@@ -31,7 +31,8 @@ export default function Dock(): React.JSX.Element | null {
 
   const cwd = currentSessionWorkingDirectory()
   const activeSession = useStore.getState().sessions.find((s) => s.id === currentSessionId) ?? null
-  const isRemoteSession = Boolean(activeSession?.remoteId)
+  // v0.7.0: dock tabs work for remote sessions too (fs/git over ssh)
+  const remoteId = activeSession?.remoteId ?? null
   const activePreview = previewTabs.find((t) => t.id === activePreviewId) ?? null
   const activeTabKind: 'files' | 'git' | 'preview' = activePreview ? 'preview' : dockTab
 
@@ -82,7 +83,6 @@ export default function Dock(): React.JSX.Element | null {
       <div className="dock-tabs">
         <button
           className={`dock-tab ${activeTabKind === 'files' ? 'active' : ''}`}
-          disabled={isRemoteSession}
           onClick={() => {
             setDockTab('files')
             setActivePreview('')
@@ -93,7 +93,6 @@ export default function Dock(): React.JSX.Element | null {
         </button>
         <button
           className={`dock-tab ${activeTabKind === 'git' ? 'active' : ''}`}
-          disabled={isRemoteSession}
           onClick={() => {
             setDockTab('git')
             setActivePreview('')
@@ -124,11 +123,8 @@ export default function Dock(): React.JSX.Element | null {
         ))}
       </div>
       <div className="dock-body">
-        {isRemoteSession && activeTabKind !== 'preview' && (
-          <div className="dock-remote-gate">{tr.dockRemoteGate}</div>
-        )}
-        {!isRemoteSession && activeTabKind === 'files' && <FileTree cwd={cwd} />}
-        {!isRemoteSession && activeTabKind === 'git' && <GitPanel cwd={cwd} />}
+        {activeTabKind === 'files' && <FileTree cwd={cwd} remoteId={remoteId} />}
+        {activeTabKind === 'git' && <GitPanel cwd={cwd} remoteId={remoteId} />}
         {activeTabKind === 'preview' && activePreview && <FilePreview tab={activePreview} />}
       </div>
     </aside>

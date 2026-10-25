@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo } from 'react'
-import { useStore } from '../store'
+import { useStore, fileTreeKey } from '../store'
 import { useTranslation } from '../i18n'
 
 const BS = String.fromCharCode(92)
@@ -28,6 +28,8 @@ interface DirEntry {
 
 interface Props {
   cwd: string
+  /** v0.7.0: remote connection id (null = local filesystem) */
+  remoteId?: string | null
 }
 
 // Normalize a directory path so the load key and the render key always
@@ -38,13 +40,14 @@ function normalizeDirPath(dir: string): string {
 
 // The expansion state and directory entries live in the app store, so they
 // survive switching dock tabs (e.g. opening a file preview and coming back).
-export default function FileTree({ cwd }: Props): React.JSX.Element {
+export default function FileTree({ cwd, remoteId }: Props): React.JSX.Element {
   const { openFilePreview, config, fileTreeExpanded, fileTreeEntries, loadFileTreeDir, toggleFileTreeDir } = useStore()
   const tr = useTranslation(config.language)
+  const rid = remoteId ?? null
 
   useEffect(() => {
-    if (cwd) loadFileTreeDir(cwd)
-  }, [cwd, loadFileTreeDir])
+    if (cwd) loadFileTreeDir(cwd, rid)
+  }, [cwd, rid, loadFileTreeDir])
 
   const rootName = useMemo(
     () => (cwd ? cwd.split(/[/\\\\]/).filter(Boolean).pop() ?? cwd : ''),
@@ -56,22 +59,22 @@ export default function FileTree({ cwd }: Props): React.JSX.Element {
   }
 
   const renderEntries = (dir: string, depth: number): React.JSX.Element => {
-    const entries = fileTreeEntries[dir] ?? []
+    const entries = fileTreeEntries[fileTreeKey(dir, rid)] ?? []
     return (
       <>
         {entries
           .filter((e) => !(e.isDir && SKIP_DIRS.has(e.name)))
           .map((entry) => {
             const fullPath = `${dir}/${entry.name}`.split(BS).join('/')
-            const isExpanded = fileTreeExpanded.has(fullPath)
+            const isExpanded = fileTreeExpanded.has(fileTreeKey(fullPath, rid))
             return (
               <div key={fullPath}>
                 <button
                   className={`filetree-item ${depth > 0 ? '' : ''}`}
                   style={{ paddingLeft: 6 + depth * 12 }}
                   onClick={() => {
-                    if (entry.isDir) toggleFileTreeDir(fullPath)
-                    else openFilePreview(fullPath, entry.name)
+                    if (entry.isDir) toggleFileTreeDir(fullPath, rid)
+                    else openFilePreview(fullPath, entry.name, rid)
                   }}
                   title={fullPath}
                 >

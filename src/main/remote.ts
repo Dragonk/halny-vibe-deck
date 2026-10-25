@@ -22,10 +22,20 @@ export function tokenizeCmd(cmd: string): string[] {
   return tokens
 }
 
+/** Quote a string for the remote POSIX shell (single quotes, escape). */
+export function shq(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'"
+}
+
 export interface SshRunResult { code: number; stdout: string; stderr: string }
 
 /** Run a remote command over the connection's ssh command (single quoted arg). */
-export function sshRun(conn: RemoteConnection, remoteCmd: string, timeoutMs = 15000): Promise<SshRunResult> {
+export function sshRun(
+  conn: RemoteConnection,
+  remoteCmd: string,
+  timeoutMs = 15000,
+  stdinData?: string,
+): Promise<SshRunResult> {
   return new Promise((resolve) => {
     const tokens = tokenizeCmd(conn.sshCmd)
     if (tokens.length === 0) {
@@ -54,6 +64,12 @@ export function sshRun(conn: RemoteConnection, remoteCmd: string, timeoutMs = 15
     }, timeoutMs)
     proc.stdout?.on("data", (d: Buffer) => { out += d.toString() })
     proc.stderr?.on("data", (d: Buffer) => { err += d.toString() })
+    if (stdinData !== undefined) {
+      try {
+        proc.stdin?.write(stdinData)
+        proc.stdin?.end()
+      } catch { /* stdin not writable */ }
+    }
     proc.on("error", (e: Error) => { err += String(e); finish(-1) })
     proc.on("exit", (code) => finish(code ?? -1))
   })

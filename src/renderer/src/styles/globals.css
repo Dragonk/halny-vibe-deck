@@ -5614,6 +5614,8 @@ code {
 .remote-dot.ok { background: #22c55e; }
 .remote-dot.down { background: #ef4444; }
 .remote-project-group .project-group-header { color: var(--accent); }
+.remote-cwd-header { padding-left: 22px; }
+.remote-cwd-group .session-item { padding-left: 26px; }
 .remote-location-item { opacity: 0.85; }
 .remote-location-item:hover { opacity: 1; }
 .remote-location-item .remote-loc-icon {

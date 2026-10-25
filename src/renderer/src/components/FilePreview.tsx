@@ -573,23 +573,24 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
     setDirEntries([])
 
     ;(async () => {
-      const s = await window.api.fs.stat(tab.path)
+      const rid = tab.remoteId ?? undefined
+      const s = await window.api.fs.stat(tab.path, rid)
       if (!alive) return
       setStat(s)
       if (!s.exists) return
       if (s.isDir) {
-        const entries = await window.api.fs.listDir(tab.path)
+        const entries = await window.api.fs.listDir(tab.path, rid)
         if (alive) setDirEntries(entries)
         return
       }
       if (isImage || isPdf || isSheet || isDocx || isZip) {
-        const b = await window.api.fs.readBinary(tab.path)
+        const b = await window.api.fs.readBinary(tab.path, rid)
         if (alive) {
           if (b.error) setTextError(b.error)
           else setBinary({ base64: b.base64, mime: b.mime })
         }
       } else {
-        const t = await window.api.fs.readText(tab.path)
+        const t = await window.api.fs.readText(tab.path, rid)
         if (alive) {
           if (t.error) setTextError(t.error)
           else {
@@ -603,7 +604,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
     return () => {
       alive = false
     }
-  }, [tab.path, isImage, isPdf, isSheet, isDocx, isZip])
+  }, [tab.path, tab.remoteId, isImage, isPdf, isSheet, isDocx, isZip])
 
   const canEdit =
     tab.kind === 'file' &&
@@ -616,7 +617,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
     const newText = docRef.current?.() ?? text
     if (newText === null) return
     setSaving(true)
-    const res = await window.api.fs.writeText(tab.path, newText)
+    const res = await window.api.fs.writeText(tab.path, newText, tab.remoteId ?? undefined)
     setSaving(false)
     if (res.error) {
       setTextError(res.error)
@@ -676,13 +677,15 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
               </button>
             )
           )}
-          <button
-            className="file-preview-btn"
-            title={tr.previewOpenExternally}
-            onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
-          >
-            ↗
-          </button>
+          {!(tab.remoteId ?? null) && (
+            <button
+              className="file-preview-btn"
+              title={tr.previewOpenExternally}
+              onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
+            >
+              ↗
+            </button>
+          )}
         </div>
       </div>
 
@@ -694,7 +697,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
             {parentOf(tab.path) && (
               <div
                 className="preview-dir-entry preview-dir-click"
-                onClick={() => openFilePreview(parentOf(tab.path) as string)}
+                onClick={() => openFilePreview(parentOf(tab.path) as string, undefined, tab.remoteId ?? null)}
               >
                 <span>📁</span>
                 <span>..</span>
@@ -704,7 +707,7 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
               <div
                 key={e.name}
                 className="preview-dir-entry preview-dir-click"
-                onClick={() => openFilePreview(joinPath(tab.path, e.name))}
+                onClick={() => openFilePreview(joinPath(tab.path, e.name), undefined, tab.remoteId ?? null)}
               >
                 <span>{e.isDir ? '📁' : '📄'}</span>
                 <span>{e.name}</span>

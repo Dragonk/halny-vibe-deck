@@ -500,6 +500,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
     if (pendingNewSession || sessionStarting || !currentSess?.acpSessionId) {
       // ---- First message on a draft session — create the ACP session ----
+      const rid = currentSess?.remoteId ?? null
       setPendingNewSession(false)
       setSessionStarting(true)
       setIsStarting(true)
@@ -509,7 +510,12 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           if (currentSess?.acpSessionId && currentSess.id) {
             unlinkAcpSession(currentSess.id)
           }
-          await window.api.acp.newSession(cwd)
+          // v0.7.0: remote drafts need their own worker alive first
+          if (rid) await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', cwd, rid)
+          await window.api.acp.newSession(cwd, rid ?? undefined)
+        } else if (rid) {
+          setAcpStatus('connecting')
+          await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', cwd, rid)
         } else {
           if (!config.acpPath) {
             setAcpError('ACP path not configured. Go to Settings.')
@@ -519,7 +525,6 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             return
           }
           setAcpStatus('connecting')
-          useStore.setState({ remoteActive: null })
           await window.api.acp.start(config.acpPath, cwd)
         }
       } catch (err) {
@@ -543,7 +548,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       addUserMessage(textToSend, attachments)
       if (linkedSess?.id) useStore.getState().markSessionBusy(linkedSess.id)
       try {
-        await window.api.acp.sendPrompt(expandedText, linkedSess?.acpSessionId ?? undefined)
+        await window.api.acp.sendPrompt(expandedText, linkedSess?.acpSessionId ?? undefined, rid ?? undefined)
       } catch (err) {
         setAcpError((err as Error).message)
       }
@@ -553,26 +558,41 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     // ---- Existing session — continue in the same ACP session ----
     const sessionWd = currentSessionWorkingDirectory() || config.workingDirectory || ''
     const acpSessId = currentSess.acpSessionId
+    const rid = currentSess.remoteId ?? null
 
     if (acpStatus === 'disconnected' || acpStatus === 'error') {
-      if (!config.acpPath) {
-        setAcpError('ACP path not configured. Go to Settings.')
-        return
-      }
-      setIsStarting(true)
-      setAcpStatus('connecting')
-      try {
-        // start() creates the session with the right cwd; the draft re-binding
-        // logic in App keeps the current local session attached to it.
-        useStore.setState({ remoteActive: null })
-        await window.api.acp.start(config.acpPath, sessionWd)
-      } catch (err) {
-        setAcpStatus('error')
-        setAcpError((err as Error).message)
+      // v0.7.0: remote sessions revive their own worker (no prime);
+      // local ones restart the local agent as before.
+      if (rid) {
+        setIsStarting(true)
+        setAcpStatus('connecting')
+        try {
+          await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', sessionWd, rid)
+        } catch (err) {
+          setAcpError((err as Error).message)
+          setIsStarting(false)
+          return
+        }
         setIsStarting(false)
-        return
+      } else {
+        if (!config.acpPath) {
+          setAcpError('ACP path not configured. Go to Settings.')
+          return
+        }
+        setIsStarting(true)
+        setAcpStatus('connecting')
+        try {
+          // start() creates the session with the right cwd; the draft re-binding
+          // logic in App keeps the current local session attached to it.
+          await window.api.acp.start(config.acpPath, sessionWd)
+        } catch (err) {
+          setAcpStatus('error')
+          setAcpError((err as Error).message)
+          setIsStarting(false)
+          return
+        }
+        setIsStarting(false)
       }
-      setIsStarting(false)
     }
 
     setInputText('')
@@ -592,25 +612,31 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       ? `${currentSess.contextSummary}\n\nUser: ${expandedText}`
       : expandedText
     try {
-      await window.api.acp.sendPrompt(promptText, acpSessId)
+      await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
     } catch (err) {
       const errMsg = (err as Error).message
       // Session not in ACP memory (e.g. app restarted) — load it from disk first
       const sessionExpired =
-        errMsg.includes('No active session') || errMsg.includes('Session not found')
+        errMsg.includes('No active session') ||
+        errMsg.includes('Session not found') ||
+        (rid !== null && errMsg.includes('Remote ACP worker not started'))
       if (sessionExpired) {
         try {
           setSessionStarting(true)
+          if (rid) {
+            // v0.7.0: revive the remote worker first (idempotent, no prime)
+            await window.api.acp.ensureWorker(config.acpPath || 'vibe-acp', sessionWd, rid)
+          }
           try {
             // Real resume: session/load replays the full history
-            await window.api.acp.loadSession(acpSessId, sessionWd)
+            await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined)
             useStore.getState().markSessionBusy(currentSess.id)
-            await window.api.acp.sendPrompt(promptText, acpSessId)
+            await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
           } catch (loadErr) {
             // session/load failed (log missing) → fall back to a new session
             console.log('[InputBar] loadSession failed:', loadErr, '— creating new session')
-            await window.api.acp.newSession(sessionWd)
-            await window.api.acp.sendPrompt(promptText)
+            await window.api.acp.newSession(sessionWd, rid ?? undefined)
+            await window.api.acp.sendPrompt(promptText, undefined, rid ?? undefined)
           }
           setSessionStarting(false)
         } catch (err2) {
@@ -799,7 +825,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       // Re-bind an empty draft to a fresh ACP session with the new cwd
       if (session.acpSessionId && session.messages.length === 0) {
         if (acpStatus === 'connected') {
-          window.api.acp.newSession(folder).catch((err: Error) => {
+          window.api.acp.newSession(folder, session.remoteId ?? undefined).catch((err: Error) => {
             console.error('Failed to re-bind session folder:', err)
           })
         } else {
@@ -840,8 +866,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             : { lastThinking: value }
       useStore.getState().updateSession(sess.id, patch)
     }
-    const acpSessId = useStore.getState().activeAcpSessionId ?? currentSession()?.acpSessionId
-    await window.api.acp.setConfigOption(key, value, acpSessId ?? undefined).catch(console.error)
+    const acpSessId = useStore.getState().activeAcpSessionId ?? sess?.acpSessionId
+    await window.api.acp
+      .setConfigOption(key, value, acpSessId ?? undefined, sess?.remoteId ?? undefined)
+      .catch(console.error)
   }
 
   const isSending = acpStatus === 'connecting' || isStarting
@@ -850,9 +878,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     (inputText.trim().length > 0 || pastedImages.length > 0) && !isSending && !isCurrentSessionBusy
 
   const handleStop = useCallback(() => {
-    const acpSessId = currentSession()?.acpSessionId
+    const sess = currentSession()
+    const acpSessId = sess?.acpSessionId
     if (acpSessId) {
-      window.api.acp.cancelSession(acpSessId).catch(console.error)
+      window.api.acp.cancelSession(acpSessId, sess?.remoteId ?? undefined).catch(console.error)
     }
   }, [currentSession])
 
@@ -1056,7 +1085,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             />
 
             {isCurrentSessionBusy ? (
-              <button className="ic-stop-btn" onClick={handleStop} title="Stop">
+              <button className="ic-stop-btn" onClick={handleStop} title={tr.stopLabel}>
                 <StopIcon />
               </button>
             ) : (

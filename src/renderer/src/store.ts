@@ -47,6 +47,11 @@ function normPath(p: string): string {
   return p.split(BS).join("/");
 }
 
+/** v0.7.0: file-tree key for a directory, namespaced per remote connection. */
+export function fileTreeKey(dir: string, remoteId?: string | null): string {
+  return remoteId ? "r:" + remoteId + ":" + dir : dir;
+}
+
 interface AppStore {
   // Config
   config: AppConfig;
@@ -131,17 +136,18 @@ interface AppStore {
   setDockTab: (tab: DockTabKind) => void;
   previewTabs: PreviewTab[];
   activePreviewId: string | null;
-  openFilePreview: (path: string, name?: string) => void;
-  openDiffPreview: (name: string, path: string, diff: string) => void;
+  openFilePreview: (path: string, name?: string, remoteId?: string | null) => void;
+  openDiffPreview: (name: string, path: string, diff: string, remoteId?: string | null) => void;
   closePreviewTab: (id: string) => void;
   setActivePreview: (id: string) => void;
-  openFilePreviewTab: (path: string, name?: string) => void;
-  // File-tree state lives in the store so expansion survives dock tab switches
+  openFilePreviewTab: (path: string, name?: string, remoteId?: string | null) => void;
+  // File-tree state lives in the store so expansion survives dock tab switches.
+  // v0.7.0: keys are namespaced per remote connection (fileTreeKey).
   fileTreeExpanded: Set<string>;
   fileTreeEntries: Record<string, Array<{ name: string; isDir: boolean }>>;
-  loadFileTreeDir: (dir: string) => void;
-  toggleFileTreeDir: (dir: string) => void;
-  revealInFileTree: (dir: string) => void;
+  loadFileTreeDir: (dir: string, remoteId?: string | null) => void;
+  toggleFileTreeDir: (dir: string, remoteId?: string | null) => void;
+  revealInFileTree: (dir: string, remoteId?: string | null) => void;
   hideSession: (key: string) => void;
   hideProject: (workingDirectory: string) => void;
   unhideSessions: (keys: string[]) => void;
@@ -190,21 +196,20 @@ interface AppStore {
   loadAcpSession: (localSessionId: string) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
-  // ---- v0.6.0: remote SSH connections ----
-  /** Currently active remote ACP (connection id + the cwd it was started with) */
-  remoteActive: { id: string; cwd: string } | null;
-  setRemoteActive: (v: { id: string; cwd: string } | null) => void;
+  // ---- v0.6.0/v0.7.0: remote SSH connections ----
   /** Latest reachability status per connection id */
   remoteStatuses: Record<string, RemoteStatus>;
-  /** Switch back to the local ACP (restarts the agent process locally). */
-  ensureLocalAcp: () => Promise<void>;
+  /**
+   * v0.7.0: idempotently make sure the ACP worker for a connection (null =
+   * the local agent) is running. Never primes a session - resume paths rely
+   * on this so replaying a session does not create garbage sessions.
+   */
+  ensureAcpWorker: (remoteId: string | null, cwd?: string) => Promise<void>;
   /** Poll status + session lists for all enabled remote connections. */
   refreshRemoteData: () => Promise<void>;
   startRemoteSession: (remoteId: string, cwd: string) => Promise<void>;
   loadRemoteSession: (remoteId: string, info: RemoteSessionInfo) => Promise<void>;
   importRemoteSessions: (remoteId: string, infos: RemoteSessionInfo[]) => void;
-  /** True when the given connection is the one the ACP process is bound to. */
-  isRemoteConnected: (remoteId: string) => boolean;
 }
 
 export const useStore = create<AppStore>((set, get) => ({
@@ -311,6 +316,7 @@ export const useStore = create<AppStore>((set, get) => ({
     const session = get().sessions.find((s) => s.id === localSessionId);
     if (!session?.acpSessionId) return;
     const acpSessionId = session.acpSessionId;
+    const chipRid = session.remoteId ?? null;
     let model = session.lastModel;
     let mode = session.lastMode;
     let thinking = session.lastThinking;
@@ -345,7 +351,7 @@ export const useStore = create<AppStore>((set, get) => ({
       if (id === "mode") get().setCurrentMode(value);
       if (id === "thinking") get().setCurrentThinking(value);
       get().patchConfigOption(id, value);
-      window.api.acp.setConfigOption(id, value, acpSessionId).catch(console.error);
+      window.api.acp.setConfigOption(id, value, acpSessionId, chipRid ?? undefined).catch(console.error);
     };
     apply("model", model, get().currentModel);
     apply("mode", mode, get().currentMode);
@@ -400,31 +406,33 @@ export const useStore = create<AppStore>((set, get) => ({
 
   previewTabs: [],
   activePreviewId: null,
-  openFilePreview: (path, name) => {
+  openFilePreview: (path, name, remoteId) => {
+    const rid = remoteId ?? null;
     // Directories reveal in the Files tab instead of opening a preview tab
     window.api.fs
-      .stat(path)
+      .stat(path, rid ?? undefined)
       .then((s) => {
-        if (s.exists && s.isDir) get().revealInFileTree(path);
+        if (s.exists && s.isDir) get().revealInFileTree(path, rid);
         else if (!s.exists) {
           // stat can miss unusual paths; try listing before deciding it is a file
           window.api.fs
-            .listDir(path)
+            .listDir(path, rid ?? undefined)
             .then((entries) => {
               if ((entries as Array<{ name: string; isDir: boolean }>).length > 0)
-                get().revealInFileTree(path);
-              else get().openFilePreviewTab(path, name);
+                get().revealInFileTree(path, rid);
+              else get().openFilePreviewTab(path, name, rid);
             })
-            .catch(() => get().openFilePreviewTab(path, name));
-        } else get().openFilePreviewTab(path, name);
+            .catch(() => get().openFilePreviewTab(path, name, rid));
+        } else get().openFilePreviewTab(path, name, rid);
       })
-      .catch(() => get().openFilePreviewTab(path, name));
+      .catch(() => get().openFilePreviewTab(path, name, rid));
   },
-  openFilePreviewTab: (path, name) => {
+  openFilePreviewTab: (path, name, remoteId) => {
+    const rid = remoteId ?? null;
     get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
-        (t) => t.kind === "file" && t.path === path,
+        (t) => t.kind === "file" && t.path === path && (t.remoteId ?? null) === rid,
       );
       if (existing) {
         return { activePreviewId: existing.id };
@@ -434,15 +442,17 @@ export const useStore = create<AppStore>((set, get) => ({
         kind: "file",
         name: name || path.split(/[\\/]/).pop() || path,
         path,
+        remoteId: rid,
       };
       return { previewTabs: [...s.previewTabs, tab], activePreviewId: tab.id };
     });
   },
-  openDiffPreview: (name, path, diff) => {
+  openDiffPreview: (name, path, diff, remoteId) => {
+    const rid = remoteId ?? null;
     get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
-        (t) => t.kind === "diff" && t.path === path,
+        (t) => t.kind === "diff" && t.path === path && (t.remoteId ?? null) === rid,
       );
       if (existing) {
         return { activePreviewId: existing.id };
@@ -453,6 +463,7 @@ export const useStore = create<AppStore>((set, get) => ({
         name: name || path.split(/[\\/]/).pop() || path,
         path,
         diff,
+        remoteId: rid,
       };
       return { previewTabs: [...s.previewTabs, tab], activePreviewId: tab.id };
     });
@@ -469,40 +480,43 @@ export const useStore = create<AppStore>((set, get) => ({
 
   fileTreeExpanded: new Set<string>(),
   fileTreeEntries: {},
-  loadFileTreeDir: (rawDir) => {
+  loadFileTreeDir: (rawDir, remoteId) => {
     const dir = normPath(rawDir);
+    const key = fileTreeKey(dir, remoteId ?? null);
     window.api.fs
-      .listDir(dir)
+      .listDir(dir, remoteId ?? undefined)
       .then((entries) => {
         const sorted = [...(entries as Array<{ name: string; isDir: boolean }>)].sort((a, b) => {
           if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
-        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [dir]: sorted } }));
+        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [key]: sorted } }));
       })
       .catch(() => {
-        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [dir]: [] } }));
+        set((s) => ({ fileTreeEntries: { ...s.fileTreeEntries, [key]: [] } }));
       });
   },
-  toggleFileTreeDir: (rawDir) => {
+  toggleFileTreeDir: (rawDir, remoteId) => {
     const dir = normPath(rawDir);
+    const key = fileTreeKey(dir, remoteId ?? null);
     set((s) => {
       const next = new Set(s.fileTreeExpanded);
-      if (next.has(dir)) next.delete(dir);
+      if (next.has(key)) next.delete(key);
       else {
-        next.add(dir);
-        get().loadFileTreeDir(dir);
+        next.add(key);
+        get().loadFileTreeDir(dir, remoteId ?? null);
       }
       return { fileTreeExpanded: next };
     });
   },
-  revealInFileTree: (rawDir) => {
+  revealInFileTree: (rawDir, remoteId) => {
+    const rid = remoteId ?? null;
     const dir = normPath(rawDir);
     const root = normPath(get().currentSessionWorkingDirectory() || get().workingDirectory || "");
     const inside = root !== "" && (dir === root || dir.startsWith(root + "/"));
     if (!inside) {
       // Outside the session folder — fall back to a preview tab
-      get().openFilePreviewTab(dir, dir.split(/[\\\\/]/).pop() || dir);
+      get().openFilePreviewTab(dir, dir.split(/[\\\\/]/).pop() || dir, rid);
       return;
     }
     const cfg = get().config;
@@ -523,8 +537,9 @@ export const useStore = create<AppStore>((set, get) => ({
       cur = cur.slice(0, idx);
     }
     toExpand.push(root);
-    set((s) => ({ fileTreeExpanded: new Set([...s.fileTreeExpanded, ...toExpand]) }));
-    for (const d of toExpand) get().loadFileTreeDir(d);
+    const expandKeys = toExpand.map((d) => fileTreeKey(d, rid));
+    set((s) => ({ fileTreeExpanded: new Set([...s.fileTreeExpanded, ...expandKeys]) }));
+    for (const d of toExpand) get().loadFileTreeDir(d, rid);
   },
   hideSession: (key) => {
     const cfg = get().config;
@@ -901,28 +916,15 @@ export const useStore = create<AppStore>((set, get) => ({
     const acpSessionId = session.acpSessionId;
     get().updateSession(localSessionId, { loading: true });
     get().setPendingLoadSessionId(acpSessionId);
+    const rid = session.remoteId ?? null;
     try {
       const cfg = get().config;
       const cwd = session.workingDirectory || cfg.workingDirectory || ".";
-      const wantRemoteId = session.remoteId ?? null;
-      const running = await window.api.acp.isRunning();
-      const curRemote = running ? await window.api.acp.isRemote() : false;
-      const needStart =
-        !running ||
-        Boolean(wantRemoteId) !== curRemote ||
-        (wantRemoteId !== null && get().remoteActive?.id !== wantRemoteId);
-      if (needStart) {
-        if (wantRemoteId) {
-          set({ remoteActive: { id: wantRemoteId, cwd } });
-          await window.api.acp.start(cfg.acpPath || "vibe-acp", cwd, wantRemoteId);
-        } else {
-          if (!cfg.acpPath) throw new Error("ACP path not configured. Go to Settings.");
-          set({ remoteActive: null });
-          await window.api.acp.start(cfg.acpPath, cwd);
-        }
-      }
+      // v0.7.0: workers persist per connection - resuming only makes sure
+      // the right worker is alive (no prime, no restart churn).
+      await get().ensureAcpWorker(rid, cwd);
       // Real resume: session/load replays the full history via events
-      await window.api.acp.loadSession(acpSessionId, cwd);
+      await window.api.acp.loadSession(acpSessionId, cwd, rid ?? undefined);
       set({ activeAcpSessionId: acpSessionId });
       // Per-session isolation: restore this session’s recorded model/mode/thinking.
       void get().syncSessionChips(localSessionId);
@@ -934,10 +936,12 @@ export const useStore = create<AppStore>((set, get) => ({
         if (sess?.loading) st.updateSession(localSessionId, { loading: false });
       }, 2500);
     } catch (err) {
-      console.error("[store] ACP session/load failed, falling back to vibe logs:", err);
+      console.error("[store] ACP session/load failed:", err);
       get().setPendingLoadSessionId(null);
       get().updateSession(localSessionId, { loading: false });
-      await get().loadVibeSessionMessages(localSessionId);
+      // Local sessions can still fall back to the on-disk vibe logs;
+      // remote ones have no local logs - just clear the flags.
+      if (!rid) await get().loadVibeSessionMessages(localSessionId);
     }
   },
 
@@ -1084,16 +1088,10 @@ export const useStore = create<AppStore>((set, get) => ({
     }));
 
     try {
-      const isRunning = await window.api.acp.isRunning();
-      if (!isRunning) {
-        const cfg = get().config;
-        if (!cfg.acpPath) return;
-        const cwd = session.workingDirectory || cfg.workingDirectory || ".";
-        set({ remoteActive: null });
-        await window.api.acp.start(cfg.acpPath, cwd);
-      }
+      const rid = session.remoteId ?? null;
+      await get().ensureAcpWorker(rid, session.workingDirectory || get().config.workingDirectory || ".");
 
-      const summary = await window.api.acp.getContextSummary(vibeMessages);
+      const summary = await window.api.acp.getContextSummary(vibeMessages, rid ?? undefined);
 
       if (summary && summary.trim()) {
         const contextMessage: Message = {
@@ -1115,21 +1113,16 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
-  // ---- v0.6.0: remote SSH connections ----
-  remoteActive: null,
-  setRemoteActive: (v) => set({ remoteActive: v }),
+  // ---- v0.6.0/v0.7.0: remote SSH connections ----
   remoteStatuses: {},
-  isRemoteConnected: (remoteId) => get().remoteActive?.id === remoteId,
 
-  ensureLocalAcp: async () => {
-    const running = await window.api.acp.isRunning();
-    const curRemote = running ? await window.api.acp.isRemote() : false;
-    if (running && !curRemote) return;
+  ensureAcpWorker: async (remoteId, cwd) => {
     const cfg = get().config;
-    if (!cfg.acpPath) throw new Error("ACP path not configured. Go to Settings.");
-    set({ remoteActive: null });
+    const rid = remoteId ?? undefined;
+    if (await window.api.acp.isRunning(rid)) return;
+    if (!rid && !cfg.acpPath) return;
     get().setAcpStatus("connecting");
-    await window.api.acp.start(cfg.acpPath, cfg.workingDirectory || ".");
+    await window.api.acp.ensureWorker(cfg.acpPath || "vibe-acp", cwd || cfg.workingDirectory || ".", rid);
   },
 
   refreshRemoteData: async () => {
@@ -1162,22 +1155,24 @@ export const useStore = create<AppStore>((set, get) => ({
       (c: RemoteConnection) => c.id === remoteId,
     );
     if (!conn) return;
-    set({ remoteActive: { id: remoteId, cwd }, pendingNewSession: false });
+    // v0.7.0: create the draft BEFORE starting the worker so the
+    // SessionInitialized event can always link to it (multi-worker safe).
+    const session = get().addSession(cwd);
+    get().updateSession(session.id, { remoteId });
+    get().setSessionStarting(true);
     get().setAcpStatus("connecting");
     get().setAcpError(null);
+    get().setCurrentView("chat");
     try {
       const cfg = get().config;
       await window.api.acp.start(cfg.acpPath || "vibe-acp", cwd, remoteId);
     } catch (err) {
-      set({ remoteActive: null });
+      get().setSessionStarting(false);
       get().setAcpStatus("error");
       get().setAcpError((err as Error).message);
       return;
     }
-    const session = get().addSession(cwd);
-    get().updateSession(session.id, { remoteId });
-    get().setPendingNewSession(true);
-    get().setCurrentView("chat");
+    get().setSessionStarting(false);
   },
 
   loadRemoteSession: async (remoteId, info) => {
@@ -1194,10 +1189,7 @@ export const useStore = create<AppStore>((set, get) => ({
       });
       local = get().sessions.find((s) => s.id === session.id)!;
     }
-    set({
-      pendingNewSession: false,
-      remoteActive: { id: remoteId, cwd: info.cwd || local.workingDirectory || "." },
-    });
+    set({ pendingNewSession: false });
     get().setCurrentSessionId(local.id);
     get().setCurrentView("chat");
     await get().loadAcpSession(local.id);

@@ -5,11 +5,14 @@ import type { GitStatus, GitCommit } from '../../../preload/index'
 
 interface Props {
   cwd: string
+  /** v0.7.0: remote connection id (null = local git) */
+  remoteId?: string | null
 }
 
-export default function GitPanel({ cwd }: Props): React.JSX.Element {
+export default function GitPanel({ cwd, remoteId }: Props): React.JSX.Element {
   const { config, openDiffPreview } = useStore()
   const tr = useTranslation(config.language)
+  const rid = remoteId ?? null
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitCommit[]>([])
   const [loading, setLoading] = useState(false)
@@ -22,8 +25,8 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
     setLoading(true)
     try {
       const [s, l] = await Promise.all([
-        window.api.git.status(cwd),
-        window.api.git.log(cwd, 30),
+        window.api.git.status(cwd, rid ?? undefined),
+        window.api.git.log(cwd, 30, rid ?? undefined),
       ])
       setStatus(s)
       setLog(l)
@@ -33,7 +36,7 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
     } finally {
       setLoading(false)
     }
-  }, [cwd])
+  }, [cwd, rid])
 
   useEffect(() => {
     refresh()
@@ -42,16 +45,16 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
   }, [refresh])
 
   const stagePaths = useCallback(async (paths: string[]): Promise<void> => {
-    const err = await window.api.git.stage(cwd, paths)
+    const err = await window.api.git.stage(cwd, paths, rid ?? undefined)
     if (err) setGitError(err)
     await refresh()
-  }, [cwd, refresh])
+  }, [cwd, rid, refresh])
 
   const unstagePaths = useCallback(async (paths: string[]): Promise<void> => {
-    const err = await window.api.git.unstage(cwd, paths)
+    const err = await window.api.git.unstage(cwd, paths, rid ?? undefined)
     if (err) setGitError(err)
     await refresh()
-  }, [cwd, refresh])
+  }, [cwd, rid, refresh])
 
   const stageAll = useCallback(async (): Promise<void> => {
     const unstaged = (status?.files ?? []).filter((f) => !f.staged).map((f) => f.path)
@@ -61,22 +64,22 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
   const handleCommit = useCallback(async (): Promise<void> => {
     if (!commitMsg.trim()) return
     setBusy(true)
-    const err = await window.api.git.commit(cwd, commitMsg)
+    const err = await window.api.git.commit(cwd, commitMsg, rid ?? undefined)
     setBusy(false)
     if (err) { setGitError(err); return }
     setGitError(null)
     setCommitMsg('')
     await refresh()
-  }, [cwd, commitMsg, refresh])
+  }, [cwd, commitMsg, rid, refresh])
 
   const handlePush = useCallback(async (): Promise<void> => {
     setBusy(true)
-    const err = await window.api.git.push(cwd)
+    const err = await window.api.git.push(cwd, rid ?? undefined)
     setBusy(false)
     if (err) { setGitError(err); return }
     setGitError(null)
     await refresh()
-  }, [cwd, refresh])
+  }, [cwd, rid, refresh])
 
   if (!cwd) {
     return <div className="dock-empty">{tr.openFolderFirst}</div>
@@ -120,8 +123,8 @@ export default function GitPanel({ cwd }: Props): React.JSX.Element {
   }
 
   const openDiff = async (filePath: string): Promise<void> => {
-    const diff = await window.api.git.diffFile(cwd, filePath)
-    openDiffPreview(filePath.split(/[/\\]/).pop() ?? filePath, filePath, diff ?? '')
+    const diff = await window.api.git.diffFile(cwd, filePath, rid ?? undefined)
+    openDiffPreview(filePath.split(/[/\\]/).pop() ?? filePath, filePath, diff ?? '', rid)
   }
 
   return (

@@ -114,30 +114,34 @@ const api = {
     init: (acpPath: string): Promise<void> => ipcRenderer.invoke('acp:init', acpPath),
     start: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:start', acpPath, cwd, remoteId ?? undefined),
-    newSession: (cwd: string): Promise<void> => ipcRenderer.invoke('acp:new-session', cwd),
-    loadSession: (sessionId: string, cwd: string): Promise<void> =>
-      ipcRenderer.invoke('acp:load-session', sessionId, cwd),
-    sendPrompt: (text: string, acpSessionId?: string): Promise<void> =>
-      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId),
-    cancelSession: (acpSessionId: string): Promise<void> =>
-      ipcRenderer.invoke('acp:cancel-session', acpSessionId),
-    setConfigOption: (key: string, value: string, sessionId?: string): Promise<void> =>
-      ipcRenderer.invoke('acp:set-config-option', key, value, sessionId),
-    approveTool: (requestId: string, optionId: string): Promise<void> =>
-      ipcRenderer.invoke('acp:approve-tool', requestId, optionId),
-    answerQuestion: (requestId: string, answer: string): Promise<void> =>
-      ipcRenderer.invoke('acp:answer-question', requestId, answer),
+    ensureWorker: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:ensure-worker', acpPath, cwd, remoteId ?? undefined),
+    stopWorker: (remoteId?: string): Promise<void> => ipcRenderer.invoke('acp:stop-worker', remoteId ?? undefined),
+    newSession: (cwd: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:new-session', cwd, remoteId ?? undefined),
+    loadSession: (sessionId: string, cwd: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:load-session', sessionId, cwd, remoteId ?? undefined),
+    sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined),
+    cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:cancel-session', acpSessionId, remoteId ?? undefined),
+    setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:set-config-option', key, value, sessionId, remoteId ?? undefined),
+    approveTool: (requestId: string, optionId: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:approve-tool', requestId, optionId, remoteId ?? undefined),
+    answerQuestion: (requestId: string, answer: string, remoteId?: string): Promise<void> =>
+      ipcRenderer.invoke('acp:answer-question', requestId, answer, remoteId ?? undefined),
     stop: (): Promise<void> => ipcRenderer.invoke('acp:stop'),
-    isRunning: (): Promise<boolean> => ipcRenderer.invoke('acp:is-running'),
-    isRemote: (): Promise<boolean> => ipcRenderer.invoke('acp:is-remote'),
-    getContextSummary: (messages: Array<{ role: string; content: string }>): Promise<string> =>
-      ipcRenderer.invoke('acp:get-context-summary', messages),
+    isRunning: (remoteId?: string): Promise<boolean> => ipcRenderer.invoke('acp:is-running', remoteId ?? undefined),
+    getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
+      ipcRenderer.invoke('acp:get-context-summary', messages, remoteId ?? undefined),
     onEvent: (cb: (event: AcpEvent) => void): (() => void) => {
       const listener = (_: Electron.IpcRendererEvent, event: AcpEvent): void => cb(event)
       ipcRenderer.on('acp:event', listener)
       return () => ipcRenderer.removeListener('acp:event', listener)
     }
   },
+
   stats: {
     vibeSessions: (): Promise<unknown[]> => ipcRenderer.invoke('stats:vibe-sessions'),
     vibeSessionLastModel: (sessionId: string): Promise<string | null> =>
@@ -167,42 +171,49 @@ const api = {
     }
   },
   fs: {
-    listDir: (dir: string): Promise<Array<{ name: string; isDir: boolean }>> =>
-      ipcRenderer.invoke('fs:list-dir', dir),
-    searchFiles: (rootDir: string, query: string): Promise<Array<{ path: string; isDir: boolean }>> =>
-      ipcRenderer.invoke('fs:search-files', rootDir, query),
+    listDir: (dir: string, remoteId?: string): Promise<Array<{ name: string; isDir: boolean }>> =>
+      ipcRenderer.invoke('fs:list-dir', dir, remoteId ?? undefined),
+    searchFiles: (rootDir: string, query: string, remoteId?: string): Promise<Array<{ path: string; isDir: boolean }>> =>
+      ipcRenderer.invoke('fs:search-files', rootDir, query, remoteId ?? undefined),
     readFile: (
-      filePath: string
+      filePath: string,
+      remoteId?: string
     ): Promise<{ type: 'file' | 'directory' | 'error'; content: string }> =>
-      ipcRenderer.invoke('fs:read-file', filePath),
-    stat: (filePath: string): Promise<{ exists: boolean; isDir: boolean; size: number; ext: string }> =>
-      ipcRenderer.invoke('fs:stat', filePath),
+      ipcRenderer.invoke('fs:read-file', filePath, remoteId ?? undefined),
+    stat: (filePath: string, remoteId?: string): Promise<{ exists: boolean; isDir: boolean; size: number; ext: string }> =>
+      ipcRenderer.invoke('fs:stat', filePath, remoteId ?? undefined),
     readText: (
-      filePath: string
+      filePath: string,
+      remoteId?: string
     ): Promise<{ content: string; truncated: boolean; size: number; error: string | null }> =>
-      ipcRenderer.invoke('fs:read-text', filePath),
+      ipcRenderer.invoke('fs:read-text', filePath, remoteId ?? undefined),
     readBinary: (
-      filePath: string
+      filePath: string,
+      remoteId?: string
     ): Promise<{ base64: string; mime: string; size: number; error: string | null }> =>
-      ipcRenderer.invoke('fs:read-binary', filePath),
-    writeText: (filePath: string, content: string): Promise<{ error: string | null }> =>
-      ipcRenderer.invoke('fs:write-text', filePath, content)
+      ipcRenderer.invoke('fs:read-binary', filePath, remoteId ?? undefined),
+    writeText: (filePath: string, content: string, remoteId?: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined)
   },
   git: {
-    status: (cwd: string): Promise<GitStatus> => ipcRenderer.invoke('git:status', cwd),
-    log: (cwd: string, max: number): Promise<GitCommit[]> => ipcRenderer.invoke('git:log', cwd, max),
-    diffFile: (cwd: string, filePath: string): Promise<string | null> =>
-      ipcRenderer.invoke('git:diff-file', cwd, filePath),
-    diffAll: (cwd: string): Promise<string | null> => ipcRenderer.invoke('git:diff-all', cwd),
-    stage: (cwd: string, paths: string[]): Promise<string | null> =>
-      ipcRenderer.invoke('git:stage', cwd, paths),
-    unstage: (cwd: string, paths: string[]): Promise<string | null> =>
-      ipcRenderer.invoke('git:unstage', cwd, paths),
-    commit: (cwd: string, message: string): Promise<string | null> =>
-      ipcRenderer.invoke('git:commit', cwd, message),
-    push: (cwd: string): Promise<string | null> =>
-      ipcRenderer.invoke('git:push', cwd)
+    status: (cwd: string, remoteId?: string): Promise<GitStatus> =>
+      ipcRenderer.invoke('git:status', cwd, remoteId ?? undefined),
+    log: (cwd: string, max: number, remoteId?: string): Promise<GitCommit[]> =>
+      ipcRenderer.invoke('git:log', cwd, max, remoteId ?? undefined),
+    diffFile: (cwd: string, filePath: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:diff-file', cwd, filePath, remoteId ?? undefined),
+    diffAll: (cwd: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:diff-all', cwd, remoteId ?? undefined),
+    stage: (cwd: string, paths: string[], remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:stage', cwd, paths, remoteId ?? undefined),
+    unstage: (cwd: string, paths: string[], remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:unstage', cwd, paths, remoteId ?? undefined),
+    commit: (cwd: string, message: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:commit', cwd, message, remoteId ?? undefined),
+    push: (cwd: string, remoteId?: string): Promise<string | null> =>
+      ipcRenderer.invoke('git:push', cwd, remoteId ?? undefined)
   },
+
   shell: {
     openPath: (path: string): Promise<string> => ipcRenderer.invoke('shell:open-path', path)
   },

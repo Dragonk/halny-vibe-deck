@@ -81,13 +81,14 @@ export default function App(): React.JSX.Element {
   const streamingState = useRef<Map<string, StreamingState>>(new Map())
   const [setupRequired, setSetupRequired] = useState(false)
   const [pendingToolApprovals, setPendingToolApprovals] = useState<
-    Array<{ requestId: string; method: string; params: Record<string, unknown> }>
+    Array<{ requestId: string; method: string; params: Record<string, unknown>; remoteId: string | null }>
   >([])
 
   const [pendingQuestion, setPendingQuestion] = useState<{
     requestId: string
     question: string
     choices: string[]
+    remoteId: string | null
   } | null>(null)
 
   const handleAcpEvent = useCallback(
@@ -95,20 +96,25 @@ export default function App(): React.JSX.Element {
       const d = event.data as Record<string, unknown>
       switch (event.type) {
         case 'InitializationComplete': {
+          const rid = (d.remoteId as string | undefined) ?? null
           setAcpStatus('connected')
           setAcpError(null)
           const store = useStore.getState()
-          // Prime one session so configOptions (model/mode/thinking) are
-          // available before the first message. Guard against the flows where
-          // InputBar/loadAcpSession are already creating their own session.
-          if (!store.sessionStarting && !store.pendingLoadSessionId) {
-            const primeCwd = store.remoteActive?.cwd || store.config.workingDirectory || '.'
+          // Prime one session on the LOCAL agent so configOptions
+          // (model/mode/thinking) are available before the first message.
+          // v0.7.0: remote workers never prime - they start on demand and
+          // the renderer creates their sessions explicitly.
+          if (!rid && !store.sessionStarting && !store.pendingLoadSessionId) {
+            const primeCwd = store.config.workingDirectory || '.'
             window.api.acp.newSession(primeCwd).catch(console.error)
           }
           break
         }
 
         case 'SessionsList': {
+          // v0.7.0: remote workers list their own sessions on start - those
+          // arrive via refreshRemoteData instead; never import as local ones.
+          if (d.remoteId) break
           const sessions = d.sessions as Array<{
             sessionId: string
             title: string
@@ -121,6 +127,7 @@ export default function App(): React.JSX.Element {
 
         case 'SessionInitialized': {
           const acpSessId = d.sessionId as string
+          const rid = (d.remoteId as string | undefined) ?? null
           const store = useStore.getState()
           const modes = (d.modes as Array<{ id: string; name: string }>) ?? []
           const configOptions = (d.configOptions as ConfigOption[]) ?? []
@@ -140,6 +147,9 @@ export default function App(): React.JSX.Element {
 
           const existing = store.getSessionByAcpId(acpSessId)
           if (existing) {
+            // v0.7.0: only a session belonging to the emitting worker may
+            // become current (multi-worker safety).
+            if ((existing.remoteId ?? null) !== rid) break
             // Session already in list — make it current, update name if available
             store.setCurrentSessionId(existing.id)
             if (sessionTitle) store.updateSession(existing.id, { name: sessionTitle })
@@ -148,18 +158,24 @@ export default function App(): React.JSX.Element {
             const localSess = localSessId
               ? store.sessions.find((s) => s.id === localSessId)
               : null
-            if (localSess && !localSess.acpSessionId) {
+            // v0.7.0: a draft can only link to a session from the same worker
+            // (local draft ↔ local agent, remote draft ↔ its own worker).
+            if (localSess && (localSess.remoteId ?? null) === rid && !localSess.acpSessionId) {
               // Link the current draft to the new ACP session
               linkAcpSession(localSess.id, acpSessId)
               if (sessionTitle) store.updateSession(localSess.id, { name: sessionTitle })
-            } else if (localSess && localSess.messages.length === 0) {
+            } else if (localSess && (localSess.remoteId ?? null) === rid && localSess.messages.length === 0) {
               // Empty draft bound to a stale priming session — re-bind it
               linkAcpSession(localSess.id, acpSessId)
               if (sessionTitle) store.updateSession(localSess.id, { name: sessionTitle })
-            } else {
+            } else if (!rid) {
               const newSess = store.addSession()
               linkAcpSession(newSess.id, acpSessId)
               if (sessionTitle) store.updateSession(newSess.id, { name: sessionTitle })
+            } else {
+              // Remote session with no local draft — leave it alone; the next
+              // remote refresh imports it into the sidebar.
+              break
             }
           }
           setSessionStarting(false)
@@ -336,7 +352,8 @@ export default function App(): React.JSX.Element {
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
             if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
-            window.api.acp.sendPrompt(promptText, acpSessId).catch((err: Error) => {
+            const rid = (d.remoteId as string | undefined) ?? null
+            window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined).catch((err: Error) => {
               setAcpError(err.message)
             })
           }
@@ -392,7 +409,8 @@ export default function App(): React.JSX.Element {
           const requestId = d.requestId as string
           const method = d.method as string
           const params = d.params as Record<string, unknown>
-          setPendingToolApprovals((prev) => [...prev, { requestId, method, params }])
+          const rid = (d.remoteId as string | undefined) ?? null
+          setPendingToolApprovals((prev) => [...prev, { requestId, method, params, remoteId: rid }])
           break
         }
 
@@ -400,24 +418,36 @@ export default function App(): React.JSX.Element {
           const requestId = d.requestId as string
           const question = d.question as string
           const choices = d.choices as string[]
-          setPendingQuestion({ requestId, question, choices })
+          const rid = (d.remoteId as string | undefined) ?? null
+          setPendingQuestion({ requestId, question, choices, remoteId: rid })
           break
         }
 
-        case 'Error':
+        case 'Error': {
+          const rid = (d.remoteId as string | undefined) ?? null
           setAcpError(d.error as string)
-          setAcpStatus('error')
+          // v0.7.0: only the local agent drives the global status; a remote
+          // worker failing must not mark the whole app disconnected.
+          if (!rid) setAcpStatus('error')
           streamingState.current.forEach(({ msgId }, localId) => {
             finalizeAiMessage(localId, msgId)
           })
           streamingState.current.clear()
           break
+        }
 
-        case 'Disconnected':
+        case 'Disconnected': {
+          const rid = (d.remoteId as string | undefined) ?? null
+          if (rid) {
+            // v0.7.0: a remote worker died - the local agent is unaffected.
+            console.error('[acp] remote worker disconnected:', rid)
+            break
+          }
           setAcpStatus('disconnected')
           useStore.setState({ activeAcpSessionId: null })
           streamingState.current.clear()
           break
+        }
 
         case 'DebugLog':
         case 'Plan':
@@ -591,25 +621,27 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const handleApproveTool = useCallback((requestId: string, optionId: string) => {
-    window.api.acp.approveTool(requestId, optionId)
-    setPendingToolApprovals((prev) => prev.filter((r) => r.requestId !== requestId))
-  }, [])
+    const r = pendingToolApprovals.find((x) => x.requestId === requestId)
+    window.api.acp.approveTool(requestId, optionId, r?.remoteId ?? undefined)
+    setPendingToolApprovals((prev) => prev.filter((x) => x.requestId !== requestId))
+  }, [pendingToolApprovals])
 
   const handleRejectTool = useCallback((requestId: string) => {
-    window.api.acp.approveTool(requestId, 'reject_once')
-    setPendingToolApprovals((prev) => prev.filter((r) => r.requestId !== requestId))
-  }, [])
+    const r = pendingToolApprovals.find((x) => x.requestId === requestId)
+    window.api.acp.approveTool(requestId, 'reject_once', r?.remoteId ?? undefined)
+    setPendingToolApprovals((prev) => prev.filter((x) => x.requestId !== requestId))
+  }, [pendingToolApprovals])
 
   const handleApproveAllTools = useCallback(() => {
     pendingToolApprovals.forEach((r) => {
-      window.api.acp.approveTool(r.requestId, 'allow_once')
+      window.api.acp.approveTool(r.requestId, 'allow_once', r.remoteId ?? undefined)
     })
     setPendingToolApprovals([])
   }, [pendingToolApprovals])
 
   const handleRejectAllTools = useCallback(() => {
     pendingToolApprovals.forEach((r) => {
-      window.api.acp.approveTool(r.requestId, 'reject_once')
+      window.api.acp.approveTool(r.requestId, 'reject_once', r.remoteId ?? undefined)
     })
     setPendingToolApprovals([])
   }, [pendingToolApprovals])
@@ -657,7 +689,7 @@ export default function App(): React.JSX.Element {
                         className="tool-approval-btn tool-approval-allow-once"
                         onClick={() => {
                           window.api.acp
-                            .answerQuestion(pendingQuestion.requestId, choice)
+                            .answerQuestion(pendingQuestion.requestId, choice, pendingQuestion.remoteId ?? undefined)
                             .catch(console.error)
                           setPendingQuestion(null)
                         }}
@@ -670,7 +702,7 @@ export default function App(): React.JSX.Element {
                       className="tool-approval-btn tool-approval-allow-once"
                       onClick={() => {
                         window.api.acp
-                          .answerQuestion(pendingQuestion.requestId, 'ok')
+                          .answerQuestion(pendingQuestion.requestId, 'ok', pendingQuestion.remoteId ?? undefined)
                           .catch(console.error)
                         setPendingQuestion(null)
                       }}

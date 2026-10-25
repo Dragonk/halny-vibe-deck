@@ -281,6 +281,8 @@ export const fr = {
   deleteLabel: 'Supprimer',
   editLabel: 'Modifier',
   saveLabel: 'Enregistrer',
+  copyLabel: 'Copier',
+  stopLabel: 'Arrêter',
   settingsScopeGlobal: 'Paramètres globaux',
   settingsScopeProject: 'Paramètres du projet',
   modelsUsedLabel: 'Modèles',

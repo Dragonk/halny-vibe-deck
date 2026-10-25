@@ -1,8 +1,9 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
 import { join } from "path";
 import fs from "fs";
-import { acpManager } from "./acp";
+import { acpManager, AcpManager } from "./acp";
 import { loadConfig, saveConfig, AppConfig } from "./config";
+import { menuLabels } from "./i18n";
 import {
   loadVibeSessions,
   loadVibeSessionMessages,
@@ -50,6 +51,25 @@ import {
   hashPassword,
 } from "./serve";
 import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus } from "./remote";
+import {
+  remoteListDir,
+  remoteStat,
+  remoteReadText,
+  remoteReadBinary,
+  remoteWriteText,
+  remoteReadFile,
+  remoteSearchFiles,
+} from "./remoteFs";
+import {
+  remoteGitStatus,
+  remoteGitLog,
+  remoteGitDiffFile,
+  remoteGitDiffAll,
+  remoteGitStage,
+  remoteGitUnstage,
+  remoteGitCommit,
+  remoteGitPush,
+} from "./remoteGit";
 import type { ServeConfig, RemoteConnection } from "./config";
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -68,6 +88,41 @@ const MIME_BY_EXT: Record<string, string> = {
 function mimeFor(file: string): string {
   const ext = file.split(".").pop()?.toLowerCase() ?? "";
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+// ---------------------------------------------------------------------------
+// v0.7.0: multi-remote ACP workers — one AcpManager per remote connection
+// (several remote agents at once) plus the local agent. Workers persist;
+// the renderer addresses them by remoteId. Killing the local ssh child
+// terminates the remote vibe-acp via SIGHUP.
+// ---------------------------------------------------------------------------
+const remoteAcpManagers = new Map<string, AcpManager>()
+let mainWinRef: BrowserWindow | null = null
+
+function getRemoteManager(remoteId: string): AcpManager {
+  let m = remoteAcpManagers.get(remoteId)
+  if (!m) {
+    m = new AcpManager()
+    m.setRemoteTag(remoteId)
+    remoteAcpManagers.set(remoteId, m)
+  }
+  m.setWindow(mainWinRef)
+  return m
+}
+
+function getManager(remoteId?: string): AcpManager {
+  if (remoteId) {
+    const m = remoteAcpManagers.get(remoteId)
+    if (!m || !m.isRunning()) throw new Error("Remote ACP worker not started: " + remoteId)
+    return m
+  }
+  return acpManager
+}
+
+async function stopAllAcp(): Promise<void> {
+  await acpManager.stop()
+  for (const m of remoteAcpManagers.values()) await m.stop()
+  remoteAcpManagers.clear()
 }
 
 function createWindow(): BrowserWindow {
@@ -108,6 +163,8 @@ function createWindow(): BrowserWindow {
   }
 
   acpManager.setWindow(win);
+  // v0.7.0: remote workers mirror events to the (re)created window too
+  mainWinRef = win;
 
   // v0.6.0: mirror all renderer-bound events to web (serve) clients
   const origSend = win.webContents.send.bind(win.webContents);
@@ -119,15 +176,17 @@ function createWindow(): BrowserWindow {
     if (channel !== "acp:event") broadcastToWeb(channel, args);
   };
 
-  // Native context menu for text inputs (copy / cut / paste / select-all)
+  // Native context menu for text inputs (copy / cut / paste / select-all),
+  // localized to the configured app language (main/i18n.ts).
   win.webContents.on("context-menu", (_e, props) => {
     const { editFlags } = props;
+    const labels = menuLabels(loadConfig().language);
     const menu = Menu.buildFromTemplate([
-      { role: "cut", enabled: editFlags.canCut },
-      { role: "copy", enabled: editFlags.canCopy },
-      { role: "paste", enabled: editFlags.canPaste },
+      { role: "cut", label: labels.cut, enabled: editFlags.canCut },
+      { role: "copy", label: labels.copy, enabled: editFlags.canCopy },
+      { role: "paste", label: labels.paste, enabled: editFlags.canPaste },
       { type: "separator" },
-      { role: "selectAll" },
+      { role: "selectAll", label: labels.selectAll },
     ]);
     menu.popup({ window: win });
   });
@@ -203,60 +262,96 @@ app.whenReady().then(() => {
     });
   });
 
-  ipcMain.handle("acp:start", async (_e, acpPath: string, cwd: string, remoteId?: string) => {
-    let remote: { sshCmd: string } | undefined;
+  ipcMain.handle("acp:ensure-worker", async (_e, acpPath: string, _cwd: string, remoteId?: string) => {
+    // v0.7.0: idempotently make sure the worker for a connection (or the
+    // local agent) is running. Never primes a session — resume paths use this
+    // so replaying a session does not litter the remote with empty sessions.
+    const mgr = remoteId ? getRemoteManager(remoteId) : acpManager
+    if (mgr.isRunning()) return
+    let remote: { sshCmd: string } | undefined
     if (remoteId) {
-      const cfg = loadConfig();
-      const conn = cfg.remoteConnections.find((c) => c.id === remoteId);
-      if (!conn) throw new Error("Remote connection not found: " + remoteId);
-      remote = { sshCmd: conn.sshCmd };
+      const cfg = loadConfig()
+      const conn = cfg.remoteConnections.find((c) => c.id === remoteId)
+      if (!conn) throw new Error("Remote connection not found: " + remoteId)
+      remote = { sshCmd: conn.sshCmd }
     }
     try {
-      await acpManager.start(acpPath, remote);
+      await mgr.start(acpPath, remote)
     } catch (err) {
-      if (err instanceof Error && err.message === "ACP stopped") return;
-      throw err;
+      if (remoteId) remoteAcpManagers.delete(remoteId)
+      throw err
     }
-    await acpManager.newSession(cwd);
-  });
+  })
 
-  ipcMain.handle("acp:new-session", async (_e, cwd: string) => {
-    await acpManager.newSession(cwd);
-  });
+  ipcMain.handle("acp:start", async (_e, acpPath: string, cwd: string, remoteId?: string) => {
+    // v0.7.0: start (or reuse) the worker for the connection, then prime a
+    // session on it. Workers persist, so several remotes can run at once.
+    const mgr = remoteId ? getRemoteManager(remoteId) : acpManager
+    try {
+      if (!mgr.isRunning()) {
+        let remote: { sshCmd: string } | undefined
+        if (remoteId) {
+          const cfg = loadConfig()
+          const conn = cfg.remoteConnections.find((c) => c.id === remoteId)
+          if (!conn) throw new Error("Remote connection not found: " + remoteId)
+          remote = { sshCmd: conn.sshCmd }
+        }
+        await mgr.start(acpPath, remote)
+      }
+    } catch (err) {
+      if (remoteId) remoteAcpManagers.delete(remoteId)
+      if (err instanceof Error && err.message === "ACP stopped") return
+      throw err
+    }
+    await mgr.newSession(cwd)
+  })
 
-  ipcMain.handle("acp:load-session", async (_e, sessionId: string, cwd: string) => {
-    await acpManager.loadSession(sessionId, cwd);
-  });
+  ipcMain.handle("acp:new-session", async (_e, cwd: string, remoteId?: string) => {
+    await getManager(remoteId).newSession(cwd)
+  })
 
-  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string) => {
-    await acpManager.sendPrompt(text, acpSessionId);
-  });
+  ipcMain.handle("acp:load-session", async (_e, sessionId: string, cwd: string, remoteId?: string) => {
+    await getManager(remoteId).loadSession(sessionId, cwd)
+  })
 
-  ipcMain.handle("acp:cancel-session", (_e, acpSessionId: string) => {
-    acpManager.cancelSession(acpSessionId);
-  });
+  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string) => {
+    await getManager(remoteId).sendPrompt(text, acpSessionId)
+  })
 
-  ipcMain.handle("acp:set-config-option", async (_e, key: string, value: string, sessionId?: string) => {
-    await acpManager.setConfigOption(key, value, sessionId);
-  });
+  ipcMain.handle("acp:cancel-session", (_e, acpSessionId: string, remoteId?: string) => {
+    getManager(remoteId).cancelSession(acpSessionId)
+  })
 
-  ipcMain.handle("acp:approve-tool", (_e, requestId: string, optionId: string) => {
-    acpManager.approveToolRequest(requestId, optionId);
-  });
+  ipcMain.handle("acp:set-config-option", async (_e, key: string, value: string, sessionId?: string, remoteId?: string) => {
+    await getManager(remoteId).setConfigOption(key, value, sessionId)
+  })
 
-  ipcMain.handle("acp:answer-question", (_e, requestId: string, answer: string) => {
-    acpManager.answerUserQuestion(requestId, answer);
-  });
+  ipcMain.handle("acp:approve-tool", (_e, requestId: string, optionId: string, remoteId?: string) => {
+    getManager(remoteId).approveToolRequest(requestId, optionId)
+  })
+
+  ipcMain.handle("acp:answer-question", (_e, requestId: string, answer: string, remoteId?: string) => {
+    getManager(remoteId).answerUserQuestion(requestId, answer)
+  })
+
+  ipcMain.handle("acp:stop-worker", async (_e, remoteId?: string) => {
+    const m = remoteId ? remoteAcpManagers.get(remoteId) : null
+    if (m) {
+      await m.stop()
+      remoteAcpManagers.delete(remoteId!)
+    }
+  })
 
   ipcMain.handle("acp:stop", async () => {
-    await acpManager.stop();
-  });
+    await stopAllAcp()
+  })
 
-  ipcMain.handle("acp:is-running", () => acpManager.isRunning());
-  ipcMain.handle("acp:is-remote", () => acpManager.isRemote());
+  ipcMain.handle("acp:is-running", (_e, remoteId?: string) =>
+    remoteId ? (remoteAcpManagers.get(remoteId)?.isRunning() ?? false) : acpManager.isRunning(),
+  )
 
-  ipcMain.handle("acp:get-context-summary", async (_e, messages: Array<{ role: string; content: string }>) => {
-    return acpManager.getContextSummary(messages);
+  ipcMain.handle("acp:get-context-summary", async (_e, messages: Array<{ role: string; content: string }>, remoteId?: string) => {
+    return getManager(remoteId).getContextSummary(messages);
   });
 
   // Vibe stats
@@ -279,8 +374,16 @@ app.whenReady().then(() => {
   );
 
 
+  // v0.7.0: resolve a remote connection for fs/git handlers (throws when unknown)
+  const remoteConnOrThrow = (id: string): RemoteConnection => {
+    const conn = loadConfig().remoteConnections.find((c) => c.id === id);
+    if (!conn) throw new Error("Remote connection not found: " + id);
+    return conn;
+  };
+
   // Write text files (file editor in the preview dock)
-  ipcMain.handle("fs:write-text", async (_e, filePath: string, content: string) => {
+  ipcMain.handle("fs:write-text", async (_e, filePath: string, content: string, remoteId?: string) => {
+    if (remoteId) return remoteWriteText(remoteConnOrThrow(remoteId), filePath, content);
     try {
       await fs.promises.writeFile(filePath, content, "utf-8");
       return { error: null };
@@ -290,7 +393,8 @@ app.whenReady().then(() => {
   });
 
   // Filesystem helpers
-  ipcMain.handle("fs:list-dir", (_e, dir: string) => {
+  ipcMain.handle("fs:list-dir", (_e, dir: string, remoteId?: string) => {
+    if (remoteId) return remoteListDir(remoteConnOrThrow(remoteId), dir);
     try {
       return fs
         .readdirSync(dir, { withFileTypes: true })
@@ -301,7 +405,8 @@ app.whenReady().then(() => {
   });
 
   // Recursive file search for @ picker (max depth 4, skips node_modules/.git/etc)
-  ipcMain.handle("fs:search-files", (_e, rootDir: string, query: string): Array<{ path: string; isDir: boolean }> => {
+  ipcMain.handle("fs:search-files", (_e, rootDir: string, query: string, remoteId?: string) => {
+    if (remoteId) return remoteSearchFiles(remoteConnOrThrow(remoteId), rootDir, query);
     const results: Array<{ path: string; isDir: boolean }> = [];
     const SKIP_DIRS = new Set([
       ".git",
@@ -342,7 +447,8 @@ app.whenReady().then(() => {
   });
 
   // Read file contents for @ picker
-  ipcMain.handle("fs:read-file", (_e, filePath: string) => {
+  ipcMain.handle("fs:read-file", (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) return remoteReadFile(remoteConnOrThrow(remoteId), filePath);
     try {
       const stats = fs.statSync(filePath);
       if (stats.isDirectory()) {
@@ -363,7 +469,8 @@ app.whenReady().then(() => {
   });
 
   // File info for the preview panel
-  ipcMain.handle("fs:stat", (_e, filePath: string) => {
+  ipcMain.handle("fs:stat", (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) return remoteStat(remoteConnOrThrow(remoteId), filePath);
     try {
       const stats = fs.statSync(filePath);
       return { exists: true, isDir: stats.isDirectory(), size: stats.size, ext: filePath.split(".").pop()?.toLowerCase() ?? "" };
@@ -373,7 +480,8 @@ app.whenReady().then(() => {
   });
 
   const TEXT_CAP = 4 * 1024 * 1024; // 4 MB
-  ipcMain.handle("fs:read-text", (_e, filePath: string) => {
+  ipcMain.handle("fs:read-text", (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) return remoteReadText(remoteConnOrThrow(remoteId), filePath);
     try {
       const stats = fs.statSync(filePath);
       if (stats.size > TEXT_CAP) {
@@ -390,7 +498,8 @@ app.whenReady().then(() => {
   });
 
   const BINARY_CAP = 48 * 1024 * 1024; // 48 MB
-  ipcMain.handle("fs:read-binary", (_e, filePath: string) => {
+  ipcMain.handle("fs:read-binary", (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) return remoteReadBinary(remoteConnOrThrow(remoteId), filePath, mimeFor);
     try {
       const stats = fs.statSync(filePath);
       if (stats.size > BINARY_CAP) {
@@ -403,15 +512,23 @@ app.whenReady().then(() => {
     }
   });
 
-  // Git (dock tab)
-  ipcMain.handle("git:status", (_e, cwd: string) => gitStatus(cwd));
-  ipcMain.handle("git:log", (_e, cwd: string, max: number) => gitLog(cwd, max));
-  ipcMain.handle("git:diff-file", (_e, cwd: string, filePath: string) => gitDiffFile(cwd, filePath));
-  ipcMain.handle("git:diff-all", (_e, cwd: string) => gitDiffAll(cwd));
-  ipcMain.handle("git:stage", (_e, cwd: string, paths: string[]) => gitStage(cwd, paths));
-  ipcMain.handle("git:unstage", (_e, cwd: string, paths: string[]) => gitUnstage(cwd, paths));
-  ipcMain.handle("git:commit", (_e, cwd: string, message: string) => gitCommit(cwd, message));
-  ipcMain.handle("git:push", (_e, cwd: string) => gitPush(cwd));
+  // Git (dock tab) - v0.7.0: routed to the remote worker over ssh
+  ipcMain.handle("git:status", (_e, cwd: string, remoteId?: string) =>
+    remoteId ? remoteGitStatus(remoteConnOrThrow(remoteId), cwd) : gitStatus(cwd));
+  ipcMain.handle("git:log", (_e, cwd: string, max: number, remoteId?: string) =>
+    remoteId ? remoteGitLog(remoteConnOrThrow(remoteId), cwd, max) : gitLog(cwd, max));
+  ipcMain.handle("git:diff-file", (_e, cwd: string, filePath: string, remoteId?: string) =>
+    remoteId ? remoteGitDiffFile(remoteConnOrThrow(remoteId), cwd, filePath) : gitDiffFile(cwd, filePath));
+  ipcMain.handle("git:diff-all", (_e, cwd: string, remoteId?: string) =>
+    remoteId ? remoteGitDiffAll(remoteConnOrThrow(remoteId), cwd) : gitDiffAll(cwd));
+  ipcMain.handle("git:stage", (_e, cwd: string, paths: string[], remoteId?: string) =>
+    remoteId ? remoteGitStage(remoteConnOrThrow(remoteId), cwd, paths) : gitStage(cwd, paths));
+  ipcMain.handle("git:unstage", (_e, cwd: string, paths: string[], remoteId?: string) =>
+    remoteId ? remoteGitUnstage(remoteConnOrThrow(remoteId), cwd, paths) : gitUnstage(cwd, paths));
+  ipcMain.handle("git:commit", (_e, cwd: string, message: string, remoteId?: string) =>
+    remoteId ? remoteGitCommit(remoteConnOrThrow(remoteId), cwd, message) : gitCommit(cwd, message));
+  ipcMain.handle("git:push", (_e, cwd: string, remoteId?: string) =>
+    remoteId ? remoteGitPush(remoteConnOrThrow(remoteId), cwd) : gitPush(cwd));
 
   // Shell: open path in file explorer, creating if needed
   ipcMain.handle("shell:open-path", async (_e, path: string) => {
@@ -614,8 +731,14 @@ app.whenReady().then(() => {
   });
 });
 
+// v0.7.0: stop the local agent and every remote worker on quit — killing
+// the ssh children terminates the remote vibe-acp processes too.
+app.on("before-quit", () => {
+  void stopAllAcp()
+})
+
 app.on("window-all-closed", () => {
-  acpManager.stop();
+  void stopAllAcp()
   if (process.platform !== "darwin") app.quit();
 });
 

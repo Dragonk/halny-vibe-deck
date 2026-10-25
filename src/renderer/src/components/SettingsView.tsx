@@ -257,6 +257,7 @@ export default function SettingsView(): React.JSX.Element {
   const [serveUsername, setServeUsername] = useState('')
   const [servePassword, setServePassword] = useState('')
   const [serveCredsSaved, setServeCredsSaved] = useState(false)
+  const [serveError, setServeError] = useState<string | null>(null)
   const [remoteDraft, setRemoteDraft] = useState<RemoteConnection | null>(null)
   const [remoteTestResult, setRemoteTestResult] = useState<RemoteTestResult | null>(null)
   const [remoteTesting, setRemoteTesting] = useState(false)
@@ -333,7 +334,6 @@ export default function SettingsView(): React.JSX.Element {
       return
     }
     setAcpStatus('connecting')
-    useStore.setState({ remoteActive: null })
     try {
       await window.api.acp.start(local.acpPath, local.workingDirectory || '')
       setCurrentView('chat')
@@ -354,12 +354,17 @@ export default function SettingsView(): React.JSX.Element {
 
   const handleServeToggle = async (): Promise<void> => {
     try {
+      setServeError(null)
       const st = serveStatus?.running
         ? await window.api.serve.stop()
         : await window.api.serve.start()
       setServeStatus(st as ServeStatus)
     } catch (err) {
+      // v0.7.0: the error must be visible in the UI (e.g. missing
+      // credentials) - previously it was swallowed and the button
+      // appeared to do nothing.
       console.error(err)
+      setServeError((err as Error).message)
     }
   }
 
@@ -2426,6 +2431,7 @@ export default function SettingsView(): React.JSX.Element {
                     {serveStatus.running ? `${tr.serveRunning} — ${serveStatus.url}` : tr.serveStopped}
                   </span>
                 )}
+                {serveError && <div className="git-error">{serveError}</div>}
               </div>
             </div>
             <div className="field">

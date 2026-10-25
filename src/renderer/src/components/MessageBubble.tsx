@@ -532,7 +532,7 @@ function ToolFilePathLink({
       <button
         className="tool-path-preview-btn"
         title={tr.openPreview}
-        onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId))}
+        onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId), undefined, remoteIdForSession(acpSessionId))}
       >
         ↗
       </button>
@@ -1489,12 +1489,19 @@ function ToolCallPathChip({
     <button
       className="tool-call-path"
       title={path}
-      onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId))}
+      onClick={() => openFilePreview(resolveSessionPath(path, acpSessionId), undefined, remoteIdForSession(acpSessionId))}
     >
       {path}
     </button>
   );
 }
+
+// Resolves the remote connection id owning the given ACP session (null = local).
+function remoteIdForSession(acpSessionId?: string): string | null {
+  if (!acpSessionId) return null;
+  return useStore.getState().getSessionByAcpId(acpSessionId)?.remoteId ?? null;
+}
+
 
 // Heuristic: does this inline code snippet look like a file path?
 function looksLikeInlinePath(text: string): boolean {
@@ -1542,7 +1549,8 @@ const markdownComponents = {
     const text = Array.isArray(children) ? children.join("") : String(children ?? "");
     if (!className && looksLikeInlinePath(text)) {
       const st = useStore.getState();
-      const open = (): void => st.openFilePreview(resolveSessionPath(text));
+      const sess = st.sessions.find((s) => s.id === st.currentSessionId);
+      const open = (): void => st.openFilePreview(resolveSessionPath(text), undefined, sess?.remoteId ?? null);
       return (
         <code
           className="markdown-path-link"
@@ -1797,7 +1805,7 @@ export default function MessageBubble({
               <button
                 className="msg-action-btn"
                 onClick={handleCopy}
-                title="Copy"
+                title={tr.copyLabel}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -1880,7 +1888,7 @@ export default function MessageBubble({
             <button
               className="msg-action-btn"
               onClick={handleCopy}
-              title="Copy"
+              title={tr.copyLabel}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"

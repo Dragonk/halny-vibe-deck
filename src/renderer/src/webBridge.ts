@@ -139,28 +139,34 @@ function buildApi(): AppAPI {
       init: (acpPath: string): Promise<void> => invoke('acp:init', [acpPath]).then(() => undefined),
       start: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
         invoke('acp:start', [acpPath, cwd, remoteId ?? undefined]).then(() => undefined),
-      newSession: (cwd: string): Promise<void> => invoke('acp:new-session', [cwd]).then(() => undefined),
-      loadSession: (sessionId: string, cwd: string): Promise<void> =>
-        invoke('acp:load-session', [sessionId, cwd]).then(() => undefined),
-      sendPrompt: (text: string, acpSessionId?: string): Promise<void> =>
-        invoke('acp:send-prompt', [text, acpSessionId]).then(() => undefined),
-      cancelSession: (acpSessionId: string): Promise<void> =>
-        invoke('acp:cancel-session', [acpSessionId]).then(() => undefined),
-      setConfigOption: (key: string, value: string, sessionId?: string): Promise<void> =>
-        invoke('acp:set-config-option', [key, value, sessionId]).then(() => undefined),
-      approveTool: (requestId: string, optionId: string): Promise<void> =>
-        invoke('acp:approve-tool', [requestId, optionId]).then(() => undefined),
-      answerQuestion: (requestId: string, answer: string): Promise<void> =>
-        invoke('acp:answer-question', [requestId, answer]).then(() => undefined),
+      ensureWorker: (acpPath: string, cwd: string, remoteId?: string): Promise<void> =>
+        invoke('acp:ensure-worker', [acpPath, cwd, remoteId ?? undefined]).then(() => undefined),
+      stopWorker: (remoteId?: string): Promise<void> =>
+        invoke('acp:stop-worker', [remoteId ?? undefined]).then(() => undefined),
+      newSession: (cwd: string, remoteId?: string): Promise<void> =>
+        invoke('acp:new-session', [cwd, remoteId ?? undefined]).then(() => undefined),
+      loadSession: (sessionId: string, cwd: string, remoteId?: string): Promise<void> =>
+        invoke('acp:load-session', [sessionId, cwd, remoteId ?? undefined]).then(() => undefined),
+      sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
+        invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined]).then(() => undefined),
+      cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
+        invoke('acp:cancel-session', [acpSessionId, remoteId ?? undefined]).then(() => undefined),
+      setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>
+        invoke('acp:set-config-option', [key, value, sessionId, remoteId ?? undefined]).then(() => undefined),
+      approveTool: (requestId: string, optionId: string, remoteId?: string): Promise<void> =>
+        invoke('acp:approve-tool', [requestId, optionId, remoteId ?? undefined]).then(() => undefined),
+      answerQuestion: (requestId: string, answer: string, remoteId?: string): Promise<void> =>
+        invoke('acp:answer-question', [requestId, answer, remoteId ?? undefined]).then(() => undefined),
       stop: (): Promise<void> => invoke('acp:stop', []).then(() => undefined),
-      isRunning: (): Promise<boolean> => invoke('acp:is-running', []) as Promise<boolean>,
-      isRemote: (): Promise<boolean> => invoke('acp:is-remote', []) as Promise<boolean>,
-      getContextSummary: (messages: Array<{ role: string; content: string }>): Promise<string> =>
-        invoke('acp:get-context-summary', [messages]) as Promise<string>,
+      isRunning: (remoteId?: string): Promise<boolean> =>
+        invoke('acp:is-running', [remoteId ?? undefined]) as Promise<boolean>,
+      getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
+        invoke('acp:get-context-summary', [messages, remoteId ?? undefined]) as Promise<string>,
       onEvent: (cb: (event: unknown) => void): (() => void) => {
         return subscribeWebEvent('acp:event', cb as (...args: unknown[]) => void)
       }
     },
+
     stats: {
       vibeSessions: (): Promise<unknown[]> => invoke('stats:vibe-sessions', []) as Promise<unknown[]>,
       vibeSessionLastModel: (sessionId: string): Promise<string | null> =>
@@ -184,24 +190,38 @@ function buildApi(): AppAPI {
       }
     },
     fs: {
-      listDir: (dir: string): Promise<unknown> => invoke('fs:list-dir', [dir]),
-      searchFiles: (rootDir: string, query: string): Promise<unknown> => invoke('fs:search-files', [rootDir, query]),
-      readFile: (filePath: string): Promise<unknown> => invoke('fs:read-file', [filePath]),
-      stat: (filePath: string): Promise<unknown> => invoke('fs:stat', [filePath]),
-      readText: (filePath: string): Promise<unknown> => invoke('fs:read-text', [filePath]),
-      readBinary: (filePath: string): Promise<unknown> => invoke('fs:read-binary', [filePath]),
-      writeText: (filePath: string, content: string): Promise<unknown> => invoke('fs:write-text', [filePath, content])
+      listDir: (dir: string, remoteId?: string): Promise<unknown> => invoke('fs:list-dir', [dir, remoteId ?? undefined]),
+      searchFiles: (rootDir: string, query: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:search-files', [rootDir, query, remoteId ?? undefined]),
+      readFile: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:read-file', [filePath, remoteId ?? undefined]),
+      stat: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:stat', [filePath, remoteId ?? undefined]),
+      readText: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:read-text', [filePath, remoteId ?? undefined]),
+      readBinary: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:read-binary', [filePath, remoteId ?? undefined]),
+      writeText: (filePath: string, content: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:write-text', [filePath, content, remoteId ?? undefined])
     },
     git: {
-      status: (cwd: string): Promise<unknown> => invoke('git:status', [cwd]),
-      log: (cwd: string, max: number): Promise<unknown> => invoke('git:log', [cwd, max]),
-      diffFile: (cwd: string, filePath: string): Promise<unknown> => invoke('git:diff-file', [cwd, filePath]),
-      diffAll: (cwd: string): Promise<unknown> => invoke('git:diff-all', [cwd]),
-      stage: (cwd: string, paths: string[]): Promise<unknown> => invoke('git:stage', [cwd, paths]),
-      unstage: (cwd: string, paths: string[]): Promise<unknown> => invoke('git:unstage', [cwd, paths]),
-      commit: (cwd: string, message: string): Promise<unknown> => invoke('git:commit', [cwd, message]),
-      push: (cwd: string): Promise<unknown> => invoke('git:push', [cwd])
+      status: (cwd: string, remoteId?: string): Promise<unknown> => invoke('git:status', [cwd, remoteId ?? undefined]),
+      log: (cwd: string, max: number, remoteId?: string): Promise<unknown> =>
+        invoke('git:log', [cwd, max, remoteId ?? undefined]),
+      diffFile: (cwd: string, filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('git:diff-file', [cwd, filePath, remoteId ?? undefined]),
+      diffAll: (cwd: string, remoteId?: string): Promise<unknown> =>
+        invoke('git:diff-all', [cwd, remoteId ?? undefined]),
+      stage: (cwd: string, paths: string[], remoteId?: string): Promise<unknown> =>
+        invoke('git:stage', [cwd, paths, remoteId ?? undefined]),
+      unstage: (cwd: string, paths: string[], remoteId?: string): Promise<unknown> =>
+        invoke('git:unstage', [cwd, paths, remoteId ?? undefined]),
+      commit: (cwd: string, message: string, remoteId?: string): Promise<unknown> =>
+        invoke('git:commit', [cwd, message, remoteId ?? undefined]),
+      push: (cwd: string, remoteId?: string): Promise<unknown> =>
+        invoke('git:push', [cwd, remoteId ?? undefined])
     },
+
     shell: {
       openPath: (path: string): Promise<string> => invoke('shell:open-path', [path]) as Promise<string>
     },

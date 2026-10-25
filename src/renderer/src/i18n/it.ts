@@ -283,6 +283,8 @@ export const it = {
   deleteLabel: 'Elimina',
   editLabel: 'Modifica',
   saveLabel: 'Salva',
+  copyLabel: 'Copia',
+  stopLabel: 'Ferma',
   settingsScopeGlobal: 'Impostazioni globali',
   settingsScopeProject: 'Impostazioni del progetto',
   modelsUsedLabel: 'Modelli',
