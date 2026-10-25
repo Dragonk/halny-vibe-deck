@@ -202,8 +202,9 @@ pub fn os_lang() -> String {
     {
         let raw = web_sys::window()
             .map(|w| w.navigator().language())
+            .flatten()
             .unwrap_or_default();
-        let l = String::from(raw).to_lowercase();
+        let l = raw.to_lowercase();
         let code: String = l.chars().take(2).collect();
         match code.as_str() {
             "pl" | "de" | "fr" | "es" | "it" | "en" => code,
