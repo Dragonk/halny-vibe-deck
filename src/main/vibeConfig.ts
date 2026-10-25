@@ -61,6 +61,7 @@ export interface VibeConnectorConfig {
 export interface VibeAgentFileConfig {
   name: string
   agent_type?: 'agent' | 'subagent'
+  safety?: string
   active_model?: string
   system_prompt_id?: string
   disabled_tools?: string[]
@@ -255,6 +256,7 @@ export function loadAgentFiles(dir: string = getVibeDirPath()): VibeAgentFileCon
         agents.push({
           name: basename(f.name, '.toml'),
           agent_type: raw['agent_type'] as VibeAgentFileConfig['agent_type'],
+          safety: raw['safety'] as string | undefined,
           active_model: raw['active_model'] as string | undefined,
           system_prompt_id: raw['system_prompt_id'] as string | undefined,
           display_name: raw['display_name'] as string | undefined,
@@ -280,7 +282,9 @@ export function loadAgentFiles(dir: string = getVibeDirPath()): VibeAgentFileCon
 // (the CLI expects "read_file", not "tools.read_file").
 export function agentFileData(config: VibeAgentFileConfig): Record<string, unknown> {
   const data: Record<string, unknown> = {}
-  data['agent_type'] = config.agent_type ?? 'agent'
+  // Only valid enum values are written: an invalid agent_type or safety value
+  // makes the CLI silently drop the whole profile during agent discovery.
+  data['agent_type'] = config.agent_type === 'subagent' ? 'subagent' : 'agent'
   const clean = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim() ? v.trim() : undefined
   const display_name = clean(config.display_name)
@@ -293,6 +297,10 @@ export function agentFileData(config: VibeAgentFileConfig): Record<string, unkno
   if (active_model) data['active_model'] = active_model
   const system_prompt_id = clean(config.system_prompt_id)
   if (system_prompt_id) data['system_prompt_id'] = system_prompt_id
+  const safety = clean(config.safety)
+  if (safety && ['safe', 'neutral', 'destructive', 'smart', 'yolo'].includes(safety)) {
+    data['safety'] = safety
+  }
   if (Array.isArray(config.enabled_tools) && config.enabled_tools.length > 0) {
     data['enabled_tools'] = config.enabled_tools
   }

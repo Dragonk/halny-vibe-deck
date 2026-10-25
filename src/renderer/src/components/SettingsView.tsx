@@ -55,6 +55,7 @@ interface VibeToolPermission {
 interface VibeAgentConfig {
   name: string
   agent_type?: 'agent' | 'subagent'
+  safety?: string
   active_model?: string
   system_prompt_id?: string
   display_name?: string
@@ -1387,6 +1388,7 @@ export default function SettingsView(): React.JSX.Element {
                   <div className="master-detail-panel">
                     {selectedAgentIdx !== null && vibeAgents[selectedAgentIdx] ? (() => {
                       const agent = vibeAgents[selectedAgentIdx]
+                      const isSubagent = (agent.agent_type || 'agent') === 'subagent'
                       return (
                         <div>
                           <div className="field">
@@ -1425,6 +1427,7 @@ export default function SettingsView(): React.JSX.Element {
                                 {tr.remove}
                               </button>
                             </div>
+                            <p className="field-hint">{tr.agentTypeHint}</p>
                           </div>
                           <div className="field">
                             <label className="field-label">{tr.agentDisplayName}</label>
@@ -1452,7 +1455,27 @@ export default function SettingsView(): React.JSX.Element {
                                 }
                               }}
                             />
+                            {isSubagent && <p className="field-hint">{tr.agentDescriptionHint}</p>}
                           </div>
+                          {!isSubagent && (
+                            <div className="field">
+                              <label className="field-label">{tr.agentSafetyLabel}</label>
+                              <select
+                                className="field-select"
+                                value={agent.safety || 'neutral'}
+                                onChange={(e) => {
+                                  handleSaveAgent(agent.name, { ...agent, safety: e.target.value })
+                                }}
+                              >
+                                {['safe', 'neutral', 'destructive', 'smart', 'yolo'].map((s) => (
+                                  <option key={s} value={s}>
+                                    {s}
+                                  </option>
+                                ))}
+                              </select>
+                              <p className="field-hint">{tr.agentSafetyHint}</p>
+                            </div>
+                          )}
                           <div className="field">
                             <label className="field-label">{tr.modelOptional}</label>
                             <select
@@ -1501,21 +1524,25 @@ export default function SettingsView(): React.JSX.Element {
                                 </option>
                               ))}
                             </select>
+                            <p className="field-hint">{tr.agentSystemPromptHint}</p>
                           </div>
-                          <div className="field">
-                            <label className="field-label">{tr.agentInstructions}</label>
-                            <textarea
-                              className="field-textarea"
-                              rows={4}
-                              defaultValue={agent.instructions || ''}
-                              onBlur={(e) => {
-                                if (e.target.value !== (agent.instructions || '')) {
-                                  handleSaveAgent(agent.name, { ...agent, instructions: e.target.value })
-                                }
-                              }}
-                              placeholder={tr.systemPromptPlaceholder}
-                            />
-                          </div>
+                          {isSubagent && (
+                            <div className="field">
+                              <label className="field-label">{tr.agentInstructions}</label>
+                              <textarea
+                                className="field-textarea"
+                                rows={4}
+                                defaultValue={agent.instructions || ''}
+                                onBlur={(e) => {
+                                  if (e.target.value !== (agent.instructions || '')) {
+                                    handleSaveAgent(agent.name, { ...agent, instructions: e.target.value })
+                                  }
+                                }}
+                                placeholder={tr.systemPromptPlaceholder}
+                              />
+                              <p className="field-hint">{tr.agentInstructionsHint}</p>
+                            </div>
+                          )}
                           <div className="field">
                             <label className="field-label">{tr.enabledTools || 'Enabled Tools'}</label>
                             <input

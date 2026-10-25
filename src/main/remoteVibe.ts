@@ -133,6 +133,7 @@ function parseRemoteAgentBlocks(out: string): VibeAgentFileConfig[] {
     agents.push({
       name: stem,
       agent_type: raw["agent_type"] as VibeAgentFileConfig["agent_type"],
+      safety: raw["safety"] as string | undefined,
       active_model: raw["active_model"] as string | undefined,
       system_prompt_id: raw["system_prompt_id"] as string | undefined,
       display_name: raw["display_name"] as string | undefined,
