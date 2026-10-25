@@ -20,6 +20,7 @@ export interface ToolCall {
   title: string
   kind: string
   status: 'running' | 'done' | 'error'
+  startedAt?: number
   input?: Record<string, unknown>
   output?: string
   fileChanges?: FileChange[]

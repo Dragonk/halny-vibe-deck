@@ -926,7 +926,7 @@ export const useStore = create<AppStore>((set, get) => ({
               tc.id === toolCall.id ? toolCall : tc,
             );
           } else {
-            msg.toolCalls = [...(msg.toolCalls ?? []), toolCall];
+            msg.toolCalls = [...(msg.toolCalls ?? []), { ...toolCall, startedAt: toolCall.startedAt ?? Date.now() }];
           }
           messages[lastAiIdx] = msg;
         }

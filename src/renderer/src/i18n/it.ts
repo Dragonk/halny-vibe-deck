@@ -125,6 +125,7 @@ export const it = {
   temperature: 'Temperatura',
   thinking: 'Ragionamento',
   thinkingThinking: 'Sto pensando...',
+  thoughtForLabel: 'Riflettuto per {{seconds}}s',
   off: 'Disattivato',
   low: 'Basso',
   medium: 'Medio',

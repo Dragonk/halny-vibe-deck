@@ -79,7 +79,7 @@ export default function ChatView(): React.JSX.Element {
               {showAgentBusy && !isResuming && (
                 <div className="agent-busy-row">
                   <span className="agent-busy-dots"><span /><span /><span /></span>
-                  {tr.agentWorkingLabel}
+                  <span className="steps-shimmer">{tr.agentWorkingLabel}</span>
                 </div>
               )}
             </div>

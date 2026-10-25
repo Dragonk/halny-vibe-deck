@@ -500,7 +500,7 @@ code {
 
 .chat-inner {
     width: 100%;
-    max-width: 680px;
+    max-width: 768px;
     margin: 0 auto;
     padding: 24px 16px 8px;
     display: flex;
@@ -586,9 +586,9 @@ code {
 
 /* User message bubble */
 .msg-user .msg-bubble {
-    background: var(--panel);
-    border-radius: 18px 18px 4px 18px;
-    padding: 10px 18px;
+    background: rgba(15, 15, 20, 0.06);
+    border-radius: 22px;
+    padding: 10px 20px;
     max-width: 100%;
 }
 
@@ -5261,7 +5261,7 @@ code {
 
 
 /* ── v0.4.2: agent busy + resume indicators ── */
-.agent-busy-row { display: flex; align-items: center; gap: 8px; margin: 10px 4px; font-size: 12px; color: var(--text-muted); }
+.agent-busy-row { display: flex; align-items: center; gap: 8px; margin: 12px 4px; font-size: 13px; color: var(--text-muted); }
 .agent-busy-spinner { width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: agent-busy-spin 0.8s linear infinite; flex-shrink: 0; }
 @keyframes agent-busy-spin { to { transform: rotate(360deg); } }
 .agent-busy-dots { display: inline-flex; gap: 3px; }
@@ -5891,3 +5891,197 @@ code {
   border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
 }
 
+
+/* ===== Work timeline (harness steps, v0.9.1) ===== */
+.steps-section {
+    margin-bottom: 4px;
+}
+
+.steps-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.steps-summary-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.15s ease;
+}
+
+.steps-summary:hover .steps-summary-text:not(.steps-shimmer) {
+    color: var(--text);
+}
+
+.steps-chevron,
+.step-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--text-dim);
+    opacity: 0.6;
+    transition: transform 0.2s ease-out;
+}
+
+.steps-chevron svg,
+.step-chevron svg {
+    width: 16px;
+    height: 16px;
+}
+
+.steps-section.open .steps-chevron,
+.step-row.open .step-chevron {
+    transform: rotate(90deg);
+}
+
+.steps-list {
+    display: flex;
+    flex-direction: column;
+    animation: fadeInMsg 0.15s ease-out;
+}
+
+.step-row {
+    display: flex;
+    gap: 10px;
+}
+
+.step-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 16px;
+    flex-shrink: 0;
+}
+
+.step-icon {
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
+.step-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.step-row.step-running .step-icon {
+    color: var(--accent);
+}
+
+.step-row.step-running .step-icon svg {
+    animation: spin 0.9s linear infinite;
+}
+
+.step-row.step-error .step-icon {
+    color: #f87171;
+}
+
+.step-connector {
+    flex: 1;
+    width: 1px;
+    min-height: 8px;
+    background: var(--border-subtle);
+    margin: 2px 0;
+}
+
+.step-body {
+    flex: 1;
+    min-width: 0;
+    padding-bottom: 16px;
+}
+
+.step-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 20px;
+    width: 100%;
+    padding: 0;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.step-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.15s ease;
+}
+
+.step-header:hover .step-label:not(.steps-shimmer) {
+    color: var(--text);
+}
+
+.step-content {
+    padding-top: 8px;
+    animation: fadeInMsg 0.15s ease-out;
+}
+
+.step-reasoning {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 6px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-muted);
+    word-break: break-word;
+}
+
+/* Animated "work in progress" shimmer (aura-style) */
+.steps-shimmer {
+    background: linear-gradient(
+        90deg,
+        var(--text-dim) 20%,
+        var(--text) 50%,
+        var(--text-dim) 80%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent !important;
+    animation: stepsShimmer 1.6s linear infinite;
+}
+
+@keyframes stepsShimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* User bubble: actions below the bubble (v0.9.1) */
+.msg-user .msg-user-col {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
+}
+
+.msg-user .msg-actions-row {
+    margin-top: 0;
+}
+
+[data-theme="dark"] .msg-user .msg-bubble {
+    background: rgba(255, 255, 255, 0.07);
+}

@@ -124,6 +124,7 @@ export const fr = {
   temperature: 'Température',
   thinking: 'Réflexion',
   thinkingThinking: 'Réflexion en cours...',
+  thoughtForLabel: 'Réfléchi pendant {{seconds}}s',
   off: 'Désactivé',
   low: 'Faible',
   medium: 'Moyen',

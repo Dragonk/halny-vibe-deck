@@ -124,6 +124,7 @@ export const en = {
   temperature: 'Temperature',
   thinking: 'Thinking',
   thinkingThinking: 'Thinking...',
+  thoughtForLabel: 'Thought for {{seconds}}s',
   off: 'Off',
   low: 'Low',
   medium: 'Medium',

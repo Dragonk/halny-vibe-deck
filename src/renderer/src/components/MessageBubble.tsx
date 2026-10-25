@@ -186,7 +186,9 @@ function rawFunctionNameToTitleFromInput(
     lower === "bash" ||
     lower === "execute" ||
     lower === "run_command" ||
-    lower === "shell"
+    lower === "shell" ||
+    lower.endsWith(".bash") ||
+    lower.endsWith(".execute")
   ) {
     const cmd = ((inp.command ?? inp.cmd ?? inp.script ?? "") as string).slice(
       0,
@@ -1227,190 +1229,260 @@ function TaskToolBlock({
   );
 }
 
-function ToolCallBlock({
-  toolCall,
-  acpSessionId,
-}: {
-  toolCall: ToolCall;
-  acpSessionId?: string;
-}): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
-  const { config } = useStore();
-  const tr = useTranslation(config.language);
+// ===== Work timeline (steps shown above the assistant answer) =====
 
-  // Delegate task tool calls to specialized block.
-  // vibe-acp may send title as "task", "task: explore", "Running explore agent: …", etc.
-  // Detect reliably by checking input shape (both task + agent keys present).
-  const isTaskTool =
-    toolCall.title === "task" ||
-    toolCall.title.startsWith("task:") ||
-    (toolCall.input != null &&
-      "agent" in toolCall.input &&
-      "task" in toolCall.input);
-  if (isTaskTool) {
-    return <TaskToolBlock toolCall={toolCall} acpSessionId={acpSessionId} />;
-  }
-
-  // Status icon
-  const StatusIcon = (): React.JSX.Element => {
-    if (toolCall.status === "running") {
-      return (
-        <svg
-          className="tool-spin"
-          xmlns="http://www.w3.org/2000/svg"
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-        >
-          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-        </svg>
-      );
-    }
-    if (toolCall.status === "done") {
-      return (
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12" />
-        </svg>
-      );
-    }
-    return (
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <line x1="18" y1="6" x2="6" y2="18" />
-        <line x1="6" y1="6" x2="18" y2="18" />
-      </svg>
-    );
-  };
-
-  return (
-    <div className={`tool-call-block tool-call-${toolCall.status}`}>
-      <button
-        className="tool-call-header"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <span className={`tool-call-icon tool-call-icon-${toolCall.status}`}>
-          <StatusIcon />
-        </span>
-        <span className="tool-call-title">
-          {(() => {
-            const translated = translateToolTitle(toolCall.title, tr);
-            if (translated !== toolCall.title) return translated;
-            return rawFunctionNameToTitleFromInput(
-              toolCall.title,
-              toolCall.input ?? {},
-              tr,
-            );
-          })()}
-        </span>
-        <span className="tool-call-chevron">{expanded ? "▲" : "▼"}</span>
-      </button>
-      {expanded && (
-        <div className="tool-call-content">
-          {(() => {
-            const richContent = ToolCallRichContent({
-              toolCall,
-              tr,
-              acpSessionId,
-            });
-            if (richContent !== null) {
-              return richContent;
-            }
-            return (
-              <>
-                {extractToolCallPath(toolCall) && (
-                  <ToolCallPathChip
-                    path={extractToolCallPath(toolCall) as string}
-                    acpSessionId={acpSessionId}
-                  />
-                )}
-                {toolCall.input && Object.keys(toolCall.input).length > 0 && (
-                  <pre className="tool-call-input">
-                    {JSON.stringify(toolCall.input, null, 2)}
-                  </pre>
-                )}
-                {toolCall.output && (
-                  <pre className="tool-call-output">
-                    {parseToolOutput(toolCall.output) ?? toolCall.output}
-                  </pre>
-                )}
-              </>
-            );
-          })()}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ThinkingSection({
-  blocks,
-  isStreaming,
-}: {
-  blocks: ThinkingBlock[];
-  isStreaming?: boolean;
-}): React.JSX.Element {
-  const { config } = useStore();
-  const tr = useTranslation(config.language);
-  const [open, setOpen] = useState(false);
-
-  const paragraphs = blocks
-    .flatMap((b) => b.content.split(/\n\n+/))
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
-
-  return (
-    <div className="thinking-section">
-      <button className="thinking-toggle" onClick={() => setOpen((v) => !v)}>
-        <span className="thinking-dot" />
-        <span className="thinking-label">
-          {isStreaming ? tr.thinkingThinking : tr.thinking}
-        </span>
-        <span className="thinking-chevron">{open ? "▲" : "▼"}</span>
-      </button>
-      {open && (
-        <div className="thinking-content">
-          <ul className="thinking-paragraphs">
-            {paragraphs.map((p, i) => (
-              <li key={i} className="thinking-paragraph">
-                {p}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const MISTRAL_LOGO = (
-  <svg viewBox="0 0 24 24" fill="currentColor">
-    <path d="M13.3715 16.358H16.1144V13.6486H13.3712L13.3715 16.358H10.6283V13.6486H7.88568V16.358H10.6283V19.0676H2.3999V16.358H5.14279V5.52002H7.88568V8.22963H10.6286V10.939H13.3715V8.22963H16.1144V5.52002H18.8572V16.358H21.5999V19.0676H13.3715V16.358Z" />
+const COPY_ICON = (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
   </svg>
 );
 
+const STEP_CHECK_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="12" r="10" />
+    <path d="M7.5 12L10.5 15L16.5 9" />
+  </svg>
+);
+
+const STEP_SPINNER_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  </svg>
+);
+
+const STEP_ERROR_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="12" r="10" />
+    <path d="M9 9L15 15" />
+    <path d="M15 9L9 15" />
+  </svg>
+);
+
+const STEP_CHEVRON_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M10.5 8L14.5 12L10.5 16" />
+  </svg>
+);
+
+interface TimelineStep {
+  key: string;
+  kind: "thinking" | "tool";
+  order: number;
+  thinking?: ThinkingBlock;
+  toolCall?: ToolCall;
+}
+
+function buildTimelineSteps(message: Message): TimelineStep[] {
+  const tools = message.toolCalls ?? [];
+  const thinkingSteps: TimelineStep[] = (message.thinking ?? []).map((b) => ({
+    key: "t-" + b.id,
+    kind: "thinking",
+    order: b.startedAt ?? 0,
+    thinking: b,
+  }));
+  const toolSteps: TimelineStep[] = tools.map((tc, i) => ({
+    key: "c-" + tc.id,
+    kind: "tool",
+    order: tc.startedAt ?? Number.MAX_SAFE_INTEGER - (tools.length - i),
+    toolCall: tc,
+  }));
+  return [...thinkingSteps, ...toolSteps].sort((a, b) => a.order - b.order);
+}
+
+function thinkingDurationSeconds(block: ThinkingBlock): number {
+  const end = block.completedAt ?? Date.now();
+  return Math.max(0, Math.round((end - (block.startedAt ?? end)) / 1000));
+}
+
+// Short label for a step, used both in timeline rows and the summary line.
+function stepLabel(step: TimelineStep, tr: Record<TranslationKeys, string>): string {
+  if (step.kind === "thinking") {
+    const block = step.thinking as ThinkingBlock;
+    if (!block.isComplete) return tr.thinkingThinking;
+    const seconds = thinkingDurationSeconds(block);
+    if (seconds >= 1) return t(tr, "thoughtForLabel", { seconds });
+    return tr.thinking;
+  }
+  const tc = step.toolCall as ToolCall;
+  const translated = translateToolTitle(tc.title, tr);
+  if (translated !== tc.title) return translated;
+  return rawFunctionNameToTitleFromInput(tc.title, tc.input ?? {}, tr);
+}
+
+function StepRow({
+  step,
+  tr,
+  acpSessionId,
+  last,
+}: {
+  step: TimelineStep;
+  tr: Record<TranslationKeys, string>;
+  acpSessionId?: string;
+  last: boolean;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const running =
+    step.kind === "tool"
+      ? (step.toolCall as ToolCall).status === "running"
+      : !(step.thinking as ThinkingBlock).isComplete;
+  const isError =
+    step.kind === "tool" && (step.toolCall as ToolCall).status === "error";
+  const statusClass = running
+    ? "step-running"
+    : isError
+      ? "step-error"
+      : "step-done";
+  const icon = running
+    ? STEP_SPINNER_ICON
+    : isError
+      ? STEP_ERROR_ICON
+      : STEP_CHECK_ICON;
+
+  return (
+    <div className={"step-row " + statusClass + (open ? " open" : "")}>
+      <div className="step-rail">
+        <span className="step-icon">{icon}</span>
+        {!last && <span className="step-connector" />}
+      </div>
+      <div className="step-body">
+        <button className="step-header" onClick={() => setOpen((v) => !v)}>
+          <span className={"step-label" + (running ? " steps-shimmer" : "")}>
+            {stepLabel(step, tr)}
+          </span>
+          <span className="step-chevron">{STEP_CHEVRON_ICON}</span>
+        </button>
+        {open && (
+          <div className="step-content">
+            {step.kind === "thinking" ? (
+              <div className="step-reasoning">
+                {(step.thinking as ThinkingBlock).content
+                  .split(/\n\n+/)
+                  .map((p) => p.trim())
+                  .filter((p) => p.length > 0)
+                  .map((p, i) => (
+                    <p key={i}>{p}</p>
+                  ))}
+              </div>
+            ) : (
+              (() => {
+                const tc = step.toolCall as ToolCall;
+                const isTaskTool =
+                  tc.title === "task" ||
+                  tc.title.startsWith("task:") ||
+                  (tc.input != null && "agent" in tc.input && "task" in tc.input);
+                if (isTaskTool) {
+                  return <TaskToolBlock toolCall={tc} acpSessionId={acpSessionId} />;
+                }
+                const richContent = ToolCallRichContent({ toolCall: tc, tr, acpSessionId });
+                if (richContent !== null) return richContent;
+                return (
+                  <>
+                    {extractToolCallPath(tc) && (
+                      <ToolCallPathChip
+                        path={extractToolCallPath(tc) as string}
+                        acpSessionId={acpSessionId}
+                      />
+                    )}
+                    {tc.input && Object.keys(tc.input).length > 0 && (
+                      <pre className="tool-call-input">
+                        {JSON.stringify(tc.input, null, 2)}
+                      </pre>
+                    )}
+                    {tc.output && (
+                      <pre className="tool-call-output">
+                        {parseToolOutput(tc.output) ?? tc.output}
+                      </pre>
+                    )}
+                  </>
+                );
+              })()
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Collapsible "harness steps" section rendered above the assistant answer,
+// mirroring the official Mistral Vibe chat layout: one muted summary line
+// that expands into a vertical timeline of thinking + tool steps. While
+// the agent is working the section stays open with an animated spinner
+// and shimmering label on the running step ("work in progress").
+function StepsTimeline({
+  message,
+  isAgentBusy,
+  acpSessionId,
+}: {
+  message: Message;
+  isAgentBusy?: boolean;
+  acpSessionId?: string;
+}): React.JSX.Element | null {
+  const { config } = useStore();
+  const tr = useTranslation(config.language);
+  const [manual, setManual] = useState<boolean | null>(null);
+  const steps = useMemo(
+    () => buildTimelineSteps(message),
+    [message.thinking, message.toolCalls],
+  );
+  if (steps.length === 0) return null;
+
+  const anyRunning = steps.some(
+    (s) =>
+      (s.kind === "tool" && (s.toolCall as ToolCall).status === "running") ||
+      (s.kind === "thinking" && !(s.thinking as ThinkingBlock).isComplete),
+  );
+  const active = anyRunning || !!isAgentBusy;
+  const open = manual !== null ? manual : active;
+  const summary = steps
+    .slice(0, 4)
+    .map((s) => stepLabel(s, tr))
+    .join(" · ");
+
+  return (
+    <div
+      className={
+        "steps-section" + (open ? " open" : "") + (active ? " steps-active" : "")
+      }
+    >
+      <button
+        className="steps-summary"
+        onClick={() => setManual(!open)}
+      >
+        <span
+          className={"steps-summary-text" + (active ? " steps-shimmer" : "")}
+        >
+          {summary}
+        </span>
+        <span className="steps-chevron">{STEP_CHEVRON_ICON}</span>
+      </button>
+      {open && (
+        <div className="steps-list">
+          {steps.map((s, i) => (
+            <StepRow
+              key={s.key}
+              step={s}
+              tr={tr}
+              acpSessionId={acpSessionId}
+              last={i === steps.length - 1}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 interface MarkdownSegment {
   type: "markdown" | "mermaid";
   content: string;
@@ -1791,37 +1863,26 @@ function MessageBubble({
   if (isUser) {
     return (
       <div className="msg-row msg-user">
-        <div className="msg-bubble">
-          <div className="msg-text">
-            <UserMessageContent
-              content={message.content}
-              attachments={message.attachments}
-            />
+        <div className="msg-user-col">
+          <div className="msg-bubble">
+            <div className="msg-text">
+              <UserMessageContent
+                content={message.content}
+                attachments={message.attachments}
+              />
+            </div>
           </div>
           <div className="msg-actions-row">
             <div className="msg-actions-left" />
             <div className="msg-actions-right">
-              <div className="msg-time">{formatTime(message.timestamp)}</div>
               <button
                 className="msg-action-btn"
                 onClick={handleCopy}
                 title={tr.copyLabel}
               >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-                </svg>
+                {COPY_ICON}
               </button>
+              <div className="msg-time">{formatTime(message.timestamp)}</div>
             </div>
           </div>
         </div>
@@ -1831,47 +1892,12 @@ function MessageBubble({
 
   return (
     <div className="msg-row msg-ai">
-      <div
-        className={`msg-avatar-wrap${isAgentBusy ? " msg-avatar-busy" : ""}`}
-      >
-        <div className="msg-avatar">{MISTRAL_LOGO}</div>
-        {isAgentBusy && (
-          <svg
-            className="msg-avatar-spinner"
-            viewBox="0 0 36 36"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <circle
-              cx="18"
-              cy="18"
-              r="15"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeDasharray="60 40"
-            />
-          </svg>
-        )}
-      </div>
       <div className="msg-content">
-        {hasThinking && (
-          <ThinkingSection
-            blocks={message.thinking!}
-            isStreaming={isStreaming && !message.isComplete}
-          />
-        )}
-        {hasToolCalls && (
-          <div className="tool-calls-list">
-            {message.toolCalls!.map((tc) => (
-              <ToolCallBlock
-                key={tc.id}
-                toolCall={tc}
-                acpSessionId={acpSessionId}
-              />
-            ))}
-          </div>
-        )}
+        <StepsTimeline
+          message={message}
+          isAgentBusy={isAgentBusy}
+          acpSessionId={acpSessionId}
+        />
         {message.content && (
           <div className="msg-text">
             <MarkdownContent
@@ -1881,30 +1907,16 @@ function MessageBubble({
           </div>
         )}
         <div className="msg-actions-row">
-          <div className="msg-actions-left">
-            <div className="msg-time">{formatTime(message.timestamp)}</div>
-          </div>
+          <div className="msg-actions-left" />
           <div className="msg-actions-right">
             <button
               className="msg-action-btn"
               onClick={handleCopy}
               title={tr.copyLabel}
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-              </svg>
+              {COPY_ICON}
             </button>
+            <div className="msg-time">{formatTime(message.timestamp)}</div>
           </div>
         </div>
       </div>
