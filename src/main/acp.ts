@@ -899,11 +899,20 @@ export class AcpManager {
     const sid = sessionId ?? this.currentSessionId
     if (!sid) return
     console.log('[ACP] setConfigOption:', key, '=', value, 'sessionId:', sid)
-    await this.sendRequest('session/set_config_option', {
+    const result = (await this.sendRequest('session/set_config_option', {
       sessionId: sid,
       configId: key,
       value
-    })
+    })) as Record<string, unknown> | null
+    // v0.10.6: the CLI confirms the new configuration in the response but
+    // never emits a config_option_update notification (verified against CLI
+    // 3.0.2), so every other connected surface - the desktop window and all
+    // web/PWA clients - keeps showing stale chips. Re-broadcast the
+    // confirmed options ourselves so all clients stay in sync.
+    const confirmed = this.parseConfigOptions(result?.configOptions)
+    if (confirmed.length > 0) {
+      this.emit({ type: 'ConfigOptionsUpdate', data: { sessionId: sid, configOptions: confirmed } })
+    }
   }
 
   async getContextSummary(messages: Array<{ role: string; content: string }>): Promise<string> {

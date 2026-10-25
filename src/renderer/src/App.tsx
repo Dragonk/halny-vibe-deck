@@ -290,23 +290,34 @@ export default function App(): React.JSX.Element {
           const store = useStore.getState()
           const options = d.configOptions as ConfigOption[] | undefined
           const updSessId = d.sessionId as string | undefined
-          const active = store.activeAcpSessionId
-          // Only the active session may move the chips (per-session isolation).
-          const isCurrent = !updSessId || !active || updSessId === active
-          if (options && options.length > 0 && isCurrent) {
-            store.setConfigOptions(options)
-            // Record the reported values on the local session so switching
-            // back restores them (per-session mode/thinking isolation).
-            const target = updSessId ? store.getSessionByAcpId(updSessId) : store.currentSession()
+          const cur = store.currentSession()
+          // v0.10.6: chips may only move when the update targets the session
+          // this client is viewing. The old guard (activeAcpSessionId) let
+          // updates for other sessions hijack the chips and dropped updates
+          // for the viewed session while it was in lazy preview.
+          const isCurrent = !updSessId || (!!cur && cur.acpSessionId === updSessId)
+          // Record the reported values on the target session in every client
+          // (switching back restores them), not only when it is the view.
+          const target = updSessId ? store.getSessionByAcpId(updSessId) : cur
+          if (options && options.length > 0) {
+            const modelOpt = options.find((o) => o.id === 'model')
+            const modeOpt = options.find((o) => o.id === 'mode')
+            const thinkOpt = options.find((o) => o.id === 'thinking')
             if (target) {
-              const modelOpt = options.find((o) => o.id === 'model')
-              const modeOpt = options.find((o) => o.id === 'mode')
-              const thinkOpt = options.find((o) => o.id === 'thinking')
               const patch: { lastModel?: string; lastMode?: string; lastThinking?: string } = {}
               if (modelOpt && typeof modelOpt.currentValue === 'string') patch.lastModel = modelOpt.currentValue
               if (modeOpt && typeof modeOpt.currentValue === 'string') patch.lastMode = modeOpt.currentValue
               if (thinkOpt && typeof thinkOpt.currentValue === 'string') patch.lastThinking = thinkOpt.currentValue
               if (Object.keys(patch).length > 0) store.updateSession(target.id, patch)
+            }
+            if (isCurrent) {
+              store.setConfigOptions(options)
+              // v0.10.6: the chips read the current* store state (not
+              // option.currentValue) - sync them from the confirmed options
+              // so a change made in another client reaches this one too.
+              if (modelOpt && typeof modelOpt.currentValue === 'string') store.setCurrentModel(modelOpt.currentValue)
+              if (modeOpt && typeof modeOpt.currentValue === 'string') store.setCurrentMode(modeOpt.currentValue)
+              if (thinkOpt && typeof thinkOpt.currentValue === 'string') store.setCurrentThinking(thinkOpt.currentValue)
             }
           }
           const modeChanged = d.modeChanged as string | undefined
