@@ -6,7 +6,7 @@
 import { loadConfig, type RemoteConnection } from "./config";
 import { shq, sshRun } from "./remote";
 import { parse, stringify } from "smol-toml";
-import { agentFileData, type VibeAgentFileConfig } from "./vibeConfig";
+import { agentFileData, normalizeVibeConfig, type VibeAgentFileConfig } from "./vibeConfig";
 import { buildSessionPreview, type SessionPreview } from "./vibeStats";
 import type {
   VibeConfig,
@@ -70,7 +70,7 @@ export async function getRemoteVibeConfig(remoteId: string, dir: string = HOME_V
   const out = await runSoft(remoteId, "cat " + dirShell(dir) + "/config.toml 2>/dev/null");
   if (!out.trim()) return {};
   try {
-    return parse(out) as VibeConfig;
+    return normalizeVibeConfig(parse(out));
   } catch {
     return {};
   }

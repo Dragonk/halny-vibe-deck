@@ -323,6 +323,7 @@ export const fr = {
   copyLabel: 'Copier',
   stopLabel: 'Arrêter',
   settingsScopeGlobal: 'Paramètres globaux',
+  settingsScopeLocal: 'Paramètres locaux',
   settingsScopeProject: 'Paramètres du projet',
   modelsUsedLabel: 'Modèles',
   messagesLabel: 'Messages',

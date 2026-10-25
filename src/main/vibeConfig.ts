@@ -215,10 +215,27 @@ export function saveVibeConfigRaw(content: string, dir: string = getVibeDirPath(
 // Structured config access
 // ---------------------------------------------------------------------------
 
+/**
+ * Normalize a parsed config: tolerate '[models.<name>]' tables (smol-toml
+ * yields an object there) where the app expects a '[[models]]' array. A
+ * hand-edited or foreign-shaped config must not crash the renderer
+ * (models?.map is not a function -> app-wide ErrorBoundary).
+ */
+export function normalizeVibeConfig(raw: unknown): VibeConfig {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const cfg: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+  const models = cfg.models
+  if (models && !Array.isArray(models) && typeof models === 'object') {
+    const entries = Object.entries(models as Record<string, Record<string, unknown>>)
+    cfg.models = entries.map(([key, v]) => ({ name: key, ...v }))
+  }
+  return cfg as unknown as VibeConfig
+}
+
 export function loadVibeConfig(dir: string = getVibeDirPath()): VibeConfig {
   try {
     const content = fs.readFileSync(configTomlPath(dir), 'utf-8')
-    return parse(content) as VibeConfig
+    return normalizeVibeConfig(parse(content))
   } catch {
     return {}
   }

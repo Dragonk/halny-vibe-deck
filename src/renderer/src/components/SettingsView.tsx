@@ -280,30 +280,33 @@ export default function SettingsView(): React.JSX.Element {
   const [mcpJsonMode, setMcpJsonMode] = useState(false)
   const [mcpJsonText, setMcpJsonText] = useState('')
   const [mcpJsonError, setMcpJsonError] = useState<string | null>(null)
-  const [scope, setScope] = useState<'global' | 'project' | 'remote'>('global')
-  const projectCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
-  const projectRemoteId = currentSessionRemoteId()
-  const [remoteScopeId, setRemoteScopeId] = useState<string | null>(null)
-  const effectiveRemoteId =
-    remoteScopeId ?? (config.remoteConnections ?? []).find((c) => c.enabled)?.id ?? null
-  // v0.11.2: the project scope follows the active session - when it runs on a
-  // remote SSH connection, all vibe.* calls target the remote project dir.
-  const vibeRemoteId = scope === 'remote'
-    ? (effectiveRemoteId ?? undefined)
-    : scope === 'project'
-      ? (projectRemoteId ?? undefined)
-      : undefined
+  // v0.13.0: explicit scope selection - an agent (this computer or a remote
+  // SSH connection) plus a target (global config or any project available
+  // within that agent). Previously the "project" scope silently followed
+  // the ACTIVE session, so the settings of any other project - especially
+  // remote ones - were unreachable and every tab showed up empty.
+  const [scopeAgent, setScopeAgent] = useState<string>('local')
+  const [scopeTarget, setScopeTarget] = useState<string>('global')
+  const scope: 'global' | 'project' | 'remote' =
+    scopeTarget === 'global' ? (scopeAgent === 'local' ? 'global' : 'remote') : 'project'
+  const remoteConn = (config.remoteConnections ?? []).find((c) => c.id === scopeAgent) ?? null
+  const sessionCwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
+  const projectCwd = scope === 'project' && scopeTarget !== 'global' ? scopeTarget : sessionCwd
+  const projectRemoteId: string | null = scope === 'project' && scopeAgent !== 'local' ? scopeAgent : null
+  const vibeRemoteId: string | undefined = scopeAgent === 'local' ? undefined : scopeAgent
+  const scopeProjects = (scopeAgent === 'local'
+    ? (config.recentFolders ?? [])
+    : (remoteConn?.locations ?? [])
+  ).filter((p, i, arr) => p && arr.indexOf(p) === i)
+  const localExtraWd = scopeAgent === 'local' && sessionCwd !== '' && !scopeProjects.includes(sessionCwd) ? sessionCwd : null
+  const scopeProjectOptions = localExtraWd !== null ? [localExtraWd, ...scopeProjects] : scopeProjects
 
   useEffect(() => {
     setLocal({ ...config })
   }, [config])
 
   const loadVibeData = useCallback(async (targetScope: 'global' | 'project' | 'remote' = scope, targetCwd: string = projectCwd): Promise<void> => {
-    const targetRemoteId = targetScope === 'remote'
-      ? (effectiveRemoteId ?? undefined)
-      : targetScope === 'project'
-        ? (currentSessionRemoteId() ?? undefined)
-        : undefined
+    const targetRemoteId = scopeAgent === 'local' ? undefined : scopeAgent
     try {
       const [cfg, agents, prompts, skills] = await Promise.all([
         window.api.vibe.getConfig(targetScope, targetCwd, targetRemoteId),
@@ -331,7 +334,7 @@ export default function SettingsView(): React.JSX.Element {
       console.error('loadVibeData failed:', err)
     }
     setLoaded(true)
-  }, [scope, projectCwd, effectiveRemoteId])
+  }, [scope, projectCwd, scopeAgent])
 
   useEffect(() => {
     loadVibeData()
@@ -586,7 +589,7 @@ export default function SettingsView(): React.JSX.Element {
     if (err) { flashSkillMsg(tr.skillImportFailed.replace('{{error}}', err)); return }
     setNewSkillName('')
     await loadVibeData()
-    const fresh = (await window.api.vibe.getSkills(scope, projectCwd)) as VibeSkill[]
+    const fresh = (await window.api.vibe.getSkills(scope, projectCwd, vibeRemoteId)) as VibeSkill[]
     const idx = fresh.findIndex((s) => s.name.toLowerCase() === name.toLowerCase())
     setSelectedSkillIdx(idx >= 0 ? idx : null)
   }
@@ -1028,39 +1031,36 @@ export default function SettingsView(): React.JSX.Element {
           <h2 className="settings-title">{tr.settings}</h2>
           {CLI_SCOPED_TABS.has(tab) && (
             <div className="scope-switch">
-              <button
-                className={`scope-pill ${scope === 'global' ? 'active' : ''}`}
-                onClick={() => { setScope('global'); setRawToml(null) }}
+              <select
+                className="scope-select"
+                value={scopeAgent}
+                onChange={(e) => { setScopeAgent(e.target.value); setScopeTarget('global'); setRawToml(null) }}
               >
-                {tr.settingsScopeGlobal}
-              </button>
-              {(config.remoteConnections ?? []).filter((c) => c.enabled).map((c) => (
-                <button
-                  key={'scp-' + c.id}
-                  className={`scope-pill ${scope === 'remote' && effectiveRemoteId === c.id ? 'active' : ''}`}
-                  onClick={() => { setScope('remote'); setRemoteScopeId(c.id); setRawToml(null) }}
-                >
-                  📍 {c.name}
-                </button>
-              ))}
-              <button
-                className={`scope-pill ${scope === 'project' ? 'active' : ''}`}
-                disabled={!projectCwd}
-                title={projectCwd ? (projectRemoteId ? '📍 ' + projectCwd + '/.vibe' : projectCwd + '/.vibe') : ''}
-                onClick={() => { setScope('project'); setRawToml(null) }}
+                <option value="local">{tr.settingsScopeLocal}</option>
+                {(config.remoteConnections ?? []).filter((c) => c.enabled).map((c) => (
+                  <option key={'sca-' + c.id} value={c.id}>📍 {c.name}</option>
+                ))}
+              </select>
+              <select
+                className="scope-select"
+                value={scopeTarget}
+                onChange={(e) => { setScopeTarget(e.target.value); setRawToml(null) }}
               >
-                {projectRemoteId ? '📍 ' : ''}{tr.settingsScopeProject}
-              </button>
+                <option value="global">{tr.settingsScopeGlobal}</option>
+                {scopeProjectOptions.map((p) => (
+                  <option key={'sct-' + p} value={p}>{p}</option>
+                ))}
+              </select>
             </div>
           )}
           {CLI_SCOPED_TABS.has(tab) && (
             <span className="scope-path">
               {scope === 'project'
                 ? (projectRemoteId
-                    ? '📍 ' + ((config.remoteConnections ?? []).find((c) => c.id === projectRemoteId)?.name ?? 'remote') + ': ' + projectCwd + '/.vibe'
+                    ? '📍 ' + (remoteConn?.name ?? 'remote') + ': ' + projectCwd + '/.vibe'
                     : projectCwd + '/.vibe')
                 : scope === 'remote'
-                  ? ((config.remoteConnections ?? []).find((c) => c.id === effectiveRemoteId)?.name ?? 'remote') + ': ~/.vibe'
+                  ? (remoteConn?.name ?? 'remote') + ': ~/.vibe'
                   : '~/.vibe'}
             </span>
           )}
@@ -2642,7 +2642,7 @@ export default function SettingsView(): React.JSX.Element {
                     if (sel.rel === 'config.toml') void loadConfigFile(null)
                     else void loadConfigFile(sel.rel, sel.full)
                   }}
-                  refreshKey={scope + '|' + projectCwd}
+                  refreshKey={scope + '|' + projectCwd + '|' + (vibeRemoteId ?? '')}
                 />
               ) : null}
             </div>

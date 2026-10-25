@@ -325,6 +325,7 @@ export const it = {
   copyLabel: 'Copia',
   stopLabel: 'Ferma',
   settingsScopeGlobal: 'Impostazioni globali',
+  settingsScopeLocal: 'Impostazioni locali',
   settingsScopeProject: 'Impostazioni del progetto',
   modelsUsedLabel: 'Modelli',
   messagesLabel: 'Messaggi',

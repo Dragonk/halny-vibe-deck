@@ -323,6 +323,7 @@ export const de = {
   copyLabel: 'Kopieren',
   stopLabel: 'Stopp',
   settingsScopeGlobal: 'Globale Einstellungen',
+  settingsScopeLocal: 'Lokale Einstellungen',
   settingsScopeProject: 'Projekteinstellungen',
   modelsUsedLabel: 'Modelle',
   messagesLabel: 'Nachrichten',

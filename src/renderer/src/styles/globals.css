@@ -5375,6 +5375,11 @@ code {
 .scope-pill { background: none; border: none; color: var(--text-muted); font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
 .scope-pill.active { background: var(--accent); color: #fff; }
 .scope-pill:disabled { opacity: 0.4; cursor: not-allowed; }
+.scope-select { background: var(--surface); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 5px 10px; border-radius: 999px; cursor: pointer; max-width: 280px; }
+.scope-select:focus { outline: none; border-color: var(--accent); }
+@media (width <= 768px) {
+  .scope-select { min-height: 44px; font-size: 16px; max-width: 46vw; }
+}
 .scope-path { font-size: 11px; color: var(--text-dim); font-family: 'JetBrains Mono', Consolas, monospace; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Session detail expansion in stats (v0.4.0) ── */
