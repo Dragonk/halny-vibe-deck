@@ -571,8 +571,56 @@ function ToolFilePathLink({
   );
 }
 
+// v0.12: split text into lines, dropping a single trailing empty line
+// (files normally end with a newline, so the last split element is empty).
+function cutLines(text: string): string[] {
+  const lines = text.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+type DiffRow = { kind: "ctx" | "del" | "add"; oldNo?: number; newNo?: number; text: string };
+
+// v0.12: build git-style diff rows (context/del/add) for one edit pair.
+function buildDiffRows(
+  d: { oldText: string | null; newText: string; startLine?: number | null; newStartLine?: number | null },
+  previousContent?: string | null,
+): DiffRow[] {
+  const oldLines = d.oldText != null ? cutLines(d.oldText) : [];
+  const newLines = cutLines(d.newText);
+  const sl = typeof d.startLine === "number" && d.startLine > 0 ? d.startLine : null;
+  const nsl = typeof d.newStartLine === "number" && d.newStartLine > 0 ? d.newStartLine : sl;
+  const rows: DiffRow[] = [];
+  const prevLines = sl != null && previousContent ? cutLines(previousContent) : null;
+  const oldStart = sl ?? 1;
+  const newStart = nsl ?? oldStart;
+  if (prevLines) {
+    // context before the change (git shows 2 surrounding lines)
+    for (let i = oldStart - 3; i < oldStart - 1; i++) {
+      if (i >= 0 && i < prevLines.length) {
+        rows.push({ kind: "ctx", oldNo: i + 1, newNo: i + 1, text: prevLines[i] });
+      }
+    }
+  }
+  for (let i = 0; i < oldLines.length; i++) {
+    rows.push({ kind: "del", oldNo: oldStart + i, text: oldLines[i] });
+  }
+  for (let i = 0; i < newLines.length; i++) {
+    rows.push({ kind: "add", newNo: newStart + i, text: newLines[i] });
+  }
+  if (prevLines) {
+    // context after the change; new-file numbers shift by the line delta
+    const delta = newLines.length - oldLines.length;
+    const afterFrom = oldStart - 1 + oldLines.length;
+    for (let i = afterFrom; i < afterFrom + 2 && i < prevLines.length; i++) {
+      rows.push({ kind: "ctx", oldNo: i + 1, newNo: i + 1 + delta, text: prevLines[i] });
+    }
+  }
+  return rows;
+}
+
 // Renders structured edit diffs (ACP diff content blocks, e.g. from the
-// new edit tool) with a clickable path and +/- coloring.
+// edit tool) as a git-style hunk: line numbers, context lines, +/- coloring.
 function EditDiffBlock({
   toolCall,
   tr,
@@ -587,21 +635,35 @@ function EditDiffBlock({
   const isError = outStr.includes("<tool_error>");
   return (
     <div className={isError ? "tool-rich-error" : "tool-rich-diff"}>
-      {diffs.map((d, i) => (
-        <div key={i} className="tool-diff-pair">
-          <ToolFilePathLink path={d.path} acpSessionId={acpSessionId} tr={tr} />
-          {d.oldText != null && d.oldText.length > 0 && (
-            <pre className="tool-diff-removed">
-              {d.oldText.split("\n").map((l) => `- ${l}`).join("\n")}
-            </pre>
-          )}
-          {d.newText.length > 0 && (
-            <pre className="tool-diff-added">
-              {d.newText.split("\n").map((l) => `+ ${l}`).join("\n")}
-            </pre>
-          )}
-        </div>
-      ))}
+      {diffs.map((d, i) => {
+        const rows = buildDiffRows(d, toolCall.previousContent).slice(0, 400);
+        const sl = typeof d.startLine === "number" && d.startLine > 0 ? d.startLine : null;
+        const nsl = typeof d.newStartLine === "number" && d.newStartLine > 0 ? d.newStartLine : sl;
+        const oldCount = rows.filter((r) => r.kind !== "add").length;
+        const newCount = rows.filter((r) => r.kind !== "del").length;
+        return (
+          <div key={i} className="tool-diff-pair">
+            <ToolFilePathLink path={d.path} acpSessionId={acpSessionId} tr={tr} />
+            {sl != null && (
+              <div className="tool-diff-hunk">
+                {"@@ -" + sl + "," + oldCount + " +" + (nsl ?? sl) + "," + newCount + " @@"}
+              </div>
+            )}
+            <div className="tool-diff-table">
+              {rows.map((r, j) => (
+                <div key={j} className={"tool-diff-row tool-diff-" + r.kind}>
+                  <span className="tool-diff-lno">{r.oldNo != null ? r.oldNo : ""}</span>
+                  <span className="tool-diff-lno">{r.newNo != null ? r.newNo : ""}</span>
+                  <span className="tool-diff-sign">
+                    {r.kind === "del" ? "-" : r.kind === "add" ? "+" : " "}
+                  </span>
+                  <span className="tool-diff-text">{r.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
       {isError ? (
         <pre className="tool-error-output">
           {outStr.replace(/<\/?tool_error>/g, "").trim()}
@@ -609,6 +671,89 @@ function EditDiffBlock({
       ) : (
         <span className="tool-success-badge">✓ {tr.toolAppliedOk}</span>
       )}
+    </div>
+  );
+}
+
+// v0.12: resolve the raw structured output of a process tool. Live wire
+// rawOutput is flat; session previews from disk nest the payload under
+// "structured_content". Older sessions keep a JSON dump in the output text.
+function processRawFrom(toolCall: ToolCall): Record<string, unknown> {
+  const raw = toolCall.rawOutput;
+  if (raw && typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    const sc = r["structured_content"] ?? r["structuredContent"];
+    if (sc && typeof sc === "object") return sc as Record<string, unknown>;
+    return r;
+  }
+  if (toolCall.output) {
+    try {
+      const parsed = JSON.parse(toolCall.output);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* not JSON */
+    }
+  }
+  return {};
+}
+
+// v0.12: process.start/list/stop card - command, process table, output text.
+function ProcessBlock({ toolCall }: { toolCall: ToolCall }): React.JSX.Element {
+  const inp = toolCall.input ?? {};
+  const ro = processRawFrom(toolCall);
+  const cmd = asStr(inp.command ?? inp.cmd) || String(ro["processId"] ?? ro["process_id"] ?? "");
+  const processes = Array.isArray(ro["processes"])
+    ? (ro["processes"] as Array<Record<string, unknown>>)
+    : null;
+  const outText =
+    asStr(ro["output"]) ||
+    (toolCall.output ? (parseToolOutput(toolCall.output) ?? toolCall.output) : "");
+  const statusStr = ro["status"] != null ? String(ro["status"]) : "";
+  const exitTop = ro["exitCode"];
+  return (
+    <div className="proc-card">
+      {cmd.length > 0 && <div className="proc-cmd">{cmd}</div>}
+      {processes ? (
+        <div className="proc-table">
+          {processes.map((p, i) => {
+            const status = String(p["status"] ?? "");
+            const exitCode = p["exitCode"] ?? p["exit_code"];
+            return (
+              <div key={i} className="proc-tr">
+                <span className="proc-tr-cmd">
+                  {String(p["command"] ?? p["cmd"] ?? p["processId"] ?? "")}
+                </span>
+                <span className={"proc-status" + (status === "running" ? " running" : "")}>
+                  {status + (typeof exitCode === "number" ? " · exit " + exitCode : "")}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="proc-card-meta">
+          {statusStr.length > 0 && (
+            <span className={"proc-status" + (statusStr === "running" ? " running" : "")}>
+              {statusStr + (typeof exitTop === "number" ? " · exit " + exitTop : "")}
+            </span>
+          )}
+          {outText.length > 0 && <pre className="proc-out">{outText}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// v0.12: muted one-liner for discovery-style tools (search_tool_functions).
+function ToolLineBlock({ toolCall }: { toolCall: ToolCall }): React.JSX.Element {
+  const out = toolCall.output ? (parseToolOutput(toolCall.output) ?? toolCall.output) : undefined;
+  const text = out && out.length > 0 ? out : toolCall.title;
+  return (
+    <div className="tool-discovery-line">
+      <span className="tool-discovery-dot">·</span>
+      <span>{text}</span>
     </div>
   );
 }
@@ -626,6 +771,25 @@ function ToolCallRichContent({
   const inp = toolCall.input ?? {};
   if (toolCall.diffs && toolCall.diffs.length > 0) {
     return <EditDiffBlock toolCall={toolCall} tr={tr} acpSessionId={acpSessionId} />;
+  }
+  // v0.12: route by the canonical tool name from the ACP _meta when present -
+  // more precise than the title/input heuristics below.
+  const tn = (toolCall.toolName ?? "").toLowerCase();
+  if (tn === "bash" || tn === "file_system.bash") {
+    return <BashBlock toolCall={toolCall} acpSessionId={acpSessionId} />;
+  }
+  if (
+    tn === "read_file" ||
+    tn === "file_system.read_file" ||
+    tn.endsWith(".read_file")
+  ) {
+    return <ReadFileBlock toolCall={toolCall} tr={tr} />;
+  }
+  if (tn.startsWith("process.")) {
+    return <ProcessBlock toolCall={toolCall} />;
+  }
+  if (tn === "search_tool_functions" || tn === "vibe.todo") {
+    return <ToolLineBlock toolCall={toolCall} />;
   }
   const out = toolCall.output
     ? (parseToolOutput(toolCall.output) ?? toolCall.output)

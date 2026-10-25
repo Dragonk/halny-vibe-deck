@@ -45,7 +45,10 @@ export interface AcpHistoryToolCall {
   status: "running" | "done" | "error";
   input?: Record<string, unknown>;
   output?: string;
-  diffs?: Array<{ path: string; oldText: string | null; newText: string }>;
+  diffs?: Array<{ path: string; oldText: string | null; newText: string; startLine?: number | null; newStartLine?: number | null }>;
+  previousContent?: string | null;
+  toolName?: string | null;
+  rawOutput?: Record<string, unknown> | null;
 }
 
 export interface AcpHistoryMessage {
@@ -1319,6 +1322,9 @@ export const useStore = create<AppStore>((set, get) => ({
               input: tc.input,
               output: tc.output,
               diffs: tc.diffs,
+              previousContent: tc.previousContent,
+              toolName: tc.toolName,
+              rawOutput: tc.rawOutput,
             }))
           : undefined;
       messages.push({

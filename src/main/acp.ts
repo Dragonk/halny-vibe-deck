@@ -33,7 +33,10 @@ export interface AcpHistoryToolCall {
   status: 'running' | 'done' | 'error'
   input?: Record<string, unknown>
   output?: string
-  diffs?: Array<{ path: string; oldText: string | null; newText: string }>
+  diffs?: Array<{ path: string; oldText: string | null; newText: string; startLine?: number | null; newStartLine?: number | null }>
+  previousContent?: string | null
+  toolName?: string | null
+  rawOutput?: Record<string, unknown> | null
 }
 
 /** v0.11.1: one entry of the agent plan / todo checklist (session_update "plan"). */
@@ -307,10 +310,10 @@ export class AcpManager {
   /** Extract ACP diff content blocks ({type:'diff', path, oldText, newText}) from a tool update. */
   private diffBlocks(
     update: Record<string, unknown>
-  ): Array<{ path: string; oldText: string | null; newText: string }> | undefined {
+  ): Array<{ path: string; oldText: string | null; newText: string; startLine?: number | null; newStartLine?: number | null }> | undefined {
     const content = update.content as unknown
     if (!Array.isArray(content)) return undefined
-    const diffs: Array<{ path: string; oldText: string | null; newText: string }> = []
+    const diffs: Array<{ path: string; oldText: string | null; newText: string; startLine?: number | null; newStartLine?: number | null }> = []
     for (const block of content as Array<Record<string, unknown>>) {
       if (!block || typeof block !== 'object') continue
       if (block.type !== 'diff') continue
@@ -321,7 +324,47 @@ export class AcpManager {
       if (newText === undefined) continue
       diffs.push({ path: p, oldText: oldText ?? null, newText })
     }
-    return diffs.length > 0 ? diffs : undefined
+    if (diffs.length === 0) return undefined
+    // v0.12: the rawOutput of edit/search_replace carries line numbers for
+    // each occurrence - merge them onto the diff blocks by position.
+    const raw = update.rawOutput ?? update.raw_output
+    if (raw && typeof raw === 'object') {
+      const occ = (raw as Record<string, unknown>).occurrences
+      if (Array.isArray(occ)) {
+        ;(occ as Array<Record<string, unknown>>).forEach((o, i) => {
+          const d = diffs[i]
+          if (!d) return
+          const sl = o.startLine ?? o.start_line
+          const nsl = o.newStartLine ?? o.new_start_line
+          if (typeof sl === 'number') d.startLine = sl
+          if (typeof nsl === 'number') d.newStartLine = nsl
+        })
+      }
+    }
+    return diffs
+  }
+
+  /** v0.12: edit tools carry the pre-edit file content in rawOutput. */
+  private editPreviousContent(update: Record<string, unknown>): string | null | undefined {
+    const raw = update.rawOutput ?? update.raw_output
+    if (!raw || typeof raw !== 'object') return undefined
+    const pc = (raw as Record<string, unknown>).previousContent ?? (raw as Record<string, unknown>).previous_content
+    return typeof pc === 'string' ? pc : undefined
+  }
+
+  /** v0.12: canonical tool name from the update _meta (e.g. "file_system.edit"). */
+  private metaToolName(update: Record<string, unknown>): string | null | undefined {
+    const meta = update._meta as Record<string, unknown> | undefined
+    const tn = meta?.tool_name ?? meta?.toolName
+    return typeof tn === 'string' ? tn : undefined
+  }
+
+  /** v0.12: raw structured output of process tools (process card in the GUI). */
+  private processRawOutput(update: Record<string, unknown>): Record<string, unknown> | undefined {
+    const tn = this.metaToolName(update)
+    if (!tn || !tn.toLowerCase().startsWith('process.')) return undefined
+    const raw = update.rawOutput ?? update.raw_output
+    return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined
   }
   private normalizeToolStatus(s: unknown): 'running' | 'done' | 'error' {
     if (s === 'completed' || s === 'done' || s === 'success') return 'done'
@@ -409,7 +452,10 @@ export class AcpManager {
               kind: (update.kind ?? 'execute') as string,
               status: this.normalizeToolStatus(update.status ?? 'in_progress'),
               input: this.parseRawInput(update.rawInput ?? update.raw_input),
-              diffs: this.diffBlocks(update)
+              diffs: this.diffBlocks(update),
+              previousContent: this.editPreviousContent(update),
+              toolName: this.metaToolName(update),
+              rawOutput: this.processRawOutput(update)
             }
           })
         }
@@ -427,7 +473,10 @@ export class AcpManager {
               toolCallId,
               status: tcuStatus,
               output: this.toolOutputText(update),
-              diffs: this.diffBlocks(update)
+              diffs: this.diffBlocks(update),
+              previousContent: this.editPreviousContent(update),
+              toolName: this.metaToolName(update),
+              rawOutput: this.processRawOutput(update)
             }
           })
           // v0.9.0: release the name entry once the call reaches a terminal
@@ -611,7 +660,10 @@ export class AcpManager {
             kind: (update.kind as string) ?? 'execute',
             status: this.normalizeToolStatus(update.status ?? 'in_progress'),
             input: this.parseRawInput(update.rawInput ?? update.raw_input),
-            diffs: this.diffBlocks(update)
+            diffs: this.diffBlocks(update),
+            previousContent: this.editPreviousContent(update) ?? null,
+            toolName: this.metaToolName(update) ?? null,
+            rawOutput: this.processRawOutput(update) ?? null
           }
           toolCallsById.set(toolCallId, tc)
           ensureAi().toolCalls!.push(tc)
@@ -625,6 +677,12 @@ export class AcpManager {
             if (out !== undefined) tc.output = out
             const rdiffs = this.diffBlocks(update)
             if (rdiffs) tc.diffs = rdiffs
+            const rpc = this.editPreviousContent(update)
+            if (rpc !== undefined) tc.previousContent = rpc
+            const rtn = this.metaToolName(update)
+            if (rtn !== undefined) tc.toolName = rtn
+            const rraw = this.processRawOutput(update)
+            if (rraw !== undefined) tc.rawOutput = rraw
             tc.status = this.normalizeToolStatus(update.status)
           }
         }

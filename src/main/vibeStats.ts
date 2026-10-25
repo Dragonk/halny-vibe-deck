@@ -619,6 +619,14 @@ export function loadSessionLastConfig(sessionId: string): {
 // WITHOUT starting vibe-acp (real resume happens on the first message).
 // ---------------------------------------------------------------------------
 
+export interface PreviewToolCallDiff {
+  path: string
+  oldText: string | null
+  newText: string
+  startLine?: number | null
+  newStartLine?: number | null
+}
+
 export interface SessionPreview {
   messages: Array<{
     role: 'user' | 'ai'
@@ -631,6 +639,10 @@ export interface SessionPreview {
       status: 'done' | 'error'
       input?: Record<string, unknown>
       output?: string
+      diffs?: PreviewToolCallDiff[]
+      previousContent?: string | null
+      toolName?: string | null
+      rawOutput?: Record<string, unknown> | null
     }>
   }>
   title: string | null
@@ -747,6 +759,47 @@ export function buildSessionPreview(
       const decision = state['decision']
       const success =
         display['success'] !== false && (decision === undefined || decision === null || decision === 'execute')
+      // v0.12: git-style edit diffs with line numbers (edit / search_replace).
+      const sc = (out['structured_content'] as Record<string, unknown> | undefined) ?? {}
+      const tin = (det['input'] as Record<string, unknown> | undefined) ?? {}
+      const inPath = String(tin['filePath'] ?? tin['file_path'] ?? tin['path'] ?? '')
+      let pdiffs: PreviewToolCallDiff[] | undefined
+      let prevContent: string | null = null
+      const metaAll = (out['_meta'] as Record<string, unknown> | undefined) ?? {}
+      const srMeta = (metaAll['mistralai.vibe.sdk.search_replace'] as Record<string, unknown> | undefined) ?? undefined
+      if (srMeta && Array.isArray(srMeta['blocks'])) {
+        const blocks = srMeta['blocks'] as Array<Record<string, unknown>>
+        if (typeof srMeta['previous_content'] === 'string') prevContent = srMeta['previous_content']
+        pdiffs = blocks.map((b) => ({
+          path: String(sc['file'] ?? inPath),
+          oldText: Array.isArray(b['old_lines']) ? (b['old_lines'] as unknown[]).map(String).join(String.fromCharCode(10)) : null,
+          newText: Array.isArray(b['new_lines']) ? (b['new_lines'] as unknown[]).map(String).join(String.fromCharCode(10)) : '',
+          startLine: typeof b['old_start_line'] === 'number' ? b['old_start_line'] : null,
+          newStartLine: typeof b['new_start_line'] === 'number' ? b['new_start_line'] : null,
+        }))
+      } else if (Array.isArray(sc['occurrences'])) {
+        const occ = sc['occurrences'] as Array<Record<string, unknown>>
+        const pcv = out['previousContent'] ?? sc['previousContent']
+        if (typeof pcv === 'string') prevContent = pcv
+        pdiffs = occ.map((o) => ({
+          path: String(o['file'] ?? sc['file'] ?? inPath),
+          oldText: typeof o['oldText'] === 'string' ? o['oldText'] : null,
+          newText: typeof o['newText'] === 'string' ? o['newText'] : '',
+          startLine: typeof o['startLine'] === 'number' ? o['startLine'] : null,
+          newStartLine: typeof o['newStartLine'] === 'number' ? o['newStartLine'] : null,
+        }))
+      } else {
+        const pairs = (
+          Array.isArray(tin['changes']) ? tin['changes'] : Array.isArray(tin['content']) ? tin['content'] : null
+        ) as Array<Record<string, unknown>> | null
+        if (pairs && inPath) {
+          pdiffs = pairs.map((c) => ({
+            path: inPath,
+            oldText: c['oldString'] != null || c['old_str'] != null || c['old_string'] != null ? String(c['oldString'] ?? c['old_str'] ?? c['old_string']) : null,
+            newText: c['newString'] != null || c['new_str'] != null || c['new_string'] != null ? String(c['newString'] ?? c['new_str'] ?? c['new_string']) : '',
+          }))
+        }
+      }
       curAi.toolCalls = [
         ...(curAi.toolCalls ?? []),
         {
@@ -756,6 +809,10 @@ export function buildSessionPreview(
           status: success ? 'done' : 'error',
           input: det['input'] as Record<string, unknown> | undefined,
           output: output.length > 0 ? output : undefined,
+          diffs: pdiffs && pdiffs.length > 0 ? pdiffs : undefined,
+          previousContent: prevContent,
+          toolName: det['toolName'] != null ? String(det['toolName']) : null,
+          rawOutput: String(det['toolName'] ?? '').startsWith('process.') ? out : undefined,
         },
       ]
     }

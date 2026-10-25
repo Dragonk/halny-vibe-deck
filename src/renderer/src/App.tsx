@@ -459,6 +459,9 @@ export default function App(): React.JSX.Element {
             status: (d.status as 'running' | 'done' | 'error') ?? 'running',
             input: d.input as Record<string, unknown> | undefined,
             diffs: d.diffs as ToolCallDiff[] | undefined,
+            previousContent: (d.previousContent as string | null | undefined) ?? null,
+            toolName: (d.toolName as string | null | undefined) ?? null,
+            rawOutput: (d.rawOutput as Record<string, unknown> | null | undefined) ?? null,
           })
           break
         }
@@ -473,6 +476,9 @@ export default function App(): React.JSX.Element {
               status: (d.status as 'running' | 'done' | 'error') ?? 'running',
               output: d.output as string | undefined,
               diffs: d.diffs as ToolCallDiff[] | undefined,
+              previousContent: (d.previousContent as string | null | undefined) ?? null,
+              toolName: (d.toolName as string | null | undefined) ?? null,
+              rawOutput: (d.rawOutput as Record<string, unknown> | null | undefined) ?? null,
             })
           }
           break

@@ -13,6 +13,9 @@ export interface ToolCallDiff {
   path: string
   oldText: string | null
   newText: string
+  /** v0.12: 1-based line of the first removed/added line, when the tool reports it. */
+  startLine?: number | null
+  newStartLine?: number | null
 }
 
 export interface ToolCall {
@@ -25,6 +28,12 @@ export interface ToolCall {
   output?: string
   fileChanges?: FileChange[]
   diffs?: ToolCallDiff[]
+  /** v0.12: pre-edit file content (edit/search_replace) for git-style context. */
+  previousContent?: string | null
+  /** v0.12: canonical tool name from the ACP _meta (e.g. "file_system.edit"). */
+  toolName?: string | null
+  /** v0.12: raw structured output of process.* tools (process card). */
+  rawOutput?: Record<string, unknown> | null
 }
 
 export interface ThinkingBlock {
@@ -300,6 +309,10 @@ export interface SessionPreviewData {
       status: 'done' | 'error'
       input?: Record<string, unknown>
       output?: string
+      diffs?: ToolCallDiff[]
+      previousContent?: string | null
+      toolName?: string | null
+      rawOutput?: Record<string, unknown> | null
     }>
   }>
   title: string | null

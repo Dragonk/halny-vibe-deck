@@ -1561,6 +1561,148 @@ code {
     border-radius: 6px;
 }
 
+/* v0.12: git-style edit diff table */
+.tool-diff-hunk {
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    color: var(--text-muted);
+    padding: 3px 10px;
+    user-select: none;
+}
+
+.tool-diff-table {
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    background: var(--bg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow-x: auto;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.tool-diff-row {
+    display: grid;
+    grid-template-columns: 3.2em 3.2em 1.1em minmax(0, 1fr);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.tool-diff-del {
+    background: rgba(248, 113, 113, 0.08);
+}
+
+.tool-diff-add {
+    background: rgba(74, 222, 128, 0.08);
+}
+
+.tool-diff-lno {
+    color: var(--text-muted);
+    opacity: 0.65;
+    text-align: right;
+    padding-right: 8px;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.tool-diff-sign {
+    text-align: center;
+    user-select: none;
+}
+
+.tool-diff-del .tool-diff-sign {
+    color: #f87171;
+}
+
+.tool-diff-add .tool-diff-sign {
+    color: #4ade80;
+}
+
+.tool-diff-text {
+    min-width: 0;
+}
+
+/* v0.12: muted one-liner for discovery tools */
+.tool-discovery-line {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 1px 0;
+}
+
+.tool-discovery-dot {
+    color: var(--text-muted);
+}
+
+/* v0.12: process tool card */
+.proc-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+}
+
+.proc-cmd {
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    color: var(--text);
+    word-break: break-all;
+}
+
+.proc-out {
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.proc-card-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.proc-table {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.proc-tr {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+.proc-tr-cmd {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+
+.proc-status {
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.proc-status.running {
+    color: #4ade80;
+}
+
 .tool-grep-header {
     display: flex;
     align-items: center;
