@@ -10,6 +10,14 @@
 
 **Why "Halny"?** The *halny* is the famous foehn wind that blows over the Polish Tatra mountains. Mistral is a wind too — a cold one from the Rhône valley. An unofficial client built by a Polish developer, for an agent named after a French wind, deserved a Polish wind of its own.
 
+## Screenshots
+
+![Chat with the agent](docs/screenshots/chat.png)
+
+| File preview & editing | New project | Mobile (PWA) |
+| --- | --- | --- |
+| ![File preview with the built-in editor](docs/screenshots/file-preview.png) | ![New project picker](docs/screenshots/new-project.png) | ![Mobile UI](docs/screenshots/mobile.png) |
+
 ## Features
 
 ### Chat & agent workflow
