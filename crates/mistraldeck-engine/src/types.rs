@@ -41,6 +41,10 @@ pub struct SlotState {
     pub status: AcpStatus,
     pub error: String,
     pub busy: bool,
+    /// Last user-visible activity (prompt sent / turn finished) - the
+    /// idle reaper closes slots idle longer than the configured window
+    /// (Nexus v0.9.0 autoCloseIdleMinutes).
+    pub last_activity: std::time::Instant,
     /// Prompt to send as soon as `session/new` completes.
     pub pending_prompt: Option<String>,
     /// Config option to apply as soon as `session/new` completes.
@@ -150,6 +154,7 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
         status: AcpStatus::Disconnected,
         error: String::new(),
         busy: false,
+        last_activity: std::time::Instant::now(),
         pending_prompt: None,
         pending_option: None,
         approval: None,

@@ -66,6 +66,7 @@ impl Engine {
         };
         let e: &'static Engine = ENGINE.get_or_init(|| engine);
         e.start_lister_pump();
+        e.start_idle_reaper();
         e
     }
 
@@ -75,6 +76,17 @@ impl Engine {
 
     pub fn try_global() -> Option<&'static Engine> {
         ENGINE.get()
+    }
+
+    /// Background idle reaper: runs every 60 s (Nexus v0.9.0 interval).
+    fn start_idle_reaper(&'static self) {
+        std::thread::Builder::new()
+            .name("mistraldeck-idle-reaper".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                self.reap_idle_sessions();
+            })
+            .ok();
     }
 
     /// The lister pump: only global status + backend session listings.
@@ -673,6 +685,7 @@ impl Engine {
                 if let Some(slot_id) = st.slot_of_session(&key) {
                     if let Some(slot) = st.slots.get_mut(&slot_id) {
                         slot.busy = true;
+                        slot.last_activity = std::time::Instant::now();
                         let _ = slot.cmd.send(AcpCommand::Prompt {
                             session_id: acp_session_id,
                             text,
@@ -711,6 +724,7 @@ impl Engine {
                     if let Some(slot_id) = st.slot_of_session(&key) {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {
                             slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
                             slot.pending_prompt = Some(text);
                             slot.load_progress = Some(mistraldeck_core::snapshot::SessionLoadProgress {
                                 session_id: acp_session_id.clone(),
@@ -745,6 +759,7 @@ impl Engine {
                 Some(slot_id) => {
                     if let Some(slot) = st.slots.get_mut(&slot_id) {
                         slot.busy = true;
+                        slot.last_activity = std::time::Instant::now();
                         slot.pending_prompt = Some(text);
                     }
                 }
@@ -760,6 +775,7 @@ impl Engine {
                     if let Some(slot_id) = st.slot_of_session(&key) {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {
                             slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
                             slot.pending_prompt = Some(text);
                         }
                     }
@@ -940,6 +956,24 @@ impl Engine {
         self.publish(BusEvent::StructureChanged);
     }
 
+    /// Auto-close idle live sessions (Nexus v0.9.0): stop every slot whose
+    /// session sat idle longer than the configured window. Sessions
+    /// survive as lazy previews and revive on the next prompt.
+    pub fn reap_idle_sessions(&'static self) {
+        let minutes = self.config().auto_close_idle_minutes.unwrap_or(60);
+        if minutes == 0 {
+            return;
+        }
+        let cutoff = std::time::Duration::from_secs(u64::from(minutes) * 60);
+        let stopped = {
+            let mut st = self.state.lock().unwrap();
+            reap_idle_slots(&mut st, cutoff)
+        };
+        if !stopped.is_empty() {
+            self.publish(BusEvent::StructureChanged);
+        }
+    }
+
     /// Record a folder in the recent list (Nexus recentFolders, cap 10).
     pub fn note_recent_folder(&self, cwd: &str) {
         let cwd = cwd.trim();
@@ -1105,6 +1139,7 @@ impl Engine {
                         }
                         SlotPurpose::LoadBackend { session_id, cwd } => {
                             slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
                             let _ = slot.cmd.send(AcpCommand::LoadSession {
                                 session_id,
                                 cwd,
@@ -1119,6 +1154,7 @@ impl Engine {
                         }
                         SlotPurpose::LoadRemote { session_id, cwd, .. } => {
                             slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
                             let _ = slot.cmd.send(AcpCommand::LoadSession {
                                 session_id,
                                 cwd,
@@ -1130,6 +1166,7 @@ impl Engine {
                 AcpEvent::Disconnected { .. } => {
                     slot.status = AcpStatus::Disconnected;
                     slot.busy = false;
+                    slot.last_activity = std::time::Instant::now();
                     slot.pending_prompt = None;
                     slot.load_progress = None;
                     // The turn will never end on its own — clear the
@@ -1242,12 +1279,14 @@ impl Engine {
                     match slot.pending_prompt.take() {
                         Some(text) => {
                             slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
                             let _ = slot
                                 .cmd
                                 .send(AcpCommand::Prompt { session_id, text });
                         }
                         None => {
                             slot.busy = false;
+                            slot.last_activity = std::time::Instant::now();
                         }
                     }
                 }
@@ -1272,6 +1311,7 @@ impl Engine {
                             }
                         }
                         slot.busy = false;
+                        slot.last_activity = std::time::Instant::now();
                         if let Some(k) = slot_key.as_deref() {
                             st.stopping.remove(k);
                         }
@@ -1290,6 +1330,7 @@ impl Engine {
                     slot.status = AcpStatus::Error;
                     slot.error = format!("{context}: {message}");
                     slot.busy = false;
+                    slot.last_activity = std::time::Instant::now();
                     slot.load_progress = None;
                     // The turn died — clear the stopping marker.
                     if let Some(k) = slot_key.as_deref() {
@@ -1474,6 +1515,7 @@ impl Engine {
                 }
                 AcpEvent::PromptCompleted { session_id, .. } => {
                     slot.busy = false;
+                    slot.last_activity = std::time::Instant::now();
                     // The turn really ended — clear the stopping marker
                     // (Nexus markSessionIdle).
                     if let Some(k) = slot_key.as_deref() {
@@ -1515,6 +1557,7 @@ impl Engine {
             if let Some(slot_id) = st.slot_of_session(&key) {
                 if let Some(slot) = st.slots.get_mut(&slot_id) {
                     slot.busy = true;
+                    slot.last_activity = std::time::Instant::now();
                     slot.pending_prompt = Some(prompt);
                 }
             }
@@ -1759,5 +1802,117 @@ fn restore_session_chips(st: &mut EngineState) {
         } else {
             Some(thinking_current)
         };
+    }
+}
+
+/// Auto-close idle live sessions (Nexus v0.9.0 `autoCloseIdleMinutes`):
+/// stop every slot that finished its turn longer than `cutoff` ago and is
+/// neither busy nor waiting for an approval/question. Sessions survive
+/// as lazy previews (the next prompt wakes the agent again); returns the
+/// ids of the stopped slots so the caller can publish one event.
+pub fn reap_idle_slots(
+    st: &mut crate::types::EngineState,
+    cutoff: std::time::Duration,
+) -> Vec<u64> {
+    let ids: Vec<u64> = st
+        .slots
+        .iter()
+        .filter(|(_, s)| {
+            !s.busy
+                && s.approval.is_none()
+                && s.question.is_none()
+                && s.last_activity.elapsed() > cutoff
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in &ids {
+        if let Some(slot) = st.slots.remove(id) {
+            let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+        }
+        st.slot_of.retain(|_, sid| sid != id);
+    }
+    ids
+}
+
+#[cfg(test)]
+mod idle_reaper_tests {
+    use super::*;
+    use crate::types::{SlotPurpose, SlotState, EngineState};
+    use mistraldeck_core::proto::AcpCommand;
+    use mistraldeck_core::snapshot::AcpStatus;
+    use std::sync::mpsc;
+
+    fn slot(busy: bool, age: std::time::Duration) -> (SlotState, mpsc::Receiver<AcpCommand>) {
+        let (tx, rx) = mpsc::channel();
+        let s = SlotState {
+            cmd: tx,
+            purpose: SlotPurpose::NewLocal { cwd: "/tmp".into() },
+            status: AcpStatus::Disconnected,
+            error: String::new(),
+            busy,
+            last_activity: std::time::Instant::now()
+                .checked_sub(age)
+                .unwrap_or_else(std::time::Instant::now),
+            pending_prompt: None,
+            pending_option: None,
+            approval: None,
+            question: None,
+            usage: Default::default(),
+            load_progress: None,
+            commands: Vec::new(),
+            config_options: Vec::new(),
+            modes: Vec::new(),
+        };
+        (s, rx)
+    }
+
+    #[test]
+    fn reap_stops_idle_slots_and_keeps_busy_and_fresh() {
+        let mut st = EngineState::default();
+        let (idle, idle_rx) = slot(false, std::time::Duration::from_secs(600));
+        let (busy, _busy_rx) = slot(true, std::time::Duration::from_secs(600));
+        let (fresh, _fresh_rx) = slot(false, std::time::Duration::from_secs(5));
+        st.slots.insert(1, idle);
+        st.slots.insert(2, busy);
+        st.slots.insert(3, fresh);
+        st.slot_of.insert("s-idle".into(), 1);
+        st.slot_of.insert("s-busy".into(), 2);
+        st.slot_of.insert("s-fresh".into(), 3);
+
+        let stopped = reap_idle_slots(&mut st, std::time::Duration::from_secs(60));
+
+        assert_eq!(stopped, vec![1]);
+        assert!(!st.slots.contains_key(&1));
+        assert!(st.slots.contains_key(&2));
+        assert!(st.slots.contains_key(&3));
+        // slot_of no longer references the stopped slot
+        assert!(!st.slot_of.values().any(|sid| *sid == 1));
+        // the stopped worker received the Stop command
+        assert!(matches!(idle_rx.try_recv(), Ok(AcpCommand::Stop)));
+    }
+
+    #[test]
+    fn reap_skips_waiting_approval_and_question() {
+        let mut st = EngineState::default();
+        let (mut waiting, _rx) = slot(false, std::time::Duration::from_secs(600));
+        waiting.approval = Some(mistraldeck_core::snapshot::PendingApproval {
+            request_id: "r1".into(),
+            method: "tool Approval".into(),
+            params_json: "{}".into(),
+            tool_name: None,
+        });
+        st.slots.insert(1, waiting);
+        let (mut asked, _rx2) = slot(false, std::time::Duration::from_secs(600));
+        asked.question = Some(mistraldeck_core::snapshot::PendingQuestion {
+            request_id: "r2".into(),
+            question: "Proceed?".into(),
+            choices: Vec::new(),
+        });
+        st.slots.insert(2, asked);
+
+        let stopped = reap_idle_slots(&mut st, std::time::Duration::from_secs(60));
+        assert!(stopped.is_empty());
+        assert!(st.slots.contains_key(&1));
+        assert!(st.slots.contains_key(&2));
     }
 }
