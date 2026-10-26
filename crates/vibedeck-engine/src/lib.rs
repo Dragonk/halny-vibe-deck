@@ -533,24 +533,76 @@ impl Engine {
             cwd.to_string()
         };
         let name = if title.is_empty() { "Remote session" } else { title };
-        let key = {
+        // v0.9.0 lazy remote resume (Nexus `loadRemoteSession` ->
+        // `previewSession`): the remote unified store is read over SSH and
+        // NO vibe-acp is started on the remote host; the agent wakes on the
+        // first prompt (send_message_with -> LoadRemote).
+        let preview = self
+            .remote_connection(conn_id)
+            .and_then(|conn| crate::remote::load_remote_session_preview(&conn, session_id));
+        {
             let mut st = self.state.lock().unwrap();
             let mut session = ChatSession::new(name, &cwd);
             session.working_directory = cwd.clone();
             session.remote_id = Some(conn_id.to_string());
-            let key = session.id.clone();
+            // Lazy: the ACP id is known upfront, the remote agent process is
+            // not spawned until a prompt (or config change) needs it.
+            session.acp_session_id = Some(session_id.to_string());
+            if let Some(preview) = preview {
+                session.messages = preview_to_messages(&preview.messages);
+                session.plan = preview
+                    .plan
+                    .into_iter()
+                    .map(|e| vibedeck_core::types::PlanEntry {
+                        content: e.content,
+                        status: vibedeck_core::types::PlanEntry::normalize_status(&e.status),
+                        priority: e.priority,
+                    })
+                    .collect();
+                if let Some(t) = preview.title.filter(|t| !t.is_empty()) {
+                    session.name = t;
+                }
+                if let Some(cfg) = preview.config {
+                    session.last_model = cfg.model;
+                    session.last_mode = cfg.mode;
+                    session.last_thinking = cfg.thinking;
+                }
+                session.usage = vibedeck_core::snapshot::UsageStats {
+                    prompt_tokens: preview.usage.prompt_tokens,
+                    completion_tokens: preview.usage.completion_tokens,
+                    cached_tokens: preview.usage.cached_tokens,
+                    total_tokens: preview.usage.total_tokens,
+                    context_used: preview.usage.context_used,
+                    // The preview has no context window size (Nexus sets 0);
+                    // a live usage_update fills it in once the agent runs.
+                    context_size: 0.0,
+                    // v0.13.5 pre-resume cost: computed from the local
+                    // price table (Nexus `loadSessionPreview`) so the
+                    // UsageBar shows $ before the session resumes.
+                    cost: {
+                        let prices = vibedeck_vibe::config::model_prices();
+                        if prices.is_empty() {
+                            0.0
+                        } else {
+                            let model = session.last_model.as_deref();
+                            vibedeck_vibe::stats::session_cost_from_prices(
+                                &prices,
+                                model,
+                                preview.usage.prompt_tokens,
+                                preview.usage.cached_tokens,
+                                preview.usage.completion_tokens,
+                            )
+                        }
+                    },
+                    ..Default::default()
+                };
+            }
             st.sessions.insert(0, session);
             st.current = Some(0);
-            key
-        };
-        self.ensure_slot(
-            &key,
-            SlotPurpose::LoadRemote {
-                conn_id: conn_id.to_string(),
-                session_id: session_id.to_string(),
-                cwd,
-            },
-        );
+            // Per-session chips for a session that never went live this
+            // run (Nexus restoreSessionChips after previewSession).
+            restore_session_chips(&mut st);
+        }
         self.publish(BusEvent::StructureChanged);
     }
 
@@ -626,18 +678,29 @@ impl Engine {
                     // the history, then the prompt goes. The recorded
                     // last config is re-applied inside the wake (Nexus
                     // `applyConfig`), before the prompt.
-                    let cwd = st
-                        .current_session()
+                    let cur = st.current_session().cloned();
+                    let cwd = cur
+                        .as_ref()
                         .map(|s| s.working_directory.clone())
                         .unwrap_or_else(|| self.workdir());
-                    drop(st);
-                    self.ensure_slot(
-                        &key,
-                        SlotPurpose::LoadBackend {
+                    // A lazy remote mirror wakes its agent over SSH
+                    // (LoadRemote); a local CLI session over the local
+                    // binary (LoadBackend) - the same session/load wake
+                    // either way, with the recorded config re-applied
+                    // inside it.
+                    let purpose = match cur.as_ref().and_then(|s| s.remote_id.clone()) {
+                        Some(conn_id) => SlotPurpose::LoadRemote {
+                            conn_id,
                             session_id: acp_session_id.clone(),
                             cwd,
                         },
-                    );
+                        None => SlotPurpose::LoadBackend {
+                            session_id: acp_session_id.clone(),
+                            cwd,
+                        },
+                    };
+                    drop(st);
+                    self.ensure_slot(&key, purpose);
                     let mut st = self.state.lock().unwrap();
                     if let Some(slot_id) = st.slot_of_session(&key) {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {

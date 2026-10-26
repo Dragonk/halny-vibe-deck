@@ -394,7 +394,13 @@ pub async fn api_open_remote_session(
     cwd: String,
 ) -> Result<(), ServerFnError> {
     check(&token)?;
-    vibedeck_engine::Engine::global().open_remote_session(&conn_id, &session_id, &title, &cwd);
+    // The lazy preview reads the remote unified store over SSH (blocking,
+    // up to ~85 s) - keep it off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        vibedeck_engine::Engine::global().open_remote_session(&conn_id, &session_id, &title, &cwd);
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
     Ok(())
 }
 

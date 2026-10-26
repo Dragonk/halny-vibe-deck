@@ -409,6 +409,133 @@ pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
     sessions
 }
 
+// ---------------------------------------------------------------------------
+// v0.9.0 lazy remote session preview (Nexus `loadRemoteSessionPreview`)
+// ---------------------------------------------------------------------------
+
+/// Cap on chunk files fetched in phase 2 (Nexus: 48).
+const REMOTE_PREVIEW_MAX_CHUNKS: usize = 48;
+
+/// Parse the phase-2 chunk dump: `@@@CHUNK:<sha>\n<json array>` blocks -
+/// every chunk file holds an array of projection entries.
+fn parse_remote_chunk_blocks(out: &str) -> Vec<serde_json::Value> {
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    for block in out.split("@@@CHUNK:") {
+        let Some(nl) = block.find('\n') else {
+            continue;
+        };
+        if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(block[nl + 1..].trim()) {
+            entries.extend(list);
+        }
+    }
+    entries
+}
+
+/// Lazy remote session preview (Nexus `loadRemoteSessionPreview`): read the
+/// unified session store on the remote host over SSH WITHOUT starting
+/// vibe-acp there (lazy resume). Phase 1 locates the session dir (direct id
+/// first, then a CURRENT+meta.json scan), cats the latest generation
+/// manifest and the session index; phase 2 cats the last 48 chunk files.
+/// `None` when the remote store has nothing usable. Blocking - call from
+/// `tokio::task::spawn_blocking` in server contexts.
+pub fn load_remote_session_preview(
+    conn: &RemoteConnection,
+    session_id: &str,
+) -> Option<vibedeck_vibe::stats::SessionPreviewData> {
+    use vibedeck_vibe::stats::{build_session_preview, find_index_entry};
+    let sid = shq(session_id);
+    let phase1 = [
+        format!("D=\"$HOME\"/.vibe/logs/session/unified/{sid}"),
+        "if [ ! -f \"$D/CURRENT\" ]; then".to_string(),
+        "  for d in \"$HOME\"/.vibe/logs/session/unified/*/; do".to_string(),
+        format!(
+            "    if [ -f \"$d/CURRENT\" ] && grep -q {sid} \"$d/meta.json\" 2>/dev/null; then D=\"${{d%/}}\"; break; fi"
+        ),
+        "  done".to_string(),
+        "fi".to_string(),
+        "if [ ! -f \"$D/CURRENT\" ]; then echo \"@@@NONE\"; exit 0; fi".to_string(),
+        "echo \"@@@DIR:$D\"".to_string(),
+        "GEN=$(ls -1 \"$D/generations\" 2>/dev/null | sort -n | tail -1)".to_string(),
+        "if [ -z \"$GEN\" ] || [ ! -f \"$D/generations/$GEN/manifest.json\" ]; then echo \"@@@NONE\"; exit 0; fi"
+            .to_string(),
+        "echo \"@@@MANIFEST\"".to_string(),
+        "cat \"$D/generations/$GEN/manifest.json\"".to_string(),
+        "echo".to_string(),
+        "echo \"@@@INDEX\"".to_string(),
+        "cat \"$HOME\"/.vibe/logs/session/unified/.session-index.json 2>/dev/null".to_string(),
+    ]
+    .join("\n");
+    let out = {
+        let r = ssh_run(conn, &phase1, 25000, None);
+        if r.code != 0 || r.stdout.trim().is_empty() {
+            return None;
+        }
+        r.stdout
+    };
+    if out.contains("@@@NONE") {
+        return None;
+    }
+    let dir_pos = out.find("@@@DIR:")?;
+    let manifest_pos = out.find("@@@MANIFEST")?;
+    let index_pos = out.find("@@@INDEX")?;
+    let dir = out
+        .get(dir_pos + "@@@DIR:".len()..)
+        .and_then(|rest| rest.lines().next())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let manifest: serde_json::Value = out
+        .get(manifest_pos + "@@@MANIFEST".len() + 1..index_pos)
+        .and_then(|s| serde_json::from_str(s.trim()).ok())?;
+    let shas_all: Vec<String> = manifest
+        .pointer("/projection_state/chunks")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let start = shas_all.len().saturating_sub(REMOTE_PREVIEW_MAX_CHUNKS);
+    let shas: Vec<String> = shas_all[start..]
+        .iter()
+        .filter(|s| {
+            !s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        })
+        .cloned()
+        .collect();
+    if shas.is_empty() || dir.is_empty() {
+        return None;
+    }
+    let cmds: Vec<String> = shas
+        .iter()
+        .map(|sha| {
+            let chunk = format!("{dir}/chunks/{sha}.json");
+            format!("echo \"@@@CHUNK:{sha}\"; cat {}; echo", shq(&chunk))
+        })
+        .collect();
+    let out2 = {
+        let r = ssh_run(conn, &cmds.join("\n"), 60000, None);
+        if r.code != 0 {
+            return None;
+        }
+        r.stdout
+    };
+    let entries = parse_remote_chunk_blocks(&out2);
+    let index_raw = out.get(index_pos + "@@@INDEX".len() + 1..).unwrap_or("").trim();
+    let index_entry = if index_raw.is_empty() {
+        None
+    } else {
+        serde_json::from_str::<serde_json::Value>(index_raw)
+            .ok()
+            .and_then(|idx| find_index_entry(&idx, session_id))
+    };
+    if entries.is_empty() && index_entry.is_none() {
+        return None;
+    }
+    Some(build_session_preview(&entries, index_entry.as_ref()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +556,19 @@ mod tests {
     #[test]
     fn shell_quote() {
         assert_eq!(shq("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn remote_chunk_blocks_parse() {
+        let out = "@@@CHUNK:abc\n[{\"type\":\"message\",\"role\":\"user\",\"content\":[]}]\n\
+@@@CHUNK:def\n[{\"type\":\"reasoning\"},{\"type\":\"message\"}]";
+        let entries = parse_remote_chunk_blocks(out);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(
+            entries[0].get("role").and_then(|r| r.as_str()),
+            Some("user")
+        );
+        // A block without a newline (truncated output) is skipped.
+        assert_eq!(parse_remote_chunk_blocks("@@@CHUNK:zzz").len(), 0);
     }
 }

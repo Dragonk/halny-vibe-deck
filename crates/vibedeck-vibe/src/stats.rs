@@ -935,17 +935,39 @@ pub struct SessionPreviewData {
 /// Read one entry from `unified/.session-index.json` (Nexus
 /// `readSessionIndexEntry`): title/updatedAt from the session block,
 /// cwd + config from the metadata block, usage from the token totals.
+#[cfg(test)]
 fn read_session_index_entry_at(
     index_path: &Path,
     session_id: &str,
 ) -> Option<(Option<String>, Option<String>, Option<i64>, Option<SessionLastConfig>, PreviewUsage)> {
     let raw = std::fs::read_to_string(index_path).ok()?;
     let idx: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let entries = idx.get("entries")?.as_array()?;
-    let entry = entries.iter().find(|e| {
-        e.pointer("/identity/session_id").and_then(|v| v.as_str()) == Some(session_id)
-            || e.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
-    })?;
+    let entry = find_index_entry(&idx, session_id)?;
+    Some(index_entry_fields(&entry))
+}
+
+/// Find one entry of `.session-index.json` by session id (identity block
+/// first, flat-field fallback) - shared by the disk preview and the SSH
+/// remote preview (Nexus `readSessionIndexEntry`).
+pub fn find_index_entry(idx: &serde_json::Value, session_id: &str) -> Option<serde_json::Value> {
+    idx.get("entries")?
+        .as_array()?
+        .iter()
+        .find(|e| {
+            e.pointer("/identity/session_id").and_then(|v| v.as_str()) == Some(session_id)
+                || e.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
+        })
+        .cloned()
+}
+
+/// Fields of one `.session-index.json` entry (Nexus `readSessionIndexEntry`):
+/// title/updatedAt from the session block, cwd + config from the metadata
+/// block, usage from the token totals - shared by the disk preview and the
+/// SSH remote preview.
+#[allow(clippy::type_complexity)]
+fn index_entry_fields(
+    entry: &serde_json::Value,
+) -> (Option<String>, Option<String>, Option<i64>, Option<SessionLastConfig>, PreviewUsage) {
     let sess = entry.get("session");
     let meta = entry.get("metadata");
     let title = sess
@@ -989,7 +1011,38 @@ fn read_session_index_entry_at(
         .and_then(|v| v.as_str())
         .filter(|c| !c.is_empty())
         .map(str::to_string);
-    Some((title, cwd, updated_at, config, if usage.is_known() { usage } else { PreviewUsage::default() }))
+    (
+        title,
+        cwd,
+        updated_at,
+        config,
+        if usage.is_known() { usage } else { PreviewUsage::default() },
+    )
+}
+
+/// Assemble the lazy-resume preview from projection entries already read
+/// (from disk or over SSH) plus the optional `.session-index.json` entry
+/// (Nexus `buildSessionPreview`): transcript capped at 2000 messages, plan
+/// from the last accepted `vibe.todo` effect, title/cwd/updatedAt/config/
+/// usage from the index entry when present.
+pub fn build_session_preview(
+    entries: &[serde_json::Value],
+    index_entry: Option<&serde_json::Value>,
+) -> SessionPreviewData {
+    let (title, cwd, updated_at, config, usage) = index_entry
+        .map(index_entry_fields)
+        .unwrap_or((None, None, None, None, PreviewUsage::default()));
+    let mut messages = build_preview_messages(entries);
+    messages.truncate(PREVIEW_MAX_MESSAGES);
+    SessionPreviewData {
+        messages,
+        title,
+        cwd,
+        updated_at,
+        config,
+        usage,
+        plan: build_preview_plan(entries),
+    }
 }
 
 /// The todo list recovered from the last `vibe.todo` effect in the
@@ -1057,22 +1110,18 @@ fn build_preview_plan(entries: &[serde_json::Value]) -> Vec<PreviewPlanEntry> {
 pub fn load_full_session_preview(session_id: &str) -> Option<SessionPreviewData> {
     let dir = find_preview_dir(session_id)?;
     let entries = read_preview_entries(&dir)?;
-    let (title, cwd, updated_at, config, usage) = read_session_index_entry_at(
-        &sessions_log_dir().join("unified").join(".session-index.json"),
-        session_id,
+    // The index is optional: a session still previews without it.
+    let index_entry = std::fs::read_to_string(
+        sessions_log_dir().join("unified").join(".session-index.json"),
     )
-    .unwrap_or((None, None, None, None, PreviewUsage::default()));
-    let mut messages = build_preview_messages(&entries);
-    messages.truncate(PREVIEW_MAX_MESSAGES);
-    Some(SessionPreviewData {
-        messages,
-        title,
-        cwd,
-        updated_at,
-        config: config.or_else(|| load_session_last_config(session_id)),
-        usage,
-        plan: build_preview_plan(&entries),
-    })
+    .ok()
+    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    .and_then(|idx| find_index_entry(&idx, session_id));
+    let mut data = build_session_preview(&entries, index_entry.as_ref());
+    if data.config.is_none() {
+        data.config = load_session_last_config(session_id);
+    }
+    Some(data)
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,6 +1261,60 @@ fn search_session_content_in(base: &Path, query: &str) -> Vec<ContentMatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_session_preview_from_entries_and_index() {
+        let entries = vec![
+            serde_json::json!({
+                "type": "message", "role": "user",
+                "content": [{"type": "text", "text": "hello"}]
+            }),
+            serde_json::json!({"type": "reasoning", "id": "r1", "text": "hmm"}),
+            serde_json::json!({
+                "type": "message", "role": "assistant",
+                "content": [{"type": "text", "text": "hi there"}]
+            }),
+            serde_json::json!({
+                "type": "effect",
+                "detail": {"toolName": "vibe.todo", "input": {"todos": [
+                    {"content": "step one", "status": "in_progress", "priority": "high"}
+                ]}}
+            }),
+        ];
+        let index_entry = serde_json::json!({
+            "session": {
+                "title": "Remote work",
+                "updatedAt": 1770000000,
+                "tokenUsage": {"inputTokens": 10, "outputTokens": 5, "cachedInputTokens": 2, "totalTokens": 15}
+            },
+            "metadata": {"cwd": "/srv/app", "active_model": "mistral-large", "agent_name": "code", "reasoning_effort": "high"}
+        });
+        let p = build_session_preview(&entries, Some(&index_entry));
+        assert_eq!(p.title.as_deref(), Some("Remote work"));
+        assert_eq!(p.cwd.as_deref(), Some("/srv/app"));
+        assert_eq!(p.updated_at, Some(1770000000));
+        let cfg = p.config.expect("config from index entry");
+        assert_eq!(cfg.model.as_deref(), Some("mistral-large"));
+        assert_eq!(cfg.mode.as_deref(), Some("code"));
+        assert_eq!(cfg.thinking.as_deref(), Some("high"));
+        assert_eq!(p.usage.total_tokens, 15.0);
+        assert_eq!(p.usage.prompt_tokens, 10.0);
+        assert_eq!(p.messages.len(), 2);
+        assert_eq!(p.messages[0].role, "user");
+        assert_eq!(p.messages[0].content, "hello");
+        assert_eq!(p.messages[1].role, "ai");
+        assert_eq!(p.messages[1].thinking.len(), 1);
+        assert_eq!(p.plan.len(), 1);
+        assert_eq!(p.plan[0].content, "step one");
+        assert_eq!(p.plan[0].status, "in_progress");
+        // No index entry: metadata missing but transcript + plan survive.
+        let bare = build_session_preview(&entries, None);
+        assert!(bare.title.is_none());
+        assert!(bare.cwd.is_none());
+        assert!(bare.config.is_none());
+        assert_eq!(bare.messages.len(), 2);
+        assert_eq!(bare.plan.len(), 1);
+    }
 
     #[test]
     fn content_search_snippets_across_layouts() {
