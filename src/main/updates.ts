@@ -392,8 +392,15 @@ function spawnCmdHelper(scriptPath: string, logPath: string): void {
   const sysRoot = process.env.SystemRoot ?? "C:\\Windows"
   const cmdExe = path.join(sysRoot, "System32", "cmd.exe")
   try {
+    // v1.0.3: on Windows, detached: true makes libuv create the child with
+    // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, which suppresses
+    // CREATE_NO_WINDOW - windowsHide is then ignored and cmd.exe (a console
+    // program) allocates its own visible terminal that can never close on
+    // its own. Spawn it WITHOUT detached instead: libuv passes CREATE_NO_WINDOW
+    // so nothing is ever shown, and the helper still outlives this process
+    // (Windows does not kill child processes when the parent exits).
     spawn(cmdExe, ["/d", "/s", "/c", scriptPath], {
-      detached: true,
+      detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     })
