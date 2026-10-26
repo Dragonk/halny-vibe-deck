@@ -567,13 +567,13 @@ impl MistraldeckApp {
                 self.finalize_open_messages();
                 self.push_system_message(&format!("⚠ {context}: {message}"));
             }
-            AcpEvent::MessageChunk { session_id, text } => {
+            AcpEvent::MessageChunk { session_id, text, .. } => {
                 if let Some(session) = self.session_by_acp_id_mut(&session_id) {
                     let msg = ensure_ai_message(session);
                     msg.content.push_str(&text);
                 }
             }
-            AcpEvent::ThinkingChunk { session_id, text } => {
+            AcpEvent::ThinkingChunk { session_id, text, .. } => {
                 if let Some(session) = self.session_by_acp_id_mut(&session_id) {
                     let msg = ensure_ai_message(session);
                     match msg.thinking.last_mut() {

@@ -59,6 +59,9 @@ pub struct SlotState {
     pub commands: Vec<AvailableCommand>,
     pub config_options: Vec<ConfigOption>,
     pub modes: Vec<ModeInfo>,
+    /// Already-sent stream text per `session|kind|entry` (Nexus v0.10.2
+    /// `streamSent`) — guards against full-entry resends from the CLI.
+    pub stream_sent: std::collections::HashMap<String, String>,
 }
 
 pub struct EngineState {
@@ -164,5 +167,6 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
         commands: Vec::new(),
         config_options: Vec::new(),
         modes: Vec::new(),
+        stream_sent: std::collections::HashMap::new(),
     }
 }

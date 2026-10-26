@@ -107,7 +107,14 @@ pub enum AcpEvent {
     /// A worker operation failed.
     SessionError { context: String, message: String },
     /// Streaming assistant text.
-    MessageChunk { session_id: String, text: String },
+    MessageChunk {
+        session_id: String,
+        /// ACP `messageId` of the streamed message ("current" when the CLI
+        /// does not send one) — stream dedup key (Nexus v0.10.2).
+        #[serde(default)]
+        message_id: String,
+        text: String,
+    },
     /// Replayed user text (`session/load` history, `user_message_chunk`).
     UserMessageChunk { session_id: String, text: String },
     /// Full conversation history replayed by `session/load` — the UI
@@ -127,7 +134,14 @@ pub enum AcpEvent {
         count: usize,
     },
     /// Streaming assistant reasoning text.
-    ThinkingChunk { session_id: String, text: String },
+    ThinkingChunk {
+        session_id: String,
+        /// ACP `messageId` of the thought block ("thinking" default) —
+        /// stream dedup key (Nexus v0.10.2).
+        #[serde(default)]
+        block_id: String,
+        text: String,
+    },
     /// Reasoning stream ended.
     ThinkingComplete { session_id: String },
     /// A tool call started.

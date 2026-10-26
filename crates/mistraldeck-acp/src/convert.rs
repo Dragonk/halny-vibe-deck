@@ -21,6 +21,19 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
     let Some(update) = params.get("update") else {
         return Vec::new();
     };
+    // Stream dedup keys (Nexus v0.10.2): message / thought block identity.
+    let message_id = update
+        .get("messageId")
+        .or_else(|| update.get("message_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("current")
+        .to_string();
+    let thought_block_id = update
+        .get("messageId")
+        .or_else(|| update.get("message_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("thinking")
+        .to_string();
 
     let mut events = Vec::new();
     let session_update = update
@@ -34,10 +47,12 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
         match session_update {
             Some("agent_thought_chunk") => events.push(AcpEvent::ThinkingChunk {
                 session_id: session_id.clone(),
+                block_id: thought_block_id.clone(),
                 text: text.to_string(),
             }),
             Some("agent_message_chunk") => events.push(AcpEvent::MessageChunk {
                 session_id: session_id.clone(),
+                message_id: message_id.clone(),
                 text: text.to_string(),
             }),
             // session/load history replay: the user's own messages
@@ -162,6 +177,7 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                 if let Some(text) = update.pointer("/chunk/text").and_then(Value::as_str) {
                     events.push(AcpEvent::MessageChunk {
                         session_id: session_id.clone(),
+                        message_id: message_id.clone(),
                         text: text.to_string(),
                     });
                 }
@@ -174,9 +190,9 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                             .to_string();
                         events.push(AcpEvent::ThinkingChunk {
                             session_id: session_id.clone(),
+                            block_id,
                             text: text.to_string(),
                         });
-                        let _ = block_id; // single thinking block per message in practice
                     }
                 }
                 if update.pointer("/chunk/type").and_then(Value::as_str) == Some("thinking_end") {

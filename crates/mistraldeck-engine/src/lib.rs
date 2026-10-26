@@ -725,6 +725,12 @@ impl Engine {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {
                             slot.busy = true;
                             slot.last_activity = std::time::Instant::now();
+                            // v0.10.2: fresh stream after a reload — drop
+                            // stale dedup prefixes for this session (Nexus
+                            // `loadSession` cleanup).
+                            slot.stream_sent.retain(|k, _| {
+                                !k.starts_with(&format!("{acp_session_id}|"))
+                            });
                             slot.pending_prompt = Some(text);
                             slot.load_progress = Some(mistraldeck_core::snapshot::SessionLoadProgress {
                                 session_id: acp_session_id.clone(),
@@ -1122,6 +1128,10 @@ impl Engine {
     /// Apply one ACP worker event to the owning slot + session.
     pub(crate) fn apply_slot_event(&'static self, slot_id: u64, event: AcpEvent) {
         let event_out = event.clone();
+        // Deduped replacement for streamed text events (None = unchanged);
+        // a fully deduped (empty) chunk is suppressed entirely.
+        let mut publish_override: Option<AcpEvent> = None;
+        let mut suppress = false;
         let mut guard = self.state.lock().unwrap();
         let st = &mut *guard;
         if !st.slots.contains_key(&slot_id) {
@@ -1388,6 +1398,11 @@ impl Engine {
                                         msg.is_complete = true;
                                     }
                                 }
+                                // v0.10.2: close open thinking blocks and
+                                // stuck tool calls (Nexus finalize on
+                                // Error).
+                                finalize_session_thinking(session);
+                                complete_session_tool_calls(session);
                                 session.messages.push(Message::new_system(&format!(
                                     "WARNING {context}: {message}"
                                 )));
@@ -1395,32 +1410,77 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::MessageChunk { session_id, text } => {
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
-                    {
-                        let msg = ensure_ai_message(session);
-                        msg.content.push_str(&text);
+                AcpEvent::MessageChunk {
+                    session_id,
+                    message_id,
+                    text,
+                } => {
+                    // v0.10.2 dedup guard (Nexus `dedupChunk`): a delta chunk
+                    // followed by the full accumulated text must not
+                    // duplicate content. Clients receive the deduped text;
+                    // fully deduped chunks are not published at all.
+                    let out_text =
+                        dedup_chunk(&mut slot.stream_sent, &session_id, "m", &message_id, &text);
+                    if out_text.is_empty() {
+                        suppress = true;
+                    } else {
+                        publish_override = Some(AcpEvent::MessageChunk {
+                            session_id: session_id.clone(),
+                            message_id,
+                            text: out_text.clone(),
+                        });
+                        if let Some(session) = st
+                            .sessions
+                            .iter_mut()
+                            .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        {
+                            {
+                                let msg = ensure_ai_message(session);
+                                msg.content.push_str(&out_text);
+                            }
+                            // v0.10.2: the CLI never emits agent_thought_end —
+                            // once the answer text streams, all thinking
+                            // blocks of this message are done (Nexus
+                            // `finalizeAllThinking` on MessageChunk).
+                            finalize_session_thinking(session);
+                        }
                     }
                 }
-                AcpEvent::ThinkingChunk { session_id, text } => {
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
-                    {
-                        let msg = ensure_ai_message(session);
-                        match msg.thinking.last_mut() {
-                            Some(block) if !block.is_complete => block.content.push_str(&text),
-                            _ => msg.thinking.push(mistraldeck_core::types::ThinkingBlock {
-                                id: "thinking".into(),
-                                content: text,
-                                is_complete: false,
-                                started_at: mistraldeck_core::types::now_ms(),
-                                completed_at: 0,
-                            }),
+                AcpEvent::ThinkingChunk {
+                    session_id,
+                    block_id,
+                    text,
+                } => {
+                    // Same dedup guard for reasoning streams (kind "t", per
+                    // thought block — Nexus keys thoughts by messageId).
+                    let out_text =
+                        dedup_chunk(&mut slot.stream_sent, &session_id, "t", &block_id, &text);
+                    if out_text.is_empty() {
+                        suppress = true;
+                    } else {
+                        publish_override = Some(AcpEvent::ThinkingChunk {
+                            session_id: session_id.clone(),
+                            block_id,
+                            text: out_text.clone(),
+                        });
+                        if let Some(session) = st
+                            .sessions
+                            .iter_mut()
+                            .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        {
+                            let msg = ensure_ai_message(session);
+                            match msg.thinking.last_mut() {
+                                Some(block) if !block.is_complete => {
+                                    block.content.push_str(&out_text)
+                                }
+                                _ => msg.thinking.push(mistraldeck_core::types::ThinkingBlock {
+                                    id: "thinking".into(),
+                                    content: out_text,
+                                    is_complete: false,
+                                    started_at: mistraldeck_core::types::now_ms(),
+                                    completed_at: 0,
+                                }),
+                            }
                         }
                     }
                 }
@@ -1451,6 +1511,9 @@ impl Engine {
                         .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         ensure_ai_message(session).tool_calls.push(tool_call);
+                        // v0.10.2: tool activity means thinking is over
+                        // (Nexus `finalizeAllThinking` on ToolCall).
+                        finalize_session_thinking(session);
                     }
                 }
                 AcpEvent::ToolCallUpdated {
@@ -1559,6 +1622,12 @@ impl Engine {
                                 msg.is_complete = true;
                             }
                         }
+                        // v0.10.2: the CLI never finalizes thinking blocks
+                        // and a turn can end with a tool call still
+                        // "running" — close both (Nexus
+                        // `finalizeAllThinking` + `completeToolCalls`).
+                        finalize_session_thinking(session);
+                        complete_session_tool_calls(session);
                     }
                 }
                 AcpEvent::UsageUpdate { .. } => { /* handled above */ }
@@ -1590,10 +1659,71 @@ impl Engine {
                 }
             }
         }
-        // Forward the raw event so streaming clients update in place.
-        self.publish(BusEvent::Acp(event_out));
+        // Forward the event so streaming clients update in place — the
+        // deduped variant for streamed text; fully deduped (empty) chunks
+        // are dropped (nothing new to show).
+        if !suppress {
+            self.publish(BusEvent::Acp(publish_override.unwrap_or(event_out)));
+        }
         // Anything structural (status, approvals, ready) -> refetch hint.
         self.publish(BusEvent::StructureChanged);
+    }
+}
+
+/// v0.10.2 guard against full-entry resends from the CLI — a delta chunk
+/// followed by the full accumulated text would otherwise duplicate content
+/// (Nexus `dedupChunk`): when the already-sent prefix is long enough (>= 40
+/// chars) and the incoming text starts with it, only the new suffix is kept.
+pub fn dedup_chunk(
+    sent: &mut std::collections::HashMap<String, String>,
+    session_id: &str,
+    kind: &str,
+    entry_id: &str,
+    text: &str,
+) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let key = format!("{session_id}|{kind}|{entry_id}");
+    let prev = sent.get(&key).cloned().unwrap_or_default();
+    let mut out = text.to_string();
+    if prev.len() >= 40 && text.starts_with(&prev) {
+        out = text[prev.len()..].to_string();
+    }
+    sent.insert(key, format!("{prev}{out}"));
+    out
+}
+
+/// The CLI never finalizes thinking blocks (no `agent_thought_end` on the
+/// wire) — close every open block of the session's AI messages (Nexus
+/// `finalizeAllThinking`, called when answer text / tool calls / turn end
+/// arrive).
+pub fn finalize_session_thinking(session: &mut ChatSession) {
+    let now = now_ms();
+    for msg in &mut session.messages {
+        if msg.sender == MessageSender::Ai {
+            for block in &mut msg.thinking {
+                block.is_complete = true;
+                if block.completed_at == 0 {
+                    block.completed_at = now;
+                }
+            }
+        }
+    }
+}
+
+/// A turn can end while a tool call is still `Running` (lost update,
+/// cancel) — close them so the steps timeline has no spinners (Nexus
+/// `completeToolCalls`).
+pub fn complete_session_tool_calls(session: &mut ChatSession) {
+    for msg in &mut session.messages {
+        if msg.sender == MessageSender::Ai {
+            for tc in &mut msg.tool_calls {
+                if tc.status == ToolStatus::Running {
+                    tc.status = ToolStatus::Done;
+                }
+            }
+        }
     }
 }
 
@@ -1890,6 +2020,7 @@ mod idle_reaper_tests {
             commands: Vec::new(),
             config_options: Vec::new(),
             modes: Vec::new(),
+            stream_sent: std::collections::HashMap::new(),
         };
         (s, rx)
     }
@@ -2017,6 +2148,7 @@ mod zombie_tests {
             commands: Vec::new(),
             config_options: Vec::new(),
             modes: Vec::new(),
+            stream_sent: std::collections::HashMap::new(),
         };
         (s, rx)
     }
@@ -2054,5 +2186,55 @@ mod zombie_tests {
         assert!(matches!(hung_rx.try_recv(), Ok(AcpCommand::Stop)));
         // A second watchdog (or a turn that already ended) is a no-op.
         assert!(!force_release_stopping(&mut st, "s-key"));
+    }
+}
+
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    #[test]
+    fn dedup_chunk_slices_full_resends() {
+        let mut sent = std::collections::HashMap::new();
+        // Short prefixes pass through untouched (threshold 40, Nexus parity)
+        // - separate entry id so it does not pollute the accumulation below.
+        assert_eq!(dedup_chunk(&mut sent, "s", "m", "short", "hi"), "hi");
+        // Long delta accumulates.
+        let long = "a".repeat(50);
+        assert_eq!(dedup_chunk(&mut sent, "s", "m", "current", &long), long);
+        // Full resend: prefix >= 40 and text starts with it -> only the tail.
+        let full = format!("{long}tail");
+        assert_eq!(dedup_chunk(&mut sent, "s", "m", "current", &full), "tail");
+        // Empty chunks emit nothing.
+        assert_eq!(dedup_chunk(&mut sent, "s", "m", "current", ""), "");
+        // A different entry id dedups independently.
+        assert_eq!(dedup_chunk(&mut sent, "s", "m", "other", &full), full);
+    }
+
+    #[test]
+    fn finalize_and_complete_close_open_blocks() {
+        let mut session = ChatSession::new("s", "/tmp");
+        let mut msg = Message::new_ai();
+        msg.thinking.push(mistraldeck_core::types::ThinkingBlock {
+            id: "thinking".into(),
+            content: "hmm".into(),
+            is_complete: false,
+            started_at: 1,
+            completed_at: 0,
+        });
+        msg.tool_calls.push(
+            serde_json::from_str(
+                r#"{"id":"tc1","title":"read_file","kind":"read","status":"running"}"#,
+            )
+            .unwrap(),
+        );
+        session.messages.push(msg);
+        finalize_session_thinking(&mut session);
+        complete_session_tool_calls(&mut session);
+        let m = &session.messages[0];
+        assert!(m.thinking[0].is_complete);
+        assert!(m.thinking[0].completed_at > 0);
+        assert_eq!(m.tool_calls[0].status, ToolStatus::Done);
     }
 }

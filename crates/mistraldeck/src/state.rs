@@ -157,7 +157,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         return false;
     }
     match e {
-        AcpEvent::MessageChunk { session_id, text } => {
+        AcpEvent::MessageChunk { session_id, text, .. } => {
             if is_current(&session_id) {
                 let mut s = state.write();
                 let msg = ensure_ai_message_pub(&mut s.snapshot.current_messages);
@@ -165,7 +165,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
-        AcpEvent::ThinkingChunk { session_id, text } => {
+        AcpEvent::ThinkingChunk { session_id, text, .. } => {
             if is_current(&session_id) {
                 let mut s = state.write();
                 let msg = ensure_ai_message_pub(&mut s.snapshot.current_messages);
