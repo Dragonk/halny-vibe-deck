@@ -3,6 +3,7 @@ import { join } from "path";
 import fs from "fs";
 import os from "os";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
+import { applyPortableUpdate, cleanupStaleUpdateDirs } from "./updateCmd";
 import { loadConfig, saveConfig, AppConfig } from "./config";
 import { menuLabels } from "./i18n";
 import {
@@ -267,7 +268,32 @@ function showFailedUpdateNotice(): void {
 const cliKey = argVal("key");
 
 app.whenReady().then(() => {
+  // v0.13.10: headless self-update apply mode. The OLD app spawns the NEW
+  // executable with --apply-update right before it exits (updates.ts);
+  // this instance swaps the files and relaunches - no window is created.
+  if (process.argv.includes("--apply-update")) {
+    const arg = (name: string): string | null => {
+      const i = process.argv.indexOf(name);
+      return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
+    };
+    const pid = parseInt(arg("--pid") ?? "0", 10);
+    const srcDir = arg("--src");
+    const appDir = arg("--appdir");
+    const exeName = arg("--exe");
+    const tmpDir = arg("--tmpd");
+    if (!pid || !srcDir || !appDir || !exeName) {
+      app.exit(1);
+      return;
+    }
+    void applyPortableUpdate({ pid, srcDir, appDir, exeName, tmpDir: tmpDir ?? "" })
+      .catch(() => {
+        /* failure details are in the log and the fail marker */
+      })
+      .finally(() => app.exit(0));
+    return;
+  }
   showFailedUpdateNotice();
+  cleanupStaleUpdateDirs();
   installIpcCapture();
   const win: BrowserWindow | null = headless ? null : createWindow();
   if (!win) acpManager.setWindow(null);

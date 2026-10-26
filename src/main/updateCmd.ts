@@ -21,7 +21,9 @@
 
 import fs from "fs"
 import path from "path"
+import { execFile, spawn } from "child_process"
 import { Unzip, UnzipInflate, UnzipPassThrough } from "fflate"
+import os from "os"
 
 export interface ExtractZipProgress {
   received: number
@@ -170,72 +172,6 @@ function cmdWaitForExit(pid: number): string[] {
   ]
 }
 
-export interface PortableUpdateCmdParams {
-  exe: string
-  appDir: string
-  oldName: string
-  oldExe: string
-  srcDir: string
-  tmpDir: string
-  pid: number
-}
-
-/**
- * v0.13.8: post-exit portable self-update script. Runs after the app has
- * quit: moves the old exe aside, robocopies the extracted payload over the
- * app directory, relaunches the new exe, and rolls back to the previous
- * exe on any failure. Robocopy exit codes 0-7 are success (with warnings),
- * 8+ are failures.
- */
-export function buildPortableUpdateCmd(p: PortableUpdateCmdParams): string {
-  const lines = cmdHeader()
-  lines.push(
-    'set "PID=' + p.pid + '"',
-    'set "EXE=' + p.exe + '"',
-    'set "APPDIR=' + p.appDir + '"',
-    'set "OLDNAME=' + p.oldName + '"',
-    'set "OLDEXE=' + p.oldExe + '"',
-    'set "SRC=' + p.srcDir + '"',
-    'set "TMPD=' + p.tmpDir + '"',
-    "echo [%DATE% %TIME%] nexus portable update start (pid " + p.pid + ') >> "%LOG%"',
-    ...cmdWaitForExit(p.pid),
-    'echo [%TIME%] renaming old exe >> "%LOG%"',
-    'ren "%EXE%" "%OLDNAME%" >nul 2>&1',
-    "if errorlevel 1 goto renamefail",
-    "goto renamed",
-    ":renamefail",
-    'move /y "%EXE%" "%OLDEXE%" >nul 2>&1',
-    "if errorlevel 1 goto fatalrename",
-    ":renamed",
-    'echo [%TIME%] copying new files (robocopy) >> "%LOG%"',
-    '%SystemRoot%\\System32\\robocopy.exe "%SRC%" "%APPDIR%" /E /R:3 /W:2 /NFL /NDL /NP /NJH /NJS >> "%LOG%" 2>&1',
-    "set RCLVL=%ERRORLEVEL%",
-    'echo [%TIME%] robocopy exit code %RCLVL% >> "%LOG%"',
-    "if %RCLVL% GEQ 8 goto rollback",
-    'if not exist "%EXE%" goto rollback',
-    'echo [%TIME%] relaunching app >> "%LOG%"',
-    'start "" "%EXE%"',
-    "%SystemRoot%\\System32\\ping.exe -n 6 127.0.0.1 >nul",
-    'del /f /q "%OLDEXE%" >nul 2>&1',
-    'rd /s /q "%TMPD%" >nul 2>&1',
-    'del /f /q "%FAIL%" >nul 2>&1',
-    'echo [%TIME%] portable update done >> "%LOG%"',
-    "exit /b 0",
-    ":rollback",
-    'echo update failed (robocopy exit %RCLVL% or new exe missing), rolled back to the previous version > "%FAIL%"',
-    'move /y "%OLDEXE%" "%EXE%" >nul 2>&1',
-    'start "" "%EXE%"',
-    'echo [%TIME%] rolled back to previous exe >> "%LOG%"',
-    "exit /b 1",
-    ":fatalrename",
-    "echo cannot rename the app executable (is the app directory locked by another process?) > \"%FAIL%\"",
-    'if exist "%OLDEXE%" (start "" "%OLDEXE%") else (start "" "%EXE%")',
-    'echo [%TIME%] could not rename old exe >> "%LOG%"',
-    "exit /b 1",
-  )
-  return lines.join(CRLF)
-}
-
 export interface InstalledUpdateCmdParams {
   exe: string
   installer: string
@@ -275,4 +211,194 @@ export function buildInstalledUpdateCmd(p: InstalledUpdateCmdParams): string {
     "exit /b 1",
   )
   return lines.join(CRLF)
+}
+
+// ---------------------------------------------------------------------------
+// v0.13.10: portable self-update apply helper. The v0.13.8 flow spawned a
+// generated .cmd script through cmd.exe; on some machines that helper never
+// started at all (AV/ASR rules block script execution from the temp dir),
+// leaving the app closed with the files untouched and nothing relaunched.
+// The new approach has NO script and NO shell: the old app spawns the NEW
+// executable itself with --apply-update right before it exits (see
+// updates.ts / index.ts). The helper waits for the old process to die,
+// copies the extracted payload over the app directory, relaunches the app
+// and rolls back on failure. Every step is appended to nexus-update.log in
+// the temp dir; a failure also drops nexus-update-failed.txt, which the app
+// shows as a dialog on the next launch.
+// ---------------------------------------------------------------------------
+
+export function updateLogPath(): string {
+  return path.join(os.tmpdir(), "nexus-update.log")
+}
+
+export function updateFailMarkerPath(): string {
+  return path.join(os.tmpdir(), "nexus-update-failed.txt")
+}
+
+function logUpdate(line: string): void {
+  try {
+    fs.appendFileSync(updateLogPath(), new Date().toISOString() + " " + line + "\n")
+  } catch {
+    /* logging must never break the update */
+  }
+}
+
+const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    // EPERM means the process exists but belongs to another user;
+    // anything else (ESRCH) means it is gone.
+    return (e as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
+
+function forceKillPid(pid: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform === "win32") {
+      const sysRoot = process.env.SystemRoot
+      const taskkill = sysRoot ? path.join(sysRoot, "System32", "taskkill.exe") : "taskkill"
+      try {
+        execFile(taskkill, ["/PID", String(pid), "/F", "/T"], () => resolve())
+      } catch {
+        resolve()
+      }
+    } else {
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch {
+        /* already gone */
+      }
+      resolve()
+    }
+  })
+}
+
+async function waitForPidDeath(pid: number, killAfterMs: number): Promise<void> {
+  const start = Date.now()
+  while (isPidAlive(pid)) {
+    if (Date.now() - start >= killAfterMs) {
+      logUpdate("old process " + pid + " still alive after " + killAfterMs + " ms, force killing")
+      await forceKillPid(pid)
+      const deadline = Date.now() + 10000
+      while (isPidAlive(pid) && Date.now() < deadline) await sleepMs(250)
+      return
+    }
+    await sleepMs(500)
+  }
+}
+
+export interface PortableApplyParams {
+  pid: number
+  srcDir: string
+  appDir: string
+  exeName: string
+  tmpDir: string
+}
+
+/**
+ * v0.13.10: runs inside the NEW executable (--apply-update). Waits for the
+ * old process to exit, swaps the files, relaunches the app. On failure the
+ * previous executable is restored and a marker file is left behind.
+ */
+export async function applyPortableUpdate(p: PortableApplyParams, killAfterMs: number = 30000): Promise<void> {
+  const t0 = Date.now()
+  logUpdate("apply helper start (old pid " + p.pid + ", src " + p.srcDir + ")")
+  await waitForPidDeath(p.pid, killAfterMs)
+  logUpdate("old process gone, swapping files")
+  const newExe = path.join(p.appDir, p.exeName)
+  const oldExe = path.join(p.appDir, "nexus-old-" + Date.now() + ".exe")
+  const hadOld = fs.existsSync(newExe)
+  if (hadOld) {
+    try {
+      fs.renameSync(newExe, oldExe)
+    } catch (e) {
+      logUpdate("rename of the old exe failed (" + String(e) + "), killing again and retrying")
+      await forceKillPid(p.pid)
+      await sleepMs(1500)
+      fs.renameSync(newExe, oldExe)
+    }
+  }
+  try {
+    fs.cpSync(p.srcDir, p.appDir, { recursive: true, force: true })
+    if (!fs.existsSync(newExe)) throw new Error("new executable missing after copy")
+    logUpdate("copy complete in " + (Date.now() - t0) + " ms")
+  } catch (err) {
+    logUpdate("copy failed: " + String(err))
+    try {
+      if (hadOld && fs.existsSync(newExe)) fs.rmSync(newExe, { force: true })
+    } catch {
+      /* best effort */
+    }
+    try {
+      if (hadOld && fs.existsSync(oldExe)) fs.renameSync(oldExe, newExe)
+    } catch {
+      /* best effort */
+    }
+    try {
+      fs.writeFileSync(
+        updateFailMarkerPath(),
+        "Portable update failed: " + String(err) + "\nThe previous version was restored."
+      )
+    } catch {
+      /* best effort */
+    }
+    try {
+      if (fs.existsSync(newExe)) {
+        const child = spawn(newExe, [], { detached: true, stdio: "ignore" })
+        child.on("error", () => {})
+        child.unref()
+      }
+    } catch {
+      /* best effort */
+    }
+    throw new Error("portable update copy failed: " + String(err))
+  }
+  try {
+    if (fs.existsSync(oldExe)) fs.rmSync(oldExe, { force: true })
+  } catch {
+    /* best effort */
+  }
+  logUpdate("restarting app")
+  try {
+    const child = spawn(newExe, [], { detached: true, stdio: "ignore" })
+    child.on("error", (e) => logUpdate("relaunch failed: " + String(e)))
+    child.unref()
+  } catch (e) {
+    logUpdate("relaunch threw: " + String(e))
+  }
+  try {
+    fs.rmSync(p.tmpDir, { recursive: true, force: true })
+  } catch {
+    /* the helper exe lives here while running - leftovers are swept on next start */
+  }
+  logUpdate("apply helper done in " + (Date.now() - t0) + " ms")
+}
+
+/**
+ * v0.13.10: sweep leftover nexus-update-* directories (hundreds of MB of
+ * payload) from previous updates. A finished update is at least a few
+ * minutes old by the time a fresh instance calls this, and no update
+ * continues across app starts, so the age threshold is safe.
+ */
+export function cleanupStaleUpdateDirs(maxAgeMs: number = 10 * 60 * 1000): void {
+  try {
+    const tmp = os.tmpdir()
+    const now = Date.now()
+    const entries = fs.readdirSync(tmp, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith("nexus-update-")) continue
+      const dir = path.join(tmp, entry.name)
+      try {
+        if (now - fs.statSync(dir).mtimeMs > maxAgeMs) fs.rmSync(dir, { recursive: true, force: true })
+      } catch {
+        /* locked or unreadable - keep it for the next sweep */
+      }
+    }
+  } catch {
+    /* never break startup over a cleanup */
+  }
 }

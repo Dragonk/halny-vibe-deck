@@ -8,7 +8,7 @@ import { findBinary, tryExec } from "./setup"
 import { sshRun } from "./remote"
 import { loadConfig } from "./config"
 import type { RemoteConnection } from "./config"
-import { buildInstalledUpdateCmd, buildPortableUpdateCmd, extractZip, locatePayloadExe } from "./updateCmd"
+import { buildInstalledUpdateCmd, extractZip, locatePayloadExe } from "./updateCmd"
 
 // v0.9.0: update system for the app itself (GitHub releases) and the
 // mistral-vibe CLI (PyPI). The renderer orchestrates session restore after a
@@ -490,6 +490,9 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
       spawnCmdHelper(scriptPath, logPath)
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
+      // v0.13.10: same failsafe as the portable flavor - never let a
+      // blocked quit sequence leave the app hanging after an update.
+      setTimeout(() => app.exit(0), 2500)
       return { ok: true, error: null }
     }
 
@@ -523,8 +526,6 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
       const exe = process.execPath
       const exeName = path.basename(exe)
       const appDir = path.dirname(exe)
-      const oldName = "nexus-old-" + Date.now() + ".exe"
-      const oldExe = path.join(appDir, oldName)
       const extractDir = path.join(tmp, "extracted")
       fs.mkdirSync(extractDir, { recursive: true })
       emit({ phase: "install", received: 0, total: size, percent: 0 })
@@ -538,13 +539,68 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
         return { ok: false, error: "Downloaded archive does not contain the app executable - aborting update" }
       }
       emit({ phase: "install", received: size, total: size, percent: 100 })
+      // v0.13.10: the post-exit swap is done by the NEW executable itself
+      // (spawned with --apply-update below), not by a generated .cmd script -
+      // on some machines AV/ASR rules killed the cmd.exe helper before it
+      // could run a single line, leaving the app closed, files untouched
+      // and nothing relaunched.
+      const helperExe = path.join(srcDir, exeName)
       const logPath = path.join(os.tmpdir(), "nexus-update.log")
-      const scriptPath = path.join(tmp, "nexus-update.cmd")
-      const script = buildPortableUpdateCmd({ exe, appDir, oldName, oldExe, srcDir, tmpDir: tmp, pid: process.pid })
-      fs.writeFileSync(scriptPath, script, "utf8")
-      spawnCmdHelper(scriptPath, logPath)
+      try {
+        fs.appendFileSync(
+          logPath,
+          new Date().toISOString() + " update ready, spawning apply helper " + helperExe + "\n"
+        )
+      } catch {
+        /* logging must never break the update */
+      }
+      try {
+        spawn(
+          helperExe,
+          [
+            "--apply-update",
+            "--pid",
+            String(process.pid),
+            "--src",
+            srcDir,
+            "--appdir",
+            appDir,
+            "--exe",
+            exeName,
+            "--tmpd",
+            tmp,
+          ],
+          {
+            detached: true,
+            stdio: "ignore",
+          }
+        )
+          .on("error", (e) => {
+            try {
+              fs.appendFileSync(logPath, new Date().toISOString() + " helper spawn failed: " + String(e) + "\n")
+            } catch {
+              /* nothing else to do - we are quitting */
+            }
+          })
+          .unref()
+      } catch (e) {
+        try {
+          fs.appendFileSync(logPath, new Date().toISOString() + " helper spawn threw: " + String(e) + "\n")
+        } catch {
+          /* nothing else to do - we are quitting */
+        }
+      }
+      // The archive is already extracted; free ~230 MB right away.
+      try {
+        fs.rmSync(zipPath, { force: true })
+      } catch {
+        /* best effort */
+      }
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
+      // Failsafe: if anything blocks the normal quit sequence, hard-exit
+      // anyway - the apply helper force-kills this pid if it lingers.
+      setTimeout(() => app.exit(0), 2500)
       return { ok: true, error: null }
     }
     if (process.platform === "linux") {
