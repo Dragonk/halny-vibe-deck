@@ -706,10 +706,15 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             useStore.getState().markSessionBusy(currentSess.id)
             await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
           } catch (loadErr) {
-            // session/load failed (log missing) → fall back to a new session
-            console.log('[InputBar] loadSession failed:', loadErr, '— creating new session')
-            await window.api.acp.newSession(sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
-            await window.api.acp.sendPrompt(promptText, undefined, rid ?? undefined)
+            // v0.13.11: never fall back to a new session here. The old
+            // fallback silently created a fresh ACP session and sent the
+            // prompt into it, splitting the chat into a duplicate sidebar
+            // entry auto-titled after the message text. The failure is now
+            // surfaced instead: the message stays in THIS session, the
+            // busy state is cleared and the error names the cause.
+            console.error('[InputBar] loadSession failed:', loadErr)
+            useStore.getState().markSessionIdle(currentSess.id)
+            setAcpError('Resume failed: ' + ((loadErr as Error)?.message ?? String(loadErr)))
           }
           setSessionStarting(false)
         } catch (err2) {

@@ -536,14 +536,47 @@ export default function App(): React.JSX.Element {
 
         case 'Disconnected': {
           const rid = (d.remoteId as string | undefined) ?? null
+          const store = useStore.getState()
+          // v0.13.11: a dead worker must not leave its sessions stuck busy
+          // with a spinning thinking indicator and a blocked input. Finalize
+          // whatever was streaming for the affected worker, release its busy
+          // flags and surface why the turn stopped. The next prompt revives
+          // the worker and resumes the session in place (no duplicate).
+          const isAffected = (id: string) => {
+            const s = store.sessions.find((x) => x.id === id)
+            if (!s) return !rid
+            return rid ? s.remoteId === rid : !s.remoteId
+          }
+          let interrupted = false
+          streamingState.current.forEach(({ msgId }, localId) => {
+            if (!isAffected(localId)) return
+            interrupted = true
+            useStore.getState().finalizeAllThinking(localId, msgId)
+            useStore.getState().completeToolCalls(localId, msgId)
+            finalizeAiMessage(localId, msgId)
+          })
+          streamingState.current.forEach((_, localId) => {
+            if (isAffected(localId)) streamingState.current.delete(localId)
+          })
+          let releasedBusy = false
+          store.busySessions.forEach((busyId) => {
+            if (!isAffected(busyId)) return
+            releasedBusy = true
+            useStore.getState().markSessionIdle(busyId)
+          })
           if (rid) {
             // v0.7.0: a remote worker died - the local agent is unaffected.
             console.error('[acp] remote worker disconnected:', rid)
+            if (interrupted || releasedBusy) {
+              setAcpError('Remote agent worker disconnected - the turn was interrupted. Send your message again to resume this session.')
+            }
             break
           }
           setAcpStatus('disconnected')
           useStore.setState({ activeAcpSessionId: null })
-          streamingState.current.clear()
+          if (interrupted || releasedBusy) {
+            setAcpError('Agent process exited - the turn was interrupted. Send your message again to resume this session.')
+          }
           break
         }
 

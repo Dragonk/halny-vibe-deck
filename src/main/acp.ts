@@ -946,11 +946,19 @@ export class AcpManager {
       if (k.startsWith(sessionId + '|')) this.streamSent.delete(k)
     }
     try {
-      const result = (await this.sendRequest('session/load', {
-        sessionId,
-        cwd,
-        mcpServers: []
-      })) as Record<string, unknown>
+      // v0.13.11: session/load replays the full history before responding
+      // - big sessions can outrun the default 180 s request timeout, and
+      // the resulting failure used to be masked by a new-session
+      // fallback in the renderer (split chats, duplicate entries).
+      const result = (await this.sendRequest(
+        'session/load',
+        {
+          sessionId,
+          cwd,
+          mcpServers: [],
+        },
+        600_000
+      )) as Record<string, unknown>
 
       this.currentSessionId = sessionId
 
@@ -973,6 +981,9 @@ export class AcpManager {
       })
     } catch (err) {
       this._replaying.delete(sessionId)
+      // v0.13.11: make resume failures visible in the debug log
+      // instead of letting the renderer mask them with a new session.
+      this.emit({ type: 'DebugLog', data: { message: 'session/load failed for ' + sessionId + ': ' + String(err) } })
       throw err
     }
   }
@@ -983,10 +994,19 @@ export class AcpManager {
     if (sid !== this.currentSessionId) {
       this.currentSessionId = sid
     }
-    const result = (await this.sendRequest('session/prompt', {
-      sessionId: sid,
-      prompt: [{ type: 'text', text }]
-    })) as Record<string, unknown>
+    // v0.13.11: the response to session/prompt arrives only when the turn
+    // finishes. Long turns (thinking=high, big sessions, long tool chains)
+    // regularly exceed the default 3-minute request timeout, which produced
+    // a spurious 'ACP request timeout: session/prompt' error while the turn
+    // was still streaming in the UI. Allow up to one hour instead.
+    const result = (await this.sendRequest(
+      'session/prompt',
+      {
+        sessionId: sid,
+        prompt: [{ type: 'text', text }]
+      },
+      3_600_000
+    )) as Record<string, unknown>
 
     this.emit({
       type: 'PromptComplete',
