@@ -20,6 +20,14 @@ fn loc(lang: &str, pl: &str, en: &str) -> String {
     }
 }
 
+/// Per-connection remote CLI state in the Settings Updates section (Nexus
+/// remoteCli map: "checking" sentinel + last check result).
+#[derive(Clone, PartialEq)]
+struct RemCliRow {
+    checking: bool,
+    info: Option<vibedeck_core::snapshot::CliUpdateInfo>,
+}
+
 /// Editable draft of one SSH remote connection (Settings editor).
 #[derive(Clone)]
 struct SshDraft {
@@ -393,6 +401,10 @@ pub fn SettingsView() -> Element {
     let ssh_draft = use_signal(|| Option::<SshDraft>::None);
     let ssh_msg = use_signal(String::new);
     let ssh_busy = use_signal(|| false);
+
+    // Element 6: Updates section - per-remote-connection CLI state (the
+    // app + local CLI results live in ClientState, shared with the banner).
+    let upd_rem = use_signal(Vec::<(String, RemCliRow)>::new);
 
     // Vibe CLI configuration state (loaded once, refetched after edits).
     let mut cfg = use_signal(|| Option::<VibeConfigData>::None);
@@ -1102,7 +1114,91 @@ pub fn SettingsView() -> Element {
                 {err_el}
             }
         },
-        _ => rsx! {
+        _ => {
+            // Element 6: precomputed update values (app + local CLI results
+            // are shared with the banner through ClientState).
+            let upd = state.read();
+            let app = upd.update_app.clone();
+            let cli = upd.update_cli.clone();
+            let busy = upd.update_busy;
+            let upd_err = upd.update_error.clone();
+            let prog = upd.update_progress.clone();
+            drop(upd);
+            let desktop = crate::state::is_desktop();
+            let app_cur = app
+                .as_ref()
+                .map(|a| a.current_version.clone())
+                .unwrap_or_else(|| "?".into());
+            let app_latest = app
+                .as_ref()
+                .and_then(|a| a.latest_version.clone())
+                .unwrap_or_else(|| "?".into());
+            let app_avail = app.as_ref().map(|a| a.update_available).unwrap_or(false);
+            let app_err = app.as_ref().and_then(|a| a.error.clone());
+            let cli_cur = cli
+                .as_ref()
+                .and_then(|c| c.current_version.clone())
+                .unwrap_or_else(|| "?".into());
+            let cli_latest = cli
+                .as_ref()
+                .and_then(|c| c.latest_version.clone())
+                .unwrap_or_else(|| "?".into());
+            let cli_avail = cli.as_ref().map(|c| c.update_available).unwrap_or(false);
+            let cli_err = cli.as_ref().and_then(|c| c.error.clone());
+            let prog_text = prog.as_ref().map(|p| match p.phase.as_str() {
+                "download" => format!(
+                    "{} {}% ({:.1} / {} MB)",
+                    loc(&lang, "Pobieranie", "Downloading"),
+                    p.percent.unwrap_or(0),
+                    p.received as f64 / 1048576.0,
+                    p.total
+                        .map(|t| format!("{:.1}", t as f64 / 1048576.0))
+                        .unwrap_or_else(|| "?".into()),
+                ),
+                "install" => loc(&lang, "Instalowanie…", "Installing…"),
+                _ => loc(&lang, "Restartowanie…", "Restarting…"),
+            });
+            let rem_rows: Vec<(
+                vibedeck_core::snapshot::RemoteConnection,
+                String,
+                bool,
+                bool,
+            )> = ssh_conns
+                .iter()
+                .filter(|c| c.enabled)
+                .map(|c| {
+                    let row = upd_rem
+                        .read()
+                        .iter()
+                        .find(|(id, _)| id == &c.id)
+                        .map(|(_, r)| r.clone())
+                        .unwrap_or(RemCliRow { checking: false, info: None });
+                    let status = if row.checking {
+                        loc(&lang, "Sprawdzam…", "Checking…")
+                    } else if let Some(info) = &row.info {
+                        match &info.error {
+                            Some(e) => format!("❌ {e}"),
+                            None => format!(
+                                "{}: {} · {}: {}",
+                                loc(&lang, "Obecna", "Current"),
+                                info.current_version
+                                    .clone()
+                                    .unwrap_or_else(|| "?".into()),
+                                loc(&lang, "Najnowsza", "Latest"),
+                                info.latest_version
+                                    .clone()
+                                    .unwrap_or_else(|| "?".into()),
+                            ),
+                        }
+                    } else {
+                        loc(&lang, "Nie sprawdzono", "Not checked")
+                    };
+                    let can_upgrade = !row.checking
+                        && row.info.as_ref().map(|i| i.update_available).unwrap_or(false);
+                    ((*c).clone(), status, row.checking, can_upgrade)
+                })
+                .collect();
+            rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
                     div { class: "settings-section-title", "{tr(&lang, \"general\")}" }
@@ -1186,6 +1282,194 @@ pub fn SettingsView() -> Element {
                     }
                     div { class: "field-hint", "0 = {loc(&lang, \"bez limitu\", \"no limit\")}" }
                 }
+
+                // ---- Updates (element 6; Nexus SettingsView general tab) ----
+                div { class: "settings-section-header",
+                    div { class: "settings-section-title", "{loc(&lang, \"Aktualizacje\", \"Updates\")}" }
+                }
+                div { class: "updates-row",
+                    div { class: "updates-info",
+                        span { class: "updates-name", "{loc(&lang, \"Aplikacja\", \"App\")}" }
+                        span { class: "updates-versions",
+                            "{loc(&lang, \"Obecna\", \"Current\")}: {app_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {app_latest}"
+                        }
+                        if let Some(pt) = &prog_text {
+                            span { class: "updates-progress", "{pt}" }
+                        }
+                    }
+                    div { class: "updates-actions",
+                        button {
+                            class: "field-btn",
+                            disabled: busy,
+                            onclick: {
+                                let state = state;
+                                move |_| {
+                                    let state = state;
+                                    spawn(async move { crate::state::check_updates(state).await; });
+                                }
+                            },
+                            "{loc(&lang, \"Sprawdź aktualizacje\", \"Check for updates\")}"
+                        }
+                        button {
+                            class: "action-btn",
+                            disabled: busy || !app_avail || !desktop,
+                            onclick: {
+                                let state = state;
+                                move |_| {
+                                    let state = state;
+                                    spawn(async move { crate::state::start_app_update(state).await; });
+                                }
+                            },
+                            "{loc(&lang, \"Aktualizuj\", \"Update now\")}"
+                        }
+                    }
+                }
+                if let Some(e) = &app_err {
+                    div { class: "field-hint", "❌ {e}" }
+                }
+                div { class: "field-hint", "{loc(&lang, \"Aktualizacja aplikacji pobiera nową wersję, instaluje ją i uruchamia aplikację ponownie.\", \"The app update downloads the new version, installs it and relaunches the app.\")}" }
+                div { class: "updates-row",
+                    div { class: "updates-info",
+                        span { class: "updates-name", "CLI (mistral-vibe)" }
+                        span { class: "updates-versions",
+                            "{loc(&lang, \"Obecna\", \"Current\")}: {cli_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {cli_latest}"
+                        }
+                    }
+                    div { class: "updates-actions",
+                        button {
+                            class: "action-btn",
+                            disabled: busy || !cli_avail,
+                            onclick: {
+                                let state = state;
+                                move |_| {
+                                    let state = state;
+                                    spawn(async move { crate::state::upgrade_local_cli(state).await; });
+                                }
+                            },
+                            "{loc(&lang, \"Aktualizuj CLI\", \"Upgrade CLI\")}"
+                        }
+                    }
+                }
+                if let Some(e) = &cli_err {
+                    div { class: "field-hint", "❌ {e}" }
+                }
+                div { class: "field-hint", "{loc(&lang, \"Aktualizacja CLI działa przez uv (do 5 minut).\", \"The CLI upgrade runs through uv (up to to 5 minutes).\")}" }
+                div { class: "remote-cli-updates",
+                    div { class: "field-label", "{loc(&lang, \"Zdalne CLI\", \"Remote CLI\")}" }
+                    if rem_rows.is_empty() {
+                        div { class: "field-hint", "{loc(&lang, \"Brak włączonych połączeń zdalnych.\", \"No enabled remote connections.\")}" }
+                    }
+                    for (conn, status, checking, can_upgrade) in &rem_rows {
+                        div { class: "updates-row",
+                            div { class: "updates-info",
+                                span { class: "updates-name", "{conn.name}" }
+                                span { class: "updates-versions", "{status}" }
+                            }
+                            div { class: "updates-actions",
+                                button {
+                                    class: "field-btn",
+                                    disabled: *checking || busy,
+                                    onclick: {
+                                        let state = state;
+                                        let upd_rem = upd_rem;
+                                        let conn = conn.clone();
+                                        move |_| {
+                                            let state = state;
+                                            let upd_rem = upd_rem;
+                                            let conn = conn.clone();
+                                            spawn(async move {
+                                                let mut upd_rem = upd_rem;
+                                                let cid = conn.id.clone();
+                                                {
+                                                    let mut w = upd_rem.write();
+                                                    w.retain(|(id, _)| id != &cid);
+                                                    w.push((cid.clone(), RemCliRow { checking: true, info: None }));
+                                                }
+                                                let t = crate::state::token(&state);
+                                                let res = crate::api::api_check_remote_cli_update(t, conn.clone()).await;
+                                                let row = match res {
+                                                    Ok(info) => RemCliRow { checking: false, info: Some(info) },
+                                                    Err(e) => RemCliRow {
+                                                        checking: false,
+                                                        info: Some(vibedeck_core::snapshot::CliUpdateInfo {
+                                                            error: Some(e.to_string()),
+                                                            ..Default::default()
+                                                        }),
+                                                    },
+                                                };
+                                                let mut w = upd_rem.write();
+                                                w.retain(|(id, _)| id != &cid);
+                                                w.push((cid, row));
+                                            });
+                                        }
+                                    },
+                                    "{loc(&lang, \"Sprawdź\", \"Check\")}"
+                                }
+                                button {
+                                    class: "action-btn",
+                                    disabled: !*can_upgrade || busy,
+                                    onclick: {
+                                        let state = state;
+                                        let upd_rem = upd_rem;
+                                        let conn = conn.clone();
+                                        move |_| {
+                                            let state = state;
+                                            let upd_rem = upd_rem;
+                                            let conn = conn.clone();
+                                            spawn(async move {
+                                                let mut upd_rem = upd_rem;
+                                                let cid = conn.id.clone();
+                                                {
+                                                    let mut w = upd_rem.write();
+                                                    w.retain(|(id, _)| id != &cid);
+                                                    w.push((cid.clone(), RemCliRow { checking: true, info: None }));
+                                                }
+                                                let t = crate::state::token(&state);
+                                                let res = crate::api::api_upgrade_remote_cli(t, conn.clone()).await;
+                                                let err = match res {
+                                                    Ok(r) => r.error,
+                                                    Err(e) => Some(e.to_string()),
+                                                };
+                                                if let Some(e) = err {
+                                                    let mut w = upd_rem.write();
+                                                    w.retain(|(id, _)| id != &cid);
+                                                    w.push((cid, RemCliRow {
+                                                        checking: false,
+                                                        info: Some(vibedeck_core::snapshot::CliUpdateInfo {
+                                                            error: Some(e),
+                                                            ..Default::default()
+                                                        }),
+                                                    }));
+                                                    return;
+                                                }
+                                                // Re-check after a successful upgrade (Nexus pattern).
+                                                let t2 = crate::state::token(&state);
+                                                let row = match crate::api::api_check_remote_cli_update(t2, conn.clone()).await {
+                                                    Ok(info) => RemCliRow { checking: false, info: Some(info) },
+                                                    Err(e) => RemCliRow {
+                                                        checking: false,
+                                                        info: Some(vibedeck_core::snapshot::CliUpdateInfo {
+                                                            error: Some(e.to_string()),
+                                                            ..Default::default()
+                                                        }),
+                                                    },
+                                                };
+                                                let mut w = upd_rem.write();
+                                                w.retain(|(id, _)| id != &cid);
+                                                w.push((cid, row));
+                                            });
+                                        }
+                                    },
+                                    "{loc(&lang, \"Aktualizuj\", \"Update\")}"
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(e) = &upd_err {
+                    div { class: "field-hint", "❌ {e}" }
+                }
+            }
             }
         },
     };

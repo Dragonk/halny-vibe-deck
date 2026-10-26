@@ -41,6 +41,18 @@ pub struct ClientState {
     /// `preview_open_seq` bumps on every request.
     pub preview_open: Option<PreviewOpen>,
     pub preview_open_seq: u64,
+    /// Element 6: app update check result (banner + Settings Updates).
+    pub update_app: Option<vibedeck_core::snapshot::AppUpdateInfo>,
+    /// Element 6: local CLI update check result.
+    pub update_cli: Option<vibedeck_core::snapshot::CliUpdateInfo>,
+    /// Element 6: banner dismissed (until the next check).
+    pub update_dismissed: bool,
+    /// Element 6: an app self-update is running (progress is polled).
+    pub update_busy: bool,
+    /// Element 6: terminal update error (banner + Settings).
+    pub update_error: Option<String>,
+    /// Element 6: live self-update progress phase download/install/relaunch.
+    pub update_progress: Option<vibedeck_core::snapshot::UpdateProgress>,
 }
 
 /// A pending dock navigation triggered by a clickable chat path
@@ -273,6 +285,90 @@ fn ensure_ai_message_pub(messages: &mut Vec<Message>) -> &mut Message {
 
 /// token() helper: the current auth token (always empty — the token is
 /// vestigial; auth happens at the remote HTTPS listener, not in the API).
+/// Element 6: silent app + CLI update check (Nexus startup check 4s after
+/// boot; failures keep the banner hidden). Shared by the Shell auto-check
+/// and the Settings "check" button.
+pub async fn check_updates(mut state: Signal<ClientState>) {
+    let t = token(&state);
+    let a = crate::api::api_check_app_update(t.clone()).await;
+    let c = crate::api::api_check_local_cli_update(t).await;
+    if let Ok(a) = a {
+        state.write().update_app = Some(a);
+    }
+    if let Ok(c) = c {
+        state.write().update_cli = Some(c);
+    }
+}
+
+/// Element 6: run the app self-update (fire-and-forget server fn) and poll
+/// the progress until it errors or the app relaunches (the server exits ->
+/// the poll fails -> done). No await is held across a state write.
+pub async fn start_app_update(mut state: Signal<ClientState>) {
+    state.write().update_busy = true;
+    state.write().update_error = None;
+    let t = token(&state);
+    match crate::api::api_update_app(t).await {
+        Ok(res) => {
+            if !res.ok {
+                state.write().update_busy = false;
+                if let Some(e) = res.error {
+                    state.write().update_error = Some(e);
+                }
+                return;
+            }
+            loop {
+                match crate::api::api_update_progress(token(&state)).await {
+                    Ok((p, e)) => {
+                        if let Some(err) = e {
+                            state.write().update_error = Some(err);
+                            state.write().update_busy = false;
+                            return;
+                        }
+                        state.write().update_progress = p;
+                    }
+                    Err(_) => {
+                        // Server gone (relaunch) or unreachable: stop polling.
+                        state.write().update_busy = false;
+                        return;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+        Err(e) => {
+            state.write().update_busy = false;
+            state.write().update_error = Some(e.to_string());
+        }
+    }
+}
+
+/// Element 6: upgrade the local mistral-vibe CLI (uv), then re-check so the
+/// banner + Settings show the fresh version.
+pub async fn upgrade_local_cli(mut state: Signal<ClientState>) {
+    state.write().update_busy = true;
+    state.write().update_error = None;
+    let t = token(&state);
+    let ok = match crate::api::api_upgrade_local_cli(t.clone()).await {
+        Ok(r) => match r.error {
+            Some(e) => {
+                state.write().update_error = Some(e);
+                false
+            }
+            None => true,
+        },
+        Err(e) => {
+            state.write().update_error = Some(e.to_string());
+            false
+        }
+    };
+    if ok {
+        if let Ok(c) = crate::api::api_check_local_cli_update(t).await {
+            state.write().update_cli = Some(c);
+        }
+    }
+    state.write().update_busy = false;
+}
+
 pub fn token(state: &Signal<ClientState>) -> String {
     state.read().token.clone().unwrap_or_default()
 }

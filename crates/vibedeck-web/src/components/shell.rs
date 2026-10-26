@@ -45,6 +45,14 @@ pub fn Shell() -> Element {
         }
     });
 
+    // Element 6: look for app + CLI updates shortly after startup so the
+    // banner appears without opening Settings (Nexus: 4s, silent - failures
+    // keep the banner hidden).
+    use_future(move || async move {
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        crate::state::check_updates(state).await;
+    });
+
     let s = state.read();
     let lang = lang(&state);
     let view = s.view;
@@ -65,6 +73,7 @@ pub fn Shell() -> Element {
         link { rel: "stylesheet", href: asset!("/assets/main.css") }
         div { class: "app-root",
             crate::components::header::Header {}
+            crate::components::shell::UpdateBanner {}
             crate::components::mobile::MobileBridges {}
             div { class: "app-body",
                 crate::components::sidebar::Sidebar {}
@@ -272,3 +281,127 @@ const RESIZE_JS: &str = r#"
   });
 })();
 "#;
+
+/// Element 6: update banner (Nexus App.tsx update-banner) - app + CLI
+/// updates appear shortly after startup, with live download progress and a
+/// dismiss button; app/CLI update actions run through the shared
+/// ClientState helpers (also used by the Settings Updates section).
+pub fn UpdateBanner() -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let lang = lang(&state);
+
+    let s = state.read();
+    let show = !s.update_dismissed
+        && (s.update_app.as_ref().map(|a| a.update_available).unwrap_or(false)
+            || s.update_cli.as_ref().map(|c| c.update_available).unwrap_or(false));
+    let app = s.update_app.clone();
+    let cli = s.update_cli.clone();
+    let busy = s.update_busy;
+    let error = s.update_error.clone();
+    let prog = s.update_progress.clone();
+    drop(s);
+
+    let app_avail = app.as_ref().map(|a| a.update_available).unwrap_or(false);
+    let cli_avail = cli.as_ref().map(|c| c.update_available).unwrap_or(false);
+    let app_latest = app.as_ref().and_then(|a| a.latest_version.clone()).unwrap_or_default();
+    let cli_latest = cli.as_ref().and_then(|c| c.latest_version.clone()).unwrap_or_default();
+
+    let loc = |pl: &str, en: &str| -> String {
+        if lang == "pl" { pl.to_string() } else { en.to_string() }
+    };
+
+    let mut progress_text = String::new();
+    let mut pct = 0i64;
+    let mut downloading = false;
+    if busy {
+        if let Some(p) = prog.as_ref() {
+            match p.phase.as_str() {
+                "download" => {
+                    downloading = true;
+                    let received = p.received as f64 / 1048576.0;
+                    let total = p
+                        .total
+                        .map(|t| format!("{:.1}", t as f64 / 1048576.0))
+                        .unwrap_or_else(|| "?".to_string());
+                    progress_text = format!(
+                        "{} {}% ({received:.1} / {total} MB)",
+                        loc("Pobieranie", "Downloading"),
+                        p.percent.unwrap_or(0),
+                    );
+                }
+                "install" => progress_text = loc("Instalowanie…", "Installing…"),
+                _ => progress_text = loc("Restartowanie…", "Restarting…"),
+            }
+            pct = p.percent.unwrap_or(0);
+        }
+    }
+    let desktop = crate::state::is_desktop();
+
+    rsx! {
+        if show {
+            div { class: "update-banner",
+            div { class: "update-banner-texts",
+                if app_avail {
+                    span { "{loc(\"Dostępna aktualizacja aplikacji\", \"App update available\")}: {app_latest}" }
+                }
+                if cli_avail {
+                    span { "{loc(\"Nowa wersja CLI\", \"New CLI version available\")}: {cli_latest}" }
+                }
+                if let Some(e) = &error {
+                    span { class: "update-banner-error", "❌ {e}" }
+                }
+                if busy && !progress_text.is_empty() {
+                    span { class: "update-banner-progress", "{progress_text}" }
+                }
+                if busy && downloading && pct > 0 {
+                    div { class: "update-progress-track",
+                        div { class: "update-progress-fill", style: "width: {pct}%" }
+                    }
+                }
+            }
+            div { class: "update-banner-actions",
+                if desktop && app_avail {
+                    button {
+                        class: "update-banner-btn",
+                        disabled: busy,
+                        onclick: {
+                            let state = state;
+                            move |_| {
+                                let state = state;
+                                spawn(async move { crate::state::start_app_update(state).await; });
+                            }
+                        },
+                        "{loc(\"Aktualizuj aplikację\", \"Update app\")}"
+                    }
+                }
+                if cli_avail {
+                    button {
+                        class: "update-banner-btn",
+                        disabled: busy,
+                        onclick: {
+                            let state = state;
+                            move |_| {
+                                let state = state;
+                                spawn(async move { crate::state::upgrade_local_cli(state).await; });
+                            }
+                        },
+                        "{loc(\"Aktualizuj CLI\", \"Update CLI\")}"
+                    }
+                }
+                button {
+                    class: "update-banner-dismiss",
+                    title: "{loc(\"Ukryj\", \"Dismiss\")}",
+                    onclick: {
+                        let state = state;
+                        move |_| {
+                            let mut state = state;
+                            state.write().update_dismissed = true;
+                        }
+                    },
+                    "✕"
+                }
+            }
+            }
+        }
+    }
+}
