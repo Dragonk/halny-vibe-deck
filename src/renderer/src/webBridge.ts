@@ -195,6 +195,7 @@ function buildApi(): AppAPI {
     },
     fs: {
       listDir: (dir: string, remoteId?: string): Promise<unknown> => invoke('fs:list-dir', [dir, remoteId ?? undefined]),
+      homeDir: (remoteId?: string): Promise<unknown> => invoke('fs:home-dir', [remoteId ?? undefined]),
       searchFiles: (rootDir: string, query: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:search-files', [rootDir, query, remoteId ?? undefined]),
       readFile: (filePath: string, remoteId?: string): Promise<unknown> =>

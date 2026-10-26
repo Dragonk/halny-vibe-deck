@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.0.7 — 2026-10-26
+
+### Changed
+- **Starting the app no longer opens a session.** The main-process boot
+  prime (which created an empty "no project" session on every start) is
+  gone: no ACP session and no sidebar entry are opened at startup. The user
+  starts a session consciously — "+" in a project, the 🆕 new-project
+  button — or resumes an existing one. A message typed with no session at
+  all creates its draft at send time (a conscious act, not an auto-open).
+- **Model / mode / thinking chips are populated from the vibe config
+  before any ACP connection** (new `loadDefaultChips` store action): the
+  model list comes from `config.toml` `[[models]]`, thinking levels from
+  the active model, and the built-in CLI modes (ask / accept-edits /
+  smart-approve / auto-approve) are offered up front. Picks made before a
+  session exists are carried into the draft and applied inside
+  `session/new` with the first prompt.
+- **The session list still loads at boot without a session**: local
+  sessions arrive with the worker's initial `session/list`, SSH sessions
+  via the periodic remote refresh — both independent of the current
+  session.
+- **Clicking a session loads it from disk, not from ACP.** History
+  sessions are previewed from the unified log files (measured ~20 ms for
+  the biggest session); a full `session/load` replay over ACP happens only
+  when the user actually resumes by sending a message.
+- **The local "New project…" button is no longer duplicated**: the bottom
+  list button is removed; the single compact 🆕 button in the sessions
+  header matches the remote groups' style.
+- **The new-project picker starts in the home directory** of the browsed
+  host (local/serve host or the SSH remote via `fs:home-dir`), not in the
+  filesystem root — navigation up and elsewhere stays available.
+
 ## 1.0.6 — 2026-10-26
 
 ### Fixed

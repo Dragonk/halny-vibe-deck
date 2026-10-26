@@ -34,7 +34,10 @@ interface DirEntry {
 
 export default function NewProjectModal({ config, remoteId, remoteName, onCreated, onClose }: Props): React.JSX.Element {
   const tr = useTranslation(config.language)
-  const [cwd, setCwd] = useState('/')
+  // v1.0.7: the picker starts in the HOME directory of the browsed host
+  // (local/serve host or the SSH remote) - not in the filesystem root.
+  // The user can still navigate anywhere from there (↑ and the list).
+  const [cwd, setCwd] = useState('')
   const [dirs, setDirs] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
@@ -42,6 +45,24 @@ export default function NewProjectModal({ config, remoteId, remoteName, onCreate
   const [creating, setCreating] = useState(false)
 
   useEffect(() => {
+    let cancelled = false
+    void (window.api.fs.homeDir as ((rid?: string) => Promise<string>) | undefined)
+      ?.(remoteId ?? undefined)
+      .then((home) => {
+        if (!cancelled && home) setCwd(home)
+      })
+      .catch(() => {
+        /* fall back to the filesystem root below */
+        if (!cancelled) setCwd('/')
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteId])
+
+  useEffect(() => {
+    if (!cwd) return
     let cancelled = false
     setLoading(true)
     void window.api.fs

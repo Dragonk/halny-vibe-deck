@@ -162,6 +162,8 @@ interface AppStore {
    * (option lists are model specific and the CLI is not consulted for a
    * session that is not live yet). */
   refreshThinkingLevels: (modelValue: string) => Promise<void>;
+  /** v1.0.7: chips from the vibe config BEFORE any ACP connection. */
+  loadDefaultChips: () => Promise<void>;
   /** v0.11.1: last known configOptions per ACP session (option lists are model specific). */
   sessionConfigOptions: Record<string, ConfigOption[]>;
   setSessionConfigOptions: (acpSessionId: string, options: ConfigOption[]) => void;
@@ -329,6 +331,12 @@ export const useStore = create<AppStore>((set, get) => ({
       createdAt: Date.now(),
       lastActive: Date.now(),
       workingDirectory: workingDir || workingDirectory || undefined,
+      // v1.0.7: carry the model/mode/thinking picked on the chips BEFORE
+      // any ACP connection (populated from the vibe config at boot) into
+      // the draft - the first prompt applies them inside session/new.
+      lastModel: get().currentModel || undefined,
+      lastMode: get().currentMode || undefined,
+      lastThinking: get().currentThinking || undefined,
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -800,6 +808,86 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     } catch {
       /* vibe config unavailable - keep the current level list */
+    }
+  },
+
+  // v1.0.7: no session is opened at boot anymore, so the chips must come
+  // from the vibe config alone (models, built-in CLI modes, the active
+  // model's thinking levels) BEFORE any ACP connection - the user picks
+  // model/mode/thinking here and addSession carries the picks into the
+  // draft, where the first prompt applies them inside session/new.
+  loadDefaultChips: async () => {
+    if (get().currentSession()) return; // a session owns the chips
+    try {
+      const [cfgRaw, agentsRaw] = await Promise.all([
+        window.api.vibe.getConfig("global", "", undefined) as Promise<HistModelHolder | null>,
+        window.api.vibe.getAgents("global", "", undefined) as Promise<HistAgentCfg[]>,
+      ]);
+      const models = (cfgRaw && cfgRaw.models) || [];
+      const activeAlias = (cfgRaw as { active_model?: string } | null)?.active_model || "";
+      const wanted = get().currentModel;
+      const cur =
+        models.find((m) => keyOf(m) === wanted || m.name === wanted) ||
+        models.find((m) => keyOf(m) === activeAlias || m.name === activeAlias) ||
+        models[0];
+      // CLI defaults: the five levels; an explicitly empty set means "off".
+      const levels =
+        cur && cur.thinking_levels && cur.thinking_levels.length > 0
+          ? cur.thinking_levels
+          : ["off", "low", "medium", "high", "max"];
+      const pickedThinking = get().currentThinking;
+      const thinkingCurrent = levels.includes(pickedThinking)
+        ? pickedThinking
+        : cur?.thinking && levels.includes(cur.thinking)
+          ? cur.thinking
+          : levels.includes("high")
+            ? "high"
+            : levels[levels.length - 1];
+      const agentNames = new Set<string>();
+      const agentChoices = (agentsRaw || [])
+        .filter((a) => (a.agent_type ?? "agent") === "agent")
+        .filter((a) => (agentNames.has(a.name) ? false : (agentNames.add(a.name), true)))
+        .map((a) => ({ value: a.name, name: a.display_name || a.name, description: a.description || undefined }));
+      const options: ConfigOption[] = [
+        {
+          id: "mode",
+          name: "Mode",
+          type: "select",
+          // The CLI's default initial agent (BuiltinAgentName.ACCEPT_EDITS).
+          currentValue: get().currentMode || "accept-edits",
+          options: [
+            { value: "ask", name: "Ask" },
+            { value: "accept-edits", name: "Accept Edits" },
+            { value: "smart-approve", name: "Smart Approve" },
+            { value: "auto-approve", name: "Auto Approve" },
+            ...agentChoices,
+          ],
+        },
+        {
+          id: "model",
+          name: "Model",
+          type: "select",
+          currentValue: cur ? keyOf(cur) : get().currentModel || "",
+          options: models.map((m) => ({
+            value: keyOf(m),
+            name: m.display_name || m.name,
+            description: m.name,
+          })),
+        },
+        {
+          id: "thinking",
+          name: "Thinking",
+          type: "select",
+          currentValue: thinkingCurrent,
+          options: levels.map((l) => ({ value: l, name: l.charAt(0).toUpperCase() + l.slice(1) })),
+        },
+      ];
+      get().setConfigOptions(options);
+      if (cur) get().setCurrentModel(keyOf(cur));
+      if (!get().currentMode) get().setCurrentMode("accept-edits");
+      get().setCurrentThinking(thinkingCurrent);
+    } catch {
+      /* vibe config unavailable - chips populate on the first ACP session */
     }
   },
 

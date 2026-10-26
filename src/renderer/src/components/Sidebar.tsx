@@ -387,14 +387,15 @@ export default function Sidebar(): React.JSX.Element {
 
       <div className="sidebar-sessions-header">
         <span className="sidebar-sessions-label">{tr.sessions}</span>
-        {/* v0.13.15: the new-project button must be visible without
-            scrolling the session list (reported missing in the browser). */}
+        {/* v1.0.7: the bottom duplicate of this button was removed - the
+            compact header button (styled like the remote groups' 🆕) is the
+            single entry point for creating a project locally. */}
         <button
-          className="sidebar-np-btn"
+          className="pgh-plus sidebar-np-btn"
           onClick={openNewProjectPicker}
           title={tr.newProjectLabel}
         >
-          🆕 {tr.newProjectLabel}
+          🆕
         </button>
       </div>
 
@@ -440,12 +441,6 @@ export default function Sidebar(): React.JSX.Element {
             </div>
           )
         })}
-        <button
-          className="nsd-folder-pick"
-          onClick={openNewProjectPicker}
-        >
-          🆕 {tr.newProjectLabel}
-        </button>
         {remoteConns.map((conn) => {
           const collapsed = collapsedProjects.includes('remote:' + conn.id)
           const st = remoteStatuses[conn.id]

@@ -184,6 +184,8 @@ const api = {
   fs: {
     listDir: (dir: string, remoteId?: string): Promise<Array<{ name: string; isDir: boolean }>> =>
       ipcRenderer.invoke('fs:list-dir', dir, remoteId ?? undefined),
+    homeDir: (remoteId?: string): Promise<string> =>
+      ipcRenderer.invoke('fs:home-dir', remoteId ?? undefined),
     searchFiles: (rootDir: string, query: string, remoteId?: string): Promise<Array<{ path: string; isDir: boolean }>> =>
       ipcRenderer.invoke('fs:search-files', rootDir, query, remoteId ?? undefined),
     readFile: (

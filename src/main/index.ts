@@ -78,7 +78,7 @@ import {
   makeSalt,
   hashPassword,
 } from "./serve";
-import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus } from "./remote";
+import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus, sshRun } from "./remote";
 import {
   checkAppUpdate,
   checkCliUpdate,
@@ -404,13 +404,10 @@ app.whenReady().then(() => {
       if (err.message === "ACP stopped") return;
       throw err;
     });
-    // v0.10.7: the boot prime is owned by the main process (the renderer
-    // used to prime again on InitializationComplete, duplicating a session
-    // on every window start / web F5). Once per worker lifetime.
-    const bootCfg = loadConfig()
-    const primeCwd = bootCfg.workingDirectory || "."
-    exposeProjectAgentsForCwd(primeCwd)
-    await acpManager.primeBootSession(primeCwd).catch(() => {})
+    // v1.0.7: no boot prime - starting the app must NOT open any session.
+    // The user starts a session consciously ("+" in a project, the new
+    // project picker) or resumes an existing one; the first prompt on a
+    // draft creates the ACP session (InputBar first-message flow).
   });
 
   ipcMain.handle("acp:ensure-worker", async (_e, acpPath: string, _cwd: string, remoteId?: string) => {
@@ -688,6 +685,21 @@ app.whenReady().then(() => {
     } catch {
       return [];
     }
+  });
+
+  // v1.0.7: home directory of the host (or of the SSH remote) - the
+  // default start location of the new-project picker, so the user does
+  // not have to climb out of the filesystem root.
+  ipcMain.handle("fs:home-dir", async (_e, remoteId?: string) => {
+    if (remoteId) {
+      try {
+        const r = await sshRun(remoteConnOrThrow(remoteId), "echo $HOME", 10000);
+        return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : "/";
+      } catch {
+        return "/";
+      }
+    }
+    return os.homedir();
   });
 
   // Recursive file search for @ picker (max depth 4, skips node_modules/.git/etc)

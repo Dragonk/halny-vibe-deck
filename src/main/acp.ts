@@ -99,10 +99,6 @@ export class AcpManager {
   /** v0.13.12: number of session/prompt requests in flight (turns running). */
   private turnsInFlight = 0
   private currentSessionId: string | null = null
-  /** v0.10.7: boot session primed by the main process - kept so repeated
-   * client boots (web/PWA F5, second window) reuse the worker instead of
-   * priming duplicate sessions. Null = not primed (yet). */
-  private primedSessionId: string | null = null
   /** v0.10.7: in-flight cold start - concurrent boots must not stop the
    * worker another boot just spawned. */
   private starting: Promise<void> | null = null
@@ -903,7 +899,6 @@ export class AcpManager {
       if (this.process === proc) {
         this.process = null
         this.currentSessionId = null
-        this.primedSessionId = null
         this.emit({ type: 'Disconnected', data: { code: code ?? -1 } })
         // v1.0.3: a dead worker must never leave requests hanging - reject
         // every pending call so the UI fails fast instead of spinning until
@@ -1224,7 +1219,6 @@ export class AcpManager {
       this.process.kill()
       this.process = null
       this.currentSessionId = null
-      this.primedSessionId = null
       this._replaying.clear()
     }
     this.pending.forEach((p) => p.reject(new Error('ACP stopped')))
@@ -1239,20 +1233,6 @@ export class AcpManager {
    * touching the worker (single-owner boot, see acp:init). */
   announceReady(): void {
     this.emit({ type: 'InitializationComplete', data: { protocolVersion: 1 } })
-  }
-
-  /** v0.10.7: prime the boot session once per worker lifetime. The claim is
-   * taken synchronously so concurrent client boots cannot double-prime. */
-  async primeBootSession(cwd: string): Promise<void> {
-    if (this.primedSessionId !== null) return
-    this.primedSessionId = '' // claimed
-    try {
-      await this.newSession(cwd)
-      this.primedSessionId = this.currentSessionId
-    } catch (err) {
-      this.primedSessionId = null
-      throw err
-    }
   }
 
   isRemote(): boolean {

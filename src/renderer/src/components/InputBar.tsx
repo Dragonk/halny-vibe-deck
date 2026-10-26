@@ -566,23 +566,30 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
     if (pendingNewSession || sessionStarting || !currentSess?.acpSessionId) {
       // ---- First message on a draft session — create the ACP session ----
-      const rid = currentSess?.remoteId ?? null
+      // v1.0.7: no session is opened at boot anymore (the boot prime was
+      // removed) - sending a message with no session at all consciously
+      // creates the draft here instead.
+      let draft = currentSess
+      if (!draft) {
+        draft = useStore.getState().addSession(cwd || undefined)
+      }
+      const rid = draft.remoteId ?? null
       setPendingNewSession(false)
       setSessionStarting(true)
       setIsStarting(true)
       try {
         if (acpStatus === 'connected') {
           // Re-bind an empty draft to a fresh session with the chosen cwd
-          if (currentSess?.acpSessionId && currentSess.id) {
-            unlinkAcpSession(currentSess.id)
+          if (draft.acpSessionId && draft.id) {
+            unlinkAcpSession(draft.id)
           }
           // v0.10.2: hand the recorded config to the main process - it is
           // applied inside session/new, deterministically BEFORE the first
           // prompt (a mid-turn set_config_option hangs the CLI turn).
           const applyCfg = {
-            model: currentSess?.lastModel,
-            mode: currentSess?.lastMode,
-            thinking: currentSess?.lastThinking
+            model: draft.lastModel,
+            mode: draft.lastMode,
+            thinking: draft.lastThinking
           }
           const hasApplyCfg = !!(applyCfg.model || applyCfg.mode || applyCfg.thinking)
           // v0.7.0: remote drafts need their own worker alive first
@@ -618,7 +625,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       // an unaddressed prompt must never be sent (main now refuses it; it
       // used to fall back to the worker's last-active session and
       // contaminate it).
-      const draftId = currentSess?.id ?? null
+      const draftId = draft.id
       let linkedSess = draftId
         ? useStore.getState().sessions.find((s) => s.id === draftId) ?? null
         : useStore.getState().currentSession()
