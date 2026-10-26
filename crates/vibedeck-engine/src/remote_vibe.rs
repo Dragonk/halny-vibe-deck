@@ -91,6 +91,32 @@ pub fn get_remote_vibe_config(conn: &RemoteConnection, dir: &str) -> String {
     run_soft(conn, &cmd, 15_000)
 }
 
+/// Checked remote config.toml read (the Settings forms + raw tab over SSH):
+/// `Ok("")` when the file is missing, `Err` on transport or read failure.
+pub fn get_remote_vibe_config_checked(
+    conn: &RemoteConnection,
+    dir: &str,
+) -> Result<String, String> {
+    let d = dir_shell(dir);
+    let cmd = format!(
+        "if [ -f {d}/config.toml ]; then cat {d}/config.toml; else printf __VD_NO_CONFIG__; fi"
+    );
+    let r = ssh_run(conn, &cmd, 15_000, None);
+    if r.code != 0 {
+        let e = r.stderr.trim();
+        return Err(if e.is_empty() {
+            "remote config read failed".to_string()
+        } else {
+            e.to_string()
+        });
+    }
+    if r.stdout.trim() == "__VD_NO_CONFIG__" {
+        Ok(String::new())
+    } else {
+        Ok(r.stdout)
+    }
+}
+
 /// Validate + save raw remote config.toml (Nexus `saveRemoteRawConfig`):
 /// `None` on success, `Some(error)` on invalid TOML or a failed write.
 pub fn save_remote_raw_config(
@@ -144,6 +170,7 @@ fn to_remote_agent(a: AgentFile) -> RemoteAgentFile {
             .into_iter()
             .map(|(tool, permission)| ToolPermissionEntry { tool, permission })
             .collect(),
+        content: String::new(),
     }
 }
 
@@ -176,7 +203,9 @@ fn parse_remote_agent_blocks(out: &str) -> Vec<RemoteAgentFile> {
         let base = file.rsplit('/').next().unwrap_or(file);
         let stem = base.strip_suffix(".toml").unwrap_or(base);
         if let Some(a) = parse_agent_content(stem, body) {
-            agents.push(to_remote_agent(a));
+            let mut r = to_remote_agent(a);
+            r.content = body.trim_end().to_string();
+            agents.push(r);
         }
     }
     agents
@@ -260,6 +289,26 @@ pub fn save_remote_agent(
     let data = agent_file_toml(&from_remote_agent(name, agent));
     let d = dir_shell(dir);
     remote_write(conn, &format!("{d}/agents"), &format!("{d}/agents/{}", shq(&agent_file_name(name))), &data)
+}
+
+/// Save an agent profile from raw TOML (Settings raw editor over SSH): the
+/// content is validated first, then written verbatim.
+pub fn save_remote_agent_raw(
+    conn: &RemoteConnection,
+    dir: &str,
+    name: &str,
+    content: &str,
+) -> Result<(), String> {
+    if let Err(e) = validate_config_toml(content) {
+        return Err(e);
+    }
+    let d = dir_shell(dir);
+    remote_write(
+        conn,
+        &format!("{d}/agents"),
+        &format!("{d}/agents/{}", shq(&agent_file_name(name))),
+        content,
+    )
 }
 
 /// Delete an agent profile remotely (Nexus `deleteRemoteAgent`; rm errors

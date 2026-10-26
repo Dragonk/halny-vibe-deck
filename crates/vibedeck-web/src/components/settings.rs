@@ -81,12 +81,29 @@ impl SshDraft {
     }
 }
 
+/// Effective target of the CLI-scoped settings tabs (Nexus scope picker):
+/// agent (local or 📍 SSH connection) + target (global or project cwd).
+#[derive(Clone)]
+struct ScopeSel {
+    scope: String,
+    cwd: String,
+    conn: Option<vibedeck_core::snapshot::RemoteConnection>,
+}
+
 async fn reload_cfg(
     state: Signal<ClientState>,
     mut cfg: Signal<Option<VibeConfigData>>,
     mut err: Signal<String>,
+    sc: ScopeSel,
 ) {
-    match crate::vibeconfig::api_vibe_config(token(&state)).await {
+    match crate::vibeconfig::api_vibe_config(
+        token(&state),
+        sc.scope.clone(),
+        sc.cwd.clone(),
+        sc.conn.clone(),
+    )
+    .await
+    {
         Ok(d) => {
             err.set(String::new());
             cfg.set(Some(d));
@@ -98,10 +115,18 @@ async fn reload_cfg(
 async fn reload_files(
     state: Signal<ClientState>,
     kind: String,
-    scope: String,
+    sc: ScopeSel,
     mut files: Signal<Vec<FileCard>>,
 ) {
-    match crate::vibeconfig::api_list_vibe_files(token(&state), scope, kind).await {
+    match crate::vibeconfig::api_list_vibe_files(
+        token(&state),
+        sc.scope.clone(),
+        sc.cwd.clone(),
+        sc.conn.clone(),
+        kind,
+    )
+    .await
+    {
         Ok(f) => files.set(f),
         Err(_) => files.set(Vec::new()),
     }
@@ -151,11 +176,10 @@ fn files_panel(
     mut editor: Signal<String>,
     mut new_name: Signal<String>,
     mut saved: Signal<String>,
-    scope: Signal<String>,
+    sc: ScopeSel,
 ) -> Element {
     let list = files.read().clone();
     let sel = sel_path.read().clone();
-    let cur_scope = scope.read().clone();
     let rows: Vec<Element> = list
         .iter()
         .enumerate()
@@ -170,7 +194,7 @@ fn files_panel(
             let files2 = files;
             let mut sel_path2 = sel_path;
             let mut editor2 = editor;
-            let scope2 = scope;
+            let sc2 = sc.clone();
             let path = f.path.clone();
             let name = f.display_name.clone();
             let meta = f.meta.clone();
@@ -178,14 +202,19 @@ fn files_panel(
             let path_del = path.clone();
             let del = del_btn(move || {
                 let p = path_del.clone();
+                let sc2 = sc2.clone();
                 spawn(async move {
                     let _ = crate::vibeconfig::api_delete_vibe_file(
-                        token(&state2), scope2.read().clone(), p.clone(),
+                        token(&state2),
+                        sc2.scope.clone(),
+                        sc2.cwd.clone(),
+                        sc2.conn.clone(),
+                        p.clone(),
                     )
                     .await;
                     sel_path2.set(String::new());
                     editor2.set(String::new());
-                    reload_files(state2, kind.to_string(), scope2.read().clone(), files2).await;
+                    reload_files(state2, kind.to_string(), sc2, files2).await;
                     saved.set(String::new());
                 });
             });
@@ -212,49 +241,10 @@ fn files_panel(
         _ => "# new\n".to_string(),
     };
 
-    // Global/Project scope switch (Nexus scope pills)
-    let g_cls = if cur_scope == "global" {
-        "scope-pill active"
-    } else {
-        "scope-pill"
-    };
-    let p_cls = if cur_scope == "project" {
-        "scope-pill active"
-    } else {
-        "scope-pill"
-    };
-    let switch_scope = move |sc: &'static str| {
-        let state = state.clone();
-        let files = files.clone();
-        let mut sel_path = sel_path.clone();
-        let mut editor = editor.clone();
-        let mut scope = scope.clone();
-        let kind = kind;
-        move |_: dioxus::prelude::Event<dioxus::prelude::MouseData>| {
-            if scope.read().clone() == sc {
-                return;
-            }
-            scope.set(sc.to_string());
-            sel_path.set(String::new());
-            editor.set(String::new());
-            let state = state.clone();
-            let files = files.clone();
-            spawn(async move {
-                reload_files(state, kind.to_string(), sc.to_string(), files).await;
-            });
-        }
-    };
-    let on_global = switch_scope("global");
-    let on_project = switch_scope("project");
-
     rsx! {
         div { class: "settings-section",
             div { class: "settings-section-header",
                 div { class: "settings-section-title", "{tr(&lang, kind)}" }
-                div { class: "scope-switch",
-                    button { class: "{g_cls}", onclick: on_global, "{tr(&lang, \"scopeGlobal\")}" }
-                    button { class: "{p_cls}", onclick: on_project, "{tr(&lang, \"scopeProject\")}" }
-                }
             }
             div { class: "session-rows",
                 if rows.is_empty() {
@@ -280,23 +270,23 @@ fn files_panel(
                             let editor = editor.clone();
                             let files = files.clone();
                             let saved = saved.clone();
-                            let scope = scope.clone();
+                            let sc_oc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let sel = sel.clone();
                                 let editor = editor.clone();
                                 let files = files.clone();
                                 let mut saved = saved.clone();
-                                let scope = scope.clone();
+                                let sc = sc_oc.clone();
                                 async move {
                                     let res = crate::vibeconfig::api_save_vibe_file(
-                                        token(&state), scope.read().clone(), sel.clone(), editor.read().clone(),
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), sel.clone(), editor.read().clone(),
                                     )
                                     .await;
                                     match res {
                                         Ok(()) => {
                                             saved.set(String::new());
-                                            reload_files(state, kind.to_string(), scope.read().clone(), files).await;
+                                            reload_files(state, kind.to_string(), sc, files).await;
                                         }
                                         Err(e) => saved.set(e.to_string()),
                                     }
@@ -328,7 +318,7 @@ fn files_panel(
                         let saved = saved.clone();
                         let lang_oc = lang.clone();
                         let template_oc = template.clone();
-                        let scope_oc = scope.clone();
+                        let sc_oc = sc.clone();
                         move |_| {
                             let state = state.clone();
                             let mut new_name = new_name.clone();
@@ -336,7 +326,7 @@ fn files_panel(
                             let mut saved = saved.clone();
                             let lang = lang_oc.clone();
                             let template = template_oc.clone();
-                            let scope = scope_oc.clone();
+                            let sc = sc_oc.clone();
                             async move {
                                 let name = new_name.read().trim().to_string();
                                 if name.is_empty() {
@@ -349,14 +339,14 @@ fn files_panel(
                                     _ => format!("skills/{name}/SKILL.md"),
                                 };
                                 let res = crate::vibeconfig::api_save_vibe_file(
-                                    token(&state), scope.read().clone(), path.clone(), template.clone(),
-                                )
-                                .await;
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), path.clone(), template.clone(),
+                                    )
+                                    .await;
                                 match res {
                                     Ok(()) => {
                                         new_name.set(String::new());
                                         saved.set(String::new());
-                                        reload_files(state, kind.to_string(), scope.read().clone(), files).await;
+                                        reload_files(state, kind.to_string(), sc, files).await;
                                     }
                                     Err(e) => saved.set(e.to_string()),
                                 }
@@ -389,6 +379,11 @@ pub fn SettingsView() -> Element {
     let ssh_conns = s.snapshot.config.remote_connections.clone();
     let serve_url = format!("https://<host>:{remote_port}");
     let status = s.snapshot.status.clone();
+    let session_cwd = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i).map(|m| m.working_directory.clone()))
+        .unwrap_or_default();
     drop(s);
 
     // Local form state for the remote-control tab.
@@ -407,14 +402,13 @@ pub fn SettingsView() -> Element {
     let upd_rem = use_signal(Vec::<(String, RemCliRow)>::new);
 
     // Vibe CLI configuration state (loaded once, refetched after edits).
-    let mut cfg = use_signal(|| Option::<VibeConfigData>::None);
-    let mut cfg_err = use_signal(String::new);
-    let mut cfg_loaded = use_signal(|| false);
+    let cfg = use_signal(|| Option::<VibeConfigData>::None);
+    let cfg_err = use_signal(String::new);
     let mut tools_en = use_signal(String::new);
     let mut tools_dis = use_signal(String::new);
     let mut skills_en = use_signal(String::new);
     let mut skills_dis = use_signal(String::new);
-    let mut raw_toml = use_signal(String::new);
+    let raw_toml = use_signal(String::new);
     let list_saved = use_signal(String::new);
 
     // file-manager state per kind
@@ -424,7 +418,12 @@ pub fn SettingsView() -> Element {
     let editor = use_signal(String::new);
     let new_name = use_signal(String::new);
     let file_saved = use_signal(String::new);
-    let scope = use_signal(|| "global".to_string());
+    // Scope picker state (element 7; Nexus scopeAgent/scopeTarget): the
+    // agent select ("local" or a remote connection id) and the target
+    // ("global" or a project cwd).
+    let scope_agent = use_signal(|| "local".to_string());
+    let scope_target = use_signal(|| "global".to_string());
+    let scope_key = use_signal(String::new);
 
     // add-form state
     let mut p_name = use_signal(String::new);
@@ -441,17 +440,84 @@ pub fn SettingsView() -> Element {
     let mut c_args = use_signal(String::new);
     let c_api_key_env = use_signal(String::new);
 
-    if !*cfg_loaded.read() {
-        cfg_loaded.set(true);
+    // Effective scope from the agent + target selects (Nexus SettingsView):
+    // local global / local project / remote global / remote project. All
+    // CLI-scoped operations flow through `sc`; changing either select
+    // reloads the config and clears stale detail panels (v0.13.3).
+    let agent = scope_agent.read().clone();
+    let target = scope_target.read().clone();
+    let conn_sel: Option<vibedeck_core::snapshot::RemoteConnection> = if agent == "local" {
+        None
+    } else {
+        ssh_conns.iter().find(|c| c.id == agent).cloned()
+    };
+    let eff_scope = if target == "global" {
+        "global".to_string()
+    } else {
+        "project".to_string()
+    };
+    let eff_cwd = if target == "global" {
+        String::new()
+    } else {
+        target.clone()
+    };
+    let sc = ScopeSel {
+        scope: eff_scope.clone(),
+        cwd: eff_cwd.clone(),
+        conn: conn_sel.clone(),
+    };
+    let scope_path = if eff_scope == "project" {
+        match &conn_sel {
+            Some(c) => format!("📍 {}: {}/.vibe", c.name, eff_cwd),
+            None => format!("{}/.vibe", eff_cwd),
+        }
+    } else {
+        match &conn_sel {
+            Some(c) => format!("{}: ~/.vibe", c.name),
+            None => "~/.vibe".to_string(),
+        }
+    };
+    let sc_key = format!("{agent}|{target}");
+    if *scope_key.read() != sc_key {
+        let mut scope_key = scope_key.clone();
+        scope_key.set(sc_key.clone());
+        // Stale detail panel fix (v0.13.3): selections never survive a
+        // scope switch.
+        let mut sel_path = sel_path.clone();
+        let mut editor = editor.clone();
+        let mut new_name = new_name.clone();
+        sel_path.set(String::new());
+        editor.set(String::new());
+        new_name.set(String::new());
+        let mut files = files.clone();
+        let mut files_kind = files_kind.clone();
+        files.set(Vec::new());
+        files_kind.set(String::new());
         let st = state.clone();
+        let sc2 = sc.clone();
+        let mut tools_en = tools_en.clone();
+        let mut tools_dis = tools_dis.clone();
+        let mut skills_en = skills_en.clone();
+        let mut skills_dis = skills_dis.clone();
+        let mut raw_toml = raw_toml.clone();
+        let mut cfg = cfg.clone();
+        let mut cfg_err = cfg_err.clone();
         spawn(async move {
-            match crate::vibeconfig::api_vibe_config(token(&st)).await {
+            match crate::vibeconfig::api_vibe_config(
+                token(&st),
+                sc2.scope.clone(),
+                sc2.cwd.clone(),
+                sc2.conn.clone(),
+            )
+            .await
+            {
                 Ok(d) => {
                     tools_en.set(d.enabled_tools.join("\n"));
                     tools_dis.set(d.disabled_tools.join("\n"));
                     skills_en.set(d.enabled_skills.join("\n"));
                     skills_dis.set(d.disabled_skills.join("\n"));
                     raw_toml.set(d.raw_toml.clone());
+                    cfg_err.set(String::new());
                     cfg.set(Some(d));
                 }
                 Err(e) => cfg_err.set(e.to_string()),
@@ -465,13 +531,13 @@ pub fn SettingsView() -> Element {
     {
         files_kind.set(cur_tab.clone());
         let st = state.clone();
-        let sc = scope.read().clone();
+        let sc2 = sc.clone();
         let mut sel_path = sel_path.clone();
         let mut editor = editor.clone();
         sel_path.set(String::new());
         editor.set(String::new());
         spawn(async move {
-            reload_files(st, cur_tab, sc, files).await;
+            reload_files(st, cur_tab, sc2, files).await;
         });
     }
 
@@ -490,6 +556,61 @@ pub fn SettingsView() -> Element {
     } else {
         rsx! { div { class: "git-error", "{cfg_err.read()}" } }
     };
+
+    // Scope-picker options (Nexus SettingsView scopeAgent/scopeTarget): the
+    // agent select offers "local" plus every enabled connection; the target
+    // select offers "global" plus candidate project folders (session cwd +
+    // engine workdir locally, configured locations remotely).
+    let proj_opts: Vec<String> = if agent == "local" {
+        let mut v: Vec<String> = Vec::new();
+        if !session_cwd.is_empty() {
+            v.push(session_cwd.clone());
+        }
+        if !wd.is_empty() && !v.contains(&wd) {
+            v.push(wd.clone());
+        }
+        v
+    } else {
+        conn_sel
+            .as_ref()
+            .map(|c| {
+                c.locations
+                    .iter()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default()
+    };
+    let agent_opts: Vec<Element> = {
+        let local_lbl = tr(&lang, "settingsScopeLocal");
+        let mut v: Vec<Element> = vec![rsx! {
+            option { value: "local", selected: agent == "local", "{local_lbl}" }
+        }];
+        for c in ssh_conns.iter().filter(|c| c.enabled) {
+            let sel = c.id == agent;
+            let lbl = format!("📍 {}", c.name);
+            v.push(rsx! { option { value: "{c.id}", selected: sel, "{lbl}" } });
+        }
+        v
+    };
+    let target_opts: Vec<Element> = {
+        let global_lbl = tr(&lang, "settingsScopeGlobal");
+        let mut v: Vec<Element> = vec![rsx! {
+            option { value: "global", selected: target == "global", "{global_lbl}" }
+        }];
+        for p in proj_opts.iter() {
+            let sel = *p == target;
+            v.push(rsx! { option { value: "{p}", selected: sel, "{p}" } });
+        }
+        v
+    };
+    // Only the CLI-scoped tabs show the picker (Nexus shows it next to the
+    // title on those tabs).
+    let cli_scoped = matches!(
+        tab.read().as_str(),
+        "agents" | "mcp" | "tools" | "prompts" | "skills" | "providers" | "models" | "raw"
+    );
 
     let body_el = match tab.read().as_str() {
         "acp" => rsx! {
@@ -664,6 +785,7 @@ pub fn SettingsView() -> Element {
                     let state2 = state;
                     let cfg2 = cfg;
                     let cfg_err2 = cfg_err;
+                    let sc2 = sc.clone();
                     let name = p.name.clone();
                     cfg_row(
                         i.to_string(),
@@ -671,9 +793,17 @@ pub fn SettingsView() -> Element {
                         format!("{} · {}", p.api_base, if p.backend.is_empty() { "—".into() } else { p.backend.clone() }),
                         Some(del_btn(move || {
                             let name = name.clone();
+                            let sc2 = sc2.clone();
                             spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_provider(token(&state2), name).await;
-                                reload_cfg(state2, cfg2, cfg_err2).await;
+                                let _ = crate::vibeconfig::api_remove_provider(
+                                    token(&state2),
+                                    name,
+                                    sc2.scope.clone(),
+                                    sc2.cwd.clone(),
+                                    sc2.conn.clone(),
+                                )
+                                .await;
+                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
                             });
                         })),
                     )
@@ -698,10 +828,12 @@ pub fn SettingsView() -> Element {
                             let state = state.clone();
                             let cfg = cfg.clone();
                             let cfg_err = cfg_err.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
+                                let sc = sc.clone();
                                 async move {
                                     let row = crate::vibeconfig::ProviderRow {
                                         name: p_name.read().trim().to_string(),
@@ -713,12 +845,19 @@ pub fn SettingsView() -> Element {
                                     if row.name.is_empty() || row.api_base.is_empty() {
                                         return;
                                     }
-                                    let _ = crate::vibeconfig::api_upsert_provider(token(&state), row).await;
+                                    let _ = crate::vibeconfig::api_upsert_provider(
+                                        token(&state),
+                                        row,
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                    )
+                                    .await;
                                     p_name.set(String::new());
                                     p_base.set(String::new());
                                     p_key.set(String::new());
                                     p_backend.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -745,6 +884,7 @@ pub fn SettingsView() -> Element {
                     let state2 = state;
                     let cfg2 = cfg;
                     let cfg_err2 = cfg_err;
+                    let sc2 = sc.clone();
                     let name = m.name.clone();
                     let _alias = if m.alias.is_empty() { m.name.clone() } else { m.alias.clone() };
                     cfg_row(
@@ -753,9 +893,17 @@ pub fn SettingsView() -> Element {
                         format!("{} · alias: {} · {}", m.provider, m.alias, if m.enabled { tr(&lang, "enabled") } else { "—" }),
                         Some(del_btn(move || {
                             let name = name.clone();
+                            let sc2 = sc2.clone();
                             spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_model(token(&state2), name).await;
-                                reload_cfg(state2, cfg2, cfg_err2).await;
+                                let _ = crate::vibeconfig::api_remove_model(
+                                    token(&state2),
+                                    name,
+                                    sc2.scope.clone(),
+                                    sc2.cwd.clone(),
+                                    sc2.conn.clone(),
+                                )
+                                .await;
+                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
                             });
                         })),
                     )
@@ -777,10 +925,12 @@ pub fn SettingsView() -> Element {
                             let state = state.clone();
                             let cfg = cfg.clone();
                             let cfg_err = cfg_err.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
+                                let sc = sc.clone();
                                 async move {
                                     let row = crate::vibeconfig::ModelRow {
                                         name: m_name.read().trim().to_string(),
@@ -791,11 +941,18 @@ pub fn SettingsView() -> Element {
                                     if row.name.is_empty() || row.provider.is_empty() {
                                         return;
                                     }
-                                    let _ = crate::vibeconfig::api_upsert_model(token(&state), row).await;
+                                    let _ = crate::vibeconfig::api_upsert_model(
+                                        token(&state),
+                                        row,
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                    )
+                                    .await;
                                     m_name.set(String::new());
                                     m_provider.set(String::new());
                                     m_alias.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -825,13 +982,22 @@ pub fn SettingsView() -> Element {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
+                                let sc = sc.clone();
                                 move |e| {
                                     let state = state.clone();
                                     let cfg = cfg.clone();
                                     let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
                                     async move {
-                                        let _ = crate::vibeconfig::api_set_active_model(token(&state), e.value()).await;
-                                        reload_cfg(state, cfg, cfg_err).await;
+                                        let _ = crate::vibeconfig::api_set_active_model(
+                                            token(&state),
+                                            e.value(),
+                                            sc.scope.clone(),
+                                            sc.cwd.clone(),
+                                            sc.conn.clone(),
+                                        )
+                                        .await;
+                                        reload_cfg(state, cfg, cfg_err, sc).await;
                                     }
                                 }
                             },
@@ -855,6 +1021,7 @@ pub fn SettingsView() -> Element {
                     let state2 = state;
                     let cfg2 = cfg;
                     let cfg_err2 = cfg_err;
+                    let sc2 = sc.clone();
                     let name = s.name.clone();
                     cfg_row(
                         i.to_string(),
@@ -862,9 +1029,17 @@ pub fn SettingsView() -> Element {
                         format!("{} · {}", s.transport, if s.url.is_empty() { s.command.clone() } else { s.url.clone() }),
                         Some(del_btn(move || {
                             let name = name.clone();
+                            let sc2 = sc2.clone();
                             spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_mcp(token(&state2), name).await;
-                                reload_cfg(state2, cfg2, cfg_err2).await;
+                                let _ = crate::vibeconfig::api_remove_mcp(
+                                    token(&state2),
+                                    name,
+                                    sc2.scope.clone(),
+                                    sc2.cwd.clone(),
+                                    sc2.conn.clone(),
+                                )
+                                .await;
+                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
                             });
                         })),
                     )
@@ -895,10 +1070,12 @@ pub fn SettingsView() -> Element {
                             let state = state.clone();
                             let cfg = cfg.clone();
                             let cfg_err = cfg_err.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
+                                let sc = sc.clone();
                                 async move {
                                     let name = c_name.read().trim().to_string();
                                     if name.is_empty() {
@@ -911,12 +1088,19 @@ pub fn SettingsView() -> Element {
                                         command: c_command.read().trim().to_string(),
                                         args: c_args.read().trim().to_string(),
                                     };
-                                    let _ = crate::vibeconfig::api_upsert_mcp(token(&state), row).await;
+                                    let _ = crate::vibeconfig::api_upsert_mcp(
+                                        token(&state),
+                                        row,
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                    )
+                                    .await;
                                     c_name.set(String::new());
                                     c_url.set(String::new());
                                     c_command.set(String::new());
                                     c_args.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -966,22 +1150,24 @@ pub fn SettingsView() -> Element {
                             let cfg_err = cfg_err.clone();
                             let list_saved = list_saved.clone();
                             let lang_c = lang.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
                                 let mut list_saved = list_saved.clone();
                                 let lang = lang_c.clone();
+                                let sc = sc.clone();
                                 async move {
                                     let en = tools_en.read().split('\n').map(|s| s.to_string()).collect();
                                     let dis = tools_dis.read().split('\n').map(|s| s.to_string()).collect();
-                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_tools".into(), en).await;
-                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_tools".into(), dis).await;
+                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_tools".into(), en, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
+                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_tools".into(), dis, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
                                     match (r1, r2) {
                                         (Ok(()), Ok(())) => list_saved.set(String::new()),
                                         _ => list_saved.set(loc(&lang, "Nie udało się zapisać.", "Failed to save.")),
                                     }
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -1026,22 +1212,24 @@ pub fn SettingsView() -> Element {
                             let cfg_err = cfg_err.clone();
                             let list_saved = list_saved.clone();
                             let lang_c = lang.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
                                 let mut list_saved = list_saved.clone();
                                 let lang = lang_c.clone();
+                                let sc = sc.clone();
                                 async move {
                                     let en = skills_en.read().split('\n').map(|s| s.to_string()).collect();
                                     let dis = skills_dis.read().split('\n').map(|s| s.to_string()).collect();
-                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_skills".into(), en).await;
-                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_skills".into(), dis).await;
+                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_skills".into(), en, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
+                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_skills".into(), dis, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
                                     match (r1, r2) {
                                         (Ok(()), Ok(())) => list_saved.set(String::new()),
                                         _ => list_saved.set(loc(&lang, "Nie udało się zapisać.", "Failed to save.")),
                                     }
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -1051,21 +1239,12 @@ pub fn SettingsView() -> Element {
                         span { class: "field-hint", style: "margin-left:10px;", "{list_saved.read()}" }
                     }
                 }
-                {files_panel(lang.clone(), state.clone(), "skills", files, sel_path, editor, new_name, file_saved, scope)}
+                {files_panel(lang.clone(), state.clone(), "skills", files, sel_path, editor, new_name, file_saved, sc.clone())}
                 {err_el}
             }
         },
-        "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved, scope),
-        "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved, scope),
-        "sandbox" => rsx! {
-            div { class: "settings-section",
-                div { class: "sandbox-planned-card",
-                    span { class: "sandbox-planned-badge", "{tr(&lang, \"sandboxPlannedBadge\")}" }
-                    h3 { class: "sandbox-planned-title", "{tr(&lang, \"sandbox\")}" }
-                    p { class: "field-hint", "{tr(&lang, \"sandboxPlannedDesc\")}" }
-                }
-            }
-        },
+        "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved, sc.clone()),
+        "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved, sc.clone()),
         "raw" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
@@ -1086,22 +1265,25 @@ pub fn SettingsView() -> Element {
                             let cfg_err = cfg_err.clone();
                             let list_saved = list_saved.clone();
                             let lang_c = lang.clone();
+                            let sc = sc.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
                                 let mut list_saved = list_saved.clone();
                                 let _lang = lang_c.clone();
+                                let sc = sc.clone();
                                 async move {
                                     match crate::vibeconfig::api_save_vibe_config_raw(
                                         token(&state), raw_toml.read().clone(),
+                                        sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
                                     )
                                     .await
                                     {
                                         Ok(()) => list_saved.set(String::new()),
                                         Err(e) => list_saved.set(e.to_string()),
                                     }
-                                    reload_cfg(state, cfg, cfg_err).await;
+                                    reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
@@ -1479,12 +1661,38 @@ pub fn SettingsView() -> Element {
             div { class: "settings-header",
                 div { class: "settings-title-row",
                     h2 { class: "settings-title", "{tr(&lang, \"settings\")}" }
+                    if cli_scoped {
+                        div { class: "scope-switch",
+                            select {
+                                class: "scope-select",
+                                value: "{agent}",
+                                onchange: move |e| {
+                                    let mut scope_agent = scope_agent.clone();
+                                    let mut scope_target = scope_target.clone();
+                                    scope_agent.set(e.value());
+                                    // Reset the target when the agent changes so a
+                                    // stale remote project folder cannot leak in.
+                                    scope_target.set("global".to_string());
+                                },
+                                {agent_opts.iter().cloned()}
+                            }
+                            select {
+                                class: "scope-select",
+                                value: "{target}",
+                                onchange: move |e| {
+                                    let mut scope_target = scope_target.clone();
+                                    scope_target.set(e.value());
+                                },
+                                {target_opts.iter().cloned()}
+                            }
+                            span { class: "scope-path", "{scope_path}" }
+                        }
+                    }
                 }
             }
             div { class: "settings-tabs scope-switch",
                 button { class: "{tab_cls(\"general\")}", onclick: move |_| tab.set("general".into()), "{tr(&lang, \"general\")}" }
                 button { class: "{tab_cls(\"acp\")}", onclick: move |_| tab.set("acp".into()), "ACP" }
-                button { class: "{tab_cls(\"sandbox\")}", onclick: move |_| tab.set("sandbox".into()), "{tr(&lang, \"sandbox\")}" }
                 button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne\", \"Remote\")}" }
                 button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
                 button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }

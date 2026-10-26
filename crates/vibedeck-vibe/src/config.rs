@@ -260,6 +260,26 @@ impl VibeConfigFile {
         })
     }
 
+    /// Build a config from raw TOML text (remote round-trip): unparseable
+    /// content yields an empty table instead of an error.
+    pub fn from_raw(content: &str) -> Self {
+        let table: Table = content
+            .parse::<Value>()
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or_default();
+        Self {
+            path: PathBuf::new(),
+            table,
+            dirty: false,
+        }
+    }
+
+    /// Render the table back to TOML text (remote round-trip).
+    pub fn render(&self) -> String {
+        toml::to_string_pretty(&self.table).unwrap_or_default()
+    }
+
     pub fn save(&mut self) -> Result<()> {
         let content = toml::to_string_pretty(&self.table)?;
         if let Some(parent) = self.path.parent() {
@@ -811,6 +831,34 @@ fn mcp_to_table(s: &McpServer) -> Table {
 #[cfg(test)]
 mod tests {
     use super::resolve_compact_threshold;
+
+    #[test]
+    fn from_raw_render_roundtrip() {
+        let raw = "active_model = \"mistral-medium-3.5\"\n[settings]\ntheme = \"dark\"\n";
+        let cfg = super::VibeConfigFile::from_raw(raw);
+        assert_eq!(
+            cfg.get_str("active_model").as_deref(),
+            Some("mistral-medium-3.5")
+        );
+        let rendered = cfg.render();
+        let cfg2 = super::VibeConfigFile::from_raw(&rendered);
+        assert_eq!(
+            cfg2.get_str("active_model").as_deref(),
+            Some("mistral-medium-3.5")
+        );
+        assert_eq!(
+            cfg2.get_str("theme").or_else(|| cfg2
+                .table
+                .get("settings")
+                .and_then(|s| s.get("theme"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()))
+                .as_deref(),
+            Some("dark")
+        );
+        // Unparseable raw content yields an empty config, not an error.
+        assert!(super::VibeConfigFile::from_raw("not toml {{{").table.is_empty());
+    }
 
     #[test]
     fn compact_threshold_resolution() {

@@ -628,12 +628,16 @@ pub fn InputBar() -> Element {
                                         let sk = crate::vibeconfig::api_list_vibe_files(
                                             token(&state),
                                             "global".to_string(),
+                                            String::new(),
+                                            None,
                                             "skills".to_string(),
                                         )
                                         .await;
                                         let pr = crate::vibeconfig::api_list_vibe_files(
                                             token(&state),
                                             "global".to_string(),
+                                            String::new(),
+                                            None,
                                             "prompts".to_string(),
                                         )
                                         .await;

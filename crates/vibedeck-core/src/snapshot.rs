@@ -346,6 +346,9 @@ pub struct RemoteAgentFile {
     pub disabled_tools: Vec<String>,
     #[serde(default)]
     pub tool_permissions: Vec<ToolPermissionEntry>,
+    /// Raw TOML of the agent file (Settings raw editor over SSH).
+    #[serde(default)]
+    pub content: String,
 }
 
 /// Remote prompt (`<dir>/prompts/<name>.md` or `.txt`).

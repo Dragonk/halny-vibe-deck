@@ -6913,3 +6913,26 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     color: var(--text-dim);
     margin-bottom: 4px;
 }
+
+/* Element 7 (stage 7A): settings scope picker (Nexus globals.css
+   .scope-select) - agent + target selects next to the settings title. */
+.scope-switch .scope-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    max-width: 280px;
+}
+.scope-switch .scope-select:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+@media (max-width: 768px) {
+    .scope-switch .scope-select {
+        min-height: 44px;
+        font-size: 16px;
+        max-width: 46vw;
+    }
+}
