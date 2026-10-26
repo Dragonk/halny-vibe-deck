@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.5 — 2026-10-26
+
+### Fixed
+- **App/CLI updates no longer abort a running turn.** `updates:update-cli`
+  killed every vibe worker up front (the binaries are swapped on disk) and
+  `updates:update-app` quits or taskkills the whole process tree — neither
+  checked whether a turn was running, so an update click mid-turn silently
+  aborted the session. Both handlers now refuse with a clear error while any
+  local or remote worker has a turn in flight.
+
 ## 1.0.4 — 2026-10-26
 
 ### Fixed
