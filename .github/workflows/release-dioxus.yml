@@ -100,10 +100,15 @@ jobs:
     needs: [tag, test]
     env:
       CARGO_TARGET_DIR: /home/runner/vd-target
-      # Embed the release tag in the binary so the in-app updater can tell
-      # releases apart (option_env!("MISTRALDECK_BUILD_VERSION") in the engine).
-      MISTRALDECK_BUILD_VERSION: ${{ needs.tag.outputs.tag }}
     steps:
+      - name: Export build version (release tag) to env
+        # Embed the release tag in the binary so the in-app updater can tell
+        # releases apart (option_env!("MISTRALDECK_BUILD_VERSION") in the engine).
+        # Step-level: job-level env referencing needs.tag.outputs made every
+        # non-release push fail at workflow compile time (outputs of a skipped
+        # needed job are not addressable).
+        run: echo "MISTRALDECK_BUILD_VERSION=${{ needs.tag.outputs.tag }}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
