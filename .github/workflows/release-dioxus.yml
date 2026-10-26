@@ -34,7 +34,7 @@ jobs:
     if: >-
       startsWith(github.ref, 'refs/tags/') ||
       contains(github.event.head_commit.message, '[release v') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+      (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
