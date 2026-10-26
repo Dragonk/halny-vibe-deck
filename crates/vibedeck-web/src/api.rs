@@ -366,6 +366,273 @@ pub async fn api_upgrade_remote_cli(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// Raw remote config.toml content ("" when missing), global or project scope.
+#[server]
+pub async fn api_get_remote_vibe_config(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+) -> Result<String, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::get_remote_vibe_config(&conn, &dir))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Validate + save raw remote config.toml; `None` on success.
+#[server]
+pub async fn api_save_remote_raw_config(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    content: String,
+) -> Result<Option<String>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::save_remote_raw_config(&conn, &dir, &content))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// The remote `~/.vibe` dir.
+#[server]
+pub async fn api_get_remote_vibe_dir(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+) -> Result<String, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::get_remote_vibe_dir(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Global agents of a remote host.
+#[server]
+pub async fn api_get_remote_agents(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteAgentFile>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::get_remote_agents(&conn, &dir))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Project agents (`<cwd>/.vibe/agents`) on a remote host.
+#[server]
+pub async fn api_list_remote_project_agents(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    cwd: String,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteAgentFile>, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::list_remote_project_agents(&conn, &cwd))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Expose one remote project agent globally on the remote host.
+#[server]
+pub async fn api_expose_remote_project_agent(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    cwd: String,
+    name: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let res = tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::expose_remote_project_agent(&conn, &cwd, &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    res.map_err(|e| ServerFnError::new(e))
+}
+
+/// Expose all remote project agents globally on the remote host.
+#[server]
+pub async fn api_expose_remote_project_agents(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    cwd: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let res = tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::expose_remote_project_agents(&conn, &cwd))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    res.map_err(|e| ServerFnError::new(e))
+}
+
+/// Save an agent profile remotely.
+#[server]
+pub async fn api_save_remote_agent(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+    agent: vibedeck_core::snapshot::RemoteAgentFile,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    let res = tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::save_remote_agent(&conn, &dir, &name, &agent))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    res.map_err(|e| ServerFnError::new(e))
+}
+
+/// Delete an agent profile remotely.
+#[server]
+pub async fn api_delete_remote_agent(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::delete_remote_agent(&conn, &dir, &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Global prompts of a remote host.
+#[server]
+pub async fn api_get_remote_prompts(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+) -> Result<Vec<vibedeck_core::snapshot::RemotePromptFile>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::get_remote_prompts(&conn, &dir))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Save a prompt remotely.
+#[server]
+pub async fn api_save_remote_prompt(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+    content: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    let res = tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::save_remote_prompt(&conn, &dir, &name, &content))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    res.map_err(|e| ServerFnError::new(e))
+}
+
+/// Delete a prompt remotely.
+#[server]
+pub async fn api_delete_remote_prompt(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::delete_remote_prompt(&conn, &dir, &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Remote config file tree for the raw tab.
+#[server]
+pub async fn api_list_remote_config_files(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteConfigFileEntry>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::list_remote_config_files(&conn, &dir))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Remote skills of a scope (tree + SKILL.md contents).
+#[server]
+pub async fn api_get_remote_skills(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+) -> Result<Vec<vibedeck_core::snapshot::RemoteSkill>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::get_remote_skills(&conn, &dir))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Create a remote skill; `None` on success.
+#[server]
+pub async fn api_create_remote_skill(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+) -> Result<Option<String>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::create_remote_skill(&conn, &dir, &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Delete a remote skill; `None` on success.
+#[server]
+pub async fn api_delete_remote_skill(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+) -> Result<Option<String>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::delete_remote_skill(&conn, &dir, &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Write a file inside a remote skill; `None` on success.
+#[server]
+pub async fn api_write_remote_skill_file(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+    rel_path: String,
+    content: String,
+) -> Result<Option<String>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::write_remote_skill_file(&conn, &dir, &name, &rel_path, &content))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Delete a file inside a remote skill; `None` on success.
+#[server]
+pub async fn api_delete_remote_skill_file(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+    dir: Option<String>,
+    name: String,
+    rel_path: String,
+) -> Result<Option<String>, ServerFnError> {
+    check(&token)?;
+    let dir = vibedeck_engine::remote_vibe::scope_dir(dir.as_deref());
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote_vibe::delete_remote_skill_file(&conn, &dir, &name, &rel_path))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+
 /// CLI sessions discovered on a remote host (JSON-RPC over ssh).
 #[server]
 pub async fn api_remote_sessions(

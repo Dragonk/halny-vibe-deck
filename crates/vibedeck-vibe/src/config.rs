@@ -14,6 +14,16 @@ use crate::vibe_home;
 
 /// Per-million-token prices of a `[[models]]` entry (USD / Mtok),
 /// used for the live cost estimate in the Statistics view.
+/// Validate raw TOML text for config.toml (Nexus `saveRemoteRawConfig`
+/// check): must parse and be a table; `Err` carries the parser message.
+pub fn validate_config_toml(content: &str) -> Result<(), String> {
+    let value: Value = toml::from_str(content).map_err(|e| e.to_string())?;
+    if value.as_table().is_none() {
+        return Err("config.toml must be a TOML table".into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ModelPrice {
     pub name: String,

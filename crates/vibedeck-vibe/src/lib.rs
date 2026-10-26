@@ -9,8 +9,8 @@ pub mod config;
 pub mod files;
 pub mod stats;
 
-pub use config::{estimate_cost, model_prices, McpServer, ModelConfig, ModelPrice, Provider, VibeConfigFile};
-pub use files::{AgentFile, PromptFile, SkillFile};
+pub use config::{estimate_cost, model_prices, validate_config_toml, McpServer, ModelConfig, ModelPrice, Provider, VibeConfigFile};
+pub use files::{agent_file_toml, parse_agent_content, AgentFile, PromptFile, SkillFile};
 pub use stats::{
     load_full_session_preview, load_session_last_config, load_session_preview, AggregateStats,
     PreviewMessage, PreviewPlanEntry, PreviewToolCall, PreviewUsage, SessionLastConfig,

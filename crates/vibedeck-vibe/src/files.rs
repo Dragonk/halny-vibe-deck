@@ -72,60 +72,7 @@ impl AgentFile {
     pub fn save(&self) -> Result<()> {
         let dir = agents_dir();
         std::fs::create_dir_all(&dir)?;
-        let mut table = Table::new();
-        if let Some(model) = &self.active_model {
-            table.insert("active_model".into(), Value::from(model.as_str()));
-        }
-        if let Some(prompt) = &self.system_prompt_id {
-            table.insert("system_prompt_id".into(), Value::from(prompt.as_str()));
-        }
-        // Empty values must never be written (the CLI rejects empty
-        // strings on these fields — Nexus `agentFileData` rule).
-        if let Some(display_name) = &self.display_name {
-            if !display_name.is_empty() {
-                table.insert("display_name".into(), Value::from(display_name.as_str()));
-            }
-        }
-        if let Some(description) = &self.description {
-            if !description.is_empty() {
-                table.insert("description".into(), Value::from(description.as_str()));
-            }
-        }
-        if !self.enabled_tools.is_empty() {
-            table.insert(
-                "enabled_tools".into(),
-                Value::Array(
-                    self.enabled_tools
-                        .iter()
-                        .map(|t| Value::from(t.as_str()))
-                        .collect(),
-                ),
-            );
-        }
-        if !self.disabled_tools.is_empty() {
-            table.insert(
-                "disabled_tools".into(),
-                Value::Array(
-                    self.disabled_tools
-                        .iter()
-                        .map(|t| Value::from(t.as_str()))
-                        .collect(),
-                ),
-            );
-        }
-        if !self.tool_permissions.is_empty() {
-            let mut tools = Table::new();
-            for (tool, permission) in &self.tool_permissions {
-                let mut t = Table::new();
-                t.insert("permission".into(), Value::from(permission.as_str()));
-                tools.insert(tool.clone(), Value::Table(t));
-            }
-            table.insert("tools".into(), Value::Table(tools));
-        }
-        // `agent_type` is written only for subagents (CLI convention).
-        if self.agent_type.as_deref() == Some("subagent") {
-            table.insert("agent_type".into(), Value::from("subagent"));
-        }
+        let table = agent_file_data(self);
         let path = dir.join(format!("{}.toml", self.name));
         std::fs::write(&path, toml::to_string_pretty(&table)?)
             .with_context(|| format!("failed to write {}", path.display()))?;
@@ -140,6 +87,77 @@ impl AgentFile {
         }
         Ok(())
     }
+}
+
+/// TOML table for an agent profile (Nexus `agentFileData`): shared by the
+/// local `AgentFile::save` and the remote agent writer. Empty values are
+/// never written (the CLI rejects empty strings on these fields).
+pub fn agent_file_data(a: &AgentFile) -> Table {
+    let mut table = Table::new();
+    if let Some(model) = &a.active_model {
+        table.insert("active_model".into(), Value::from(model.as_str()));
+    }
+    if let Some(prompt) = &a.system_prompt_id {
+        table.insert("system_prompt_id".into(), Value::from(prompt.as_str()));
+    }
+    if let Some(display_name) = &a.display_name {
+        if !display_name.is_empty() {
+            table.insert("display_name".into(), Value::from(display_name.as_str()));
+        }
+    }
+    if let Some(description) = &a.description {
+        if !description.is_empty() {
+            table.insert("description".into(), Value::from(description.as_str()));
+        }
+    }
+    if !a.enabled_tools.is_empty() {
+        table.insert(
+            "enabled_tools".into(),
+            Value::Array(
+                a.enabled_tools
+                    .iter()
+                    .map(|t| Value::from(t.as_str()))
+                    .collect(),
+            ),
+        );
+    }
+    if !a.disabled_tools.is_empty() {
+        table.insert(
+            "disabled_tools".into(),
+            Value::Array(
+                a.disabled_tools
+                    .iter()
+                    .map(|t| Value::from(t.as_str()))
+                    .collect(),
+            ),
+        );
+    }
+    if !a.tool_permissions.is_empty() {
+        let mut tools = Table::new();
+        for (tool, permission) in &a.tool_permissions {
+            let mut t = Table::new();
+            t.insert("permission".into(), Value::from(permission.as_str()));
+            tools.insert(tool.clone(), Value::Table(t));
+        }
+        table.insert("tools".into(), Value::Table(tools));
+    }
+    // `agent_type` is written only for subagents (CLI convention).
+    if a.agent_type.as_deref() == Some("subagent") {
+        table.insert("agent_type".into(), Value::from("subagent"));
+    }
+    table
+}
+
+/// Serialized agent profile TOML (remote writer, Nexus `stringify(data)`).
+pub fn agent_file_toml(a: &AgentFile) -> String {
+    toml::to_string_pretty(&agent_file_data(a)).unwrap_or_default()
+}
+
+/// Parse one agent profile body (remote `@@@F` blocks); `None` on invalid
+/// TOML (the block is skipped).
+pub fn parse_agent_content(name: &str, content: &str) -> Option<AgentFile> {
+    let table: Table = content.parse().ok()?;
+    Some(parse_agent(name, &table))
 }
 
 fn parse_agent(name: &str, table: &Table) -> AgentFile {

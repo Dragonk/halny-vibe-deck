@@ -271,6 +271,83 @@ pub struct CliUpgradeResult {
     pub error: Option<String>,
 }
 
+/// A `(tool, permission)` pair from a `[tools.<name>]` block of a remote
+/// agent profile (Nexus `VibeAgentFileConfig.tools`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ToolPermissionEntry {
+    #[serde(default)]
+    pub tool: String,
+    #[serde(default)]
+    pub permission: String,
+}
+
+/// Remote agent profile (Nexus `VibeAgentFileConfig`), parsed from
+/// `<dir>/agents/<name>.toml` on the remote host.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteAgentFile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub active_model: Option<String>,
+    #[serde(default)]
+    pub system_prompt_id: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub enabled_tools: Vec<String>,
+    #[serde(default)]
+    pub disabled_tools: Vec<String>,
+    #[serde(default)]
+    pub tool_permissions: Vec<ToolPermissionEntry>,
+}
+
+/// Remote prompt (`<dir>/prompts/<name>.md` or `.txt`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemotePromptFile {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub content: String,
+}
+
+/// One file of the remote raw-config tree (Nexus `listConfigFiles` entry).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteConfigFileEntry {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub full: String,
+}
+
+/// One file/dir inside a remote skill (Nexus `VibeSkill.files` entry).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteSkillFileEntry {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub full: String,
+    #[serde(default)]
+    pub is_dir: bool,
+}
+
+/// Remote skill (Nexus `VibeSkill`): `<dir>/skills/<name>/SKILL.md` plus
+/// the file tree of the skill dir.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RemoteSkill {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub dir: String,
+    #[serde(default)]
+    pub files: Vec<RemoteSkillFileEntry>,
+}
+
 /// UI preferences mirrored from the engine config (subset shown to clients).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UiConfig {
