@@ -641,9 +641,14 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         setIsStarting(true)
         setAcpStatus('connecting')
         try {
-          // start() creates the session with the right cwd; the draft re-binding
-          // logic in App keeps the current local session attached to it.
-          await window.api.acp.start(config.acpPath, sessionWd)
+          // v0.13.7: revive the worker WITHOUT priming a session. acp:start
+          // always created a fresh ACP session here, and its SessionInitialized
+          // then spawned a new "Session N" draft and hijacked the chat into an
+          // empty session - the conversation split across two sidebar entries.
+          // ensureWorker only boots the process; the prompt below either reaches
+          // the in-memory session or fails with "Session not found", which the
+          // sessionExpired branch resumes from disk in the SAME session.
+          await window.api.acp.ensureWorker(config.acpPath, sessionWd)
         } catch (err) {
           setAcpStatus('error')
           setAcpError((err as Error).message)

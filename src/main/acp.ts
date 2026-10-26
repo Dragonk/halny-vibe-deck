@@ -596,6 +596,10 @@ export class AcpManager {
     // snapshot matters, messages carry no plan content of their own.
     let plan: PlanEntry[] | undefined
     let currentAi: AcpHistoryMessage | null = null
+    // v0.13.7: messageId of the text inside currentAi. Replay splits agent
+    // segments on messageId change exactly like the live stream does -
+    // previously the whole turn between user messages merged into one bubble.
+    let currentAiMid: string | null = null
     // v0.10.2: some CLI replays resend entries as the full accumulated text;
     // slice off the already-appended prefix instead of duplicating it.
     const msgSent = new Map<string, string>()
@@ -642,19 +646,31 @@ export class AcpManager {
         if (text) {
           messages.push({ role: 'user', content: text })
           currentAi = null
+          currentAiMid = null
         }
       } else if (kind === 'agent_message_chunk') {
         const raw = this.contentText(update.content) || this.contentText(update.chunk)
         const mid = (update.messageId as string | undefined) ?? 'm'
         const text = raw ? dedup(msgSent, mid, raw) : ''
         if (text) {
+          // v0.13.7: a new messageId starts a new agent message, matching the
+          // live stream. The 'm' fallback (CLI without messageIds) never
+          // changes, so old replays keep the merged single-message shape.
+          if (currentAi && currentAiMid !== null && mid !== currentAiMid) currentAi = null
           ensureAi().content += text
+          currentAiMid = mid
         }
       } else if (kind === 'agent_thought_chunk') {
         const raw = this.contentText(update.content) || this.contentText(update.chunk)
         const bid = (update.messageId as string | undefined) ?? 'thinking'
         const text = raw ? dedup(thoughtSent, bid, raw) : ''
         if (text) {
+          // v0.13.7: reasoning that arrives after a streamed text belongs to
+          // the next segment - close the current one before attaching it.
+          if (currentAiMid !== null) {
+            currentAi = null
+            currentAiMid = null
+          }
           const ai = ensureAi()
           const blocks = (ai.thinking ??= [])
           const last = blocks[blocks.length - 1]

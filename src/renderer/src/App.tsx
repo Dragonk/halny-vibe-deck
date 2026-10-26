@@ -353,6 +353,11 @@ export default function App(): React.JSX.Element {
           // text streams, all thinking blocks of this message are done.
           store.finalizeAllThinking(localId, state.msgId)
           store.appendChunk(localId, state.msgId, text)
+          // v0.13.7: remember which messageId this message carries. The split
+          // check above compares against it, but it was never assigned here, so
+          // once thinking or a tool call created the state first (acpMsgId null)
+          // EVERY intermediate text of the turn merged into one giant bubble.
+          state.acpMsgId = acpMsgId ?? state.acpMsgId
           break
         }
 
@@ -365,6 +370,14 @@ export default function App(): React.JSX.Element {
           if (!localId) break
           if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
           let state = streamingState.current.get(localId)
+          // v0.13.7: reasoning that arrives after a streamed text segment opens
+          // the NEXT agent message - finalize the current one so the thought
+          // block lands above its own text, not glued under the previous text.
+          if (state && state.acpMsgId !== null) {
+            store.finalizeAiMessage(localId, state.msgId)
+            streamingState.current.delete(localId)
+            state = undefined
+          }
           if (!state) {
             const msgId = store.startAiMessage(localId)
             state = { msgId, thinkingBlockId: null, acpMsgId: null }
