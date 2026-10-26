@@ -78,6 +78,14 @@ async function boot(): Promise<void> {
   if (w.__NEXUS_WEB__ && 'serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register('/sw.js')
+      // v1.0.10: when a new service worker takes over (app update), reload
+      // once so the phone never keeps running the previous bundle.
+      let reloaded = false
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (reloaded) return
+        reloaded = true
+        window.location.reload()
+      })
     } catch (err) {
       console.warn('[renderer] service worker registration failed:', err)
     }

@@ -115,6 +115,9 @@ export async function remoteWriteBinary(
   base64: string,
 ): Promise<{ error: string | null }> {
   try {
+    // v1.0.10: ensure the parent directory exists (the attachment dir may
+    // not exist on a fresh remote boot - the write failed silently).
+    await sshRun(conn, "mkdir -p " + shq(filePath.replace(/[^\\/]*$/, "")), 15000);
     const res = await sshRun(conn, "base64 -d > " + shq(filePath), 60000, base64);
     if (res.code !== 0) return { error: res.stderr || "Write failed" };
     return { error: null };

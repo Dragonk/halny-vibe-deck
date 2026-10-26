@@ -518,6 +518,39 @@ export default function App(): React.JSX.Element {
           break
         }
 
+        case 'UserMessage': {
+          // v1.0.10: a prompt sent from ANY client (desktop, another
+          // browser, the phone) appears in every client. The sending
+          // client added it optimistically with the SAME id - recognized
+          // here and skipped; everyone else inserts it fresh.
+          const msgId = d.id as string
+          const acpId = d.sessionId as string
+          const st = useStore.getState()
+          const sess = st.sessions.find((s) => s.acpSessionId === acpId)
+          if (!sess || !msgId) break
+          if (sess.messages.some((m) => m.id === msgId)) break
+          const msg = {
+            id: msgId,
+            sender: 'user' as const,
+            content: (d.text as string) ?? '',
+            isComplete: true,
+            timestamp: Date.now(),
+            ...((d.attachments as Array<{ path: string; isDir: boolean; content: string }> | undefined)?.length
+              ? { attachments: d.attachments as Array<{ path: string; isDir: boolean; content: string }> }
+              : {}),
+          }
+          st.updateSession(sess.id, {
+            messages: [...sess.messages, msg],
+            lastActive: Date.now(),
+            updatedAt: Date.now(),
+            name:
+              sess.messages.length === 0
+                ? String(d.text ?? '').slice(0, 40) + (String(d.text ?? '').length > 40 ? '…' : '')
+                : sess.name,
+          })
+          break
+        }
+
         case 'ToolApprovalRequest': {
           const requestId = d.requestId as string
           const method = d.method as string

@@ -147,8 +147,8 @@ function buildApi(): AppAPI {
         invoke('acp:new-session', [cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
       loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
         invoke('acp:load-session', [sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
-      sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>): Promise<void> =>
-        invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined, images ?? []]).then(() => undefined),
+      sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>, userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }): Promise<void> =>
+        invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined, images ?? [], userMsg ?? undefined]).then(() => undefined),
       cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
         invoke('acp:cancel-session', [acpSessionId, remoteId ?? undefined]).then(() => undefined),
       setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>

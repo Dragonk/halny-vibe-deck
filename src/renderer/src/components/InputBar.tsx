@@ -686,8 +686,12 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       // switched sessions during the (rare) link wait, append to the draft
       // directly so the text can never land in the chat being viewed.
       const storeNow = useStore.getState()
+      // v1.0.10: deterministic user-message id - the main process echoes it
+      // to every client, the echo is recognised by id (no duplicates).
+      const userMsgId = crypto.randomUUID()
+      const userMsgPayload = { id: userMsgId, text: textToSend, attachments: (attachments ?? []).map((a) => ({ path: a.path, isDir: a.isDir })) }
       if (storeNow.currentSessionId === linkedSess.id) {
-        addUserMessage(textToSend, attachments)
+        addUserMessage(textToSend, attachments, userMsgId)
       } else {
         const orphanMsg = {
           id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
@@ -709,7 +713,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       }
       useStore.getState().markSessionBusy(linkedSess.id)
       try {
-        await window.api.acp.sendPrompt(expandedText, linkedSess.acpSessionId, rid ?? undefined, promptImages)
+        await window.api.acp.sendPrompt(expandedText, linkedSess.acpSessionId, rid ?? undefined, promptImages, userMsgPayload)
       } catch (err) {
         if (linkedSess?.id) useStore.getState().markSessionIdle(linkedSess.id)
         setAcpError((err as Error).message)
@@ -773,13 +777,17 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       return
     }
 
-    addUserMessage(textToSend, attachments)
+    // v1.0.10: deterministic user-message id shared with the main-process
+    // echo (other clients get the message via the UserMessage event).
+    const userMsgId = crypto.randomUUID()
+    const userMsgPayload = { id: userMsgId, text: textToSend, attachments: (attachments ?? []).map((a) => ({ path: a.path, isDir: a.isDir })) }
+    addUserMessage(textToSend, attachments, userMsgId)
     useStore.getState().markSessionBusy(currentSess.id)
     const promptText = currentSess.contextSummary
       ? `${currentSess.contextSummary}\n\nUser: ${expandedText}`
       : expandedText
     try {
-      await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages)
+      await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages, userMsgPayload)
     } catch (err) {
       const errMsg = (err as Error).message
       // Session not in ACP memory (e.g. app restarted) — load it from disk first
@@ -820,10 +828,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               const alreadyThere = !!sessNow && sessNow.messages.some(
                 (m) => m.sender === 'user' && m.content === textToSend,
               )
-              if (!alreadyThere) stAfter.addUserMessage(textToSend, attachments)
+              if (!alreadyThere) stAfter.addUserMessage(textToSend, attachments, userMsgId)
             }
             useStore.getState().markSessionBusy(currentSess.id)
-            await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages)
+            await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages, userMsgPayload)
           } catch (loadErr) {
             useStore.getState().setPendingLoadSessionId(null)
             // v0.13.11: never fall back to a new session here. The old

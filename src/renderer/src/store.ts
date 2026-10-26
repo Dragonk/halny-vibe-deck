@@ -247,7 +247,7 @@ interface AppStore {
   currentSessionRemoteId: () => string | undefined;
 
   // Actions
-  addUserMessage: (text: string, attachments?: { path: string; isDir: boolean; content: string }[]) => Message;
+  addUserMessage: (text: string, attachments?: { path: string; isDir: boolean; content: string }[], id?: string) => Message;
   startAiMessage: (sessionId: string) => string;
   appendChunk: (sessionId: string, messageId: string, chunk: string) => void;
   finalizeAiMessage: (sessionId: string, messageId: string) => void;
@@ -1284,10 +1284,12 @@ export const useStore = create<AppStore>((set, get) => ({
     return session?.remoteId;
   },
 
-  addUserMessage: (text, attachments) => {
+  addUserMessage: (text, attachments, id) => {
     const { currentSessionId, updateSession, sessions } = get();
     const msg: Message = {
-      id: uuid(),
+      // v1.0.10: a deterministic id (when given) lets the UserMessage echo
+      // from main be recognised and never duplicated across clients.
+      id: id ?? uuid(),
       sender: "user",
       content: text,
       isComplete: true,

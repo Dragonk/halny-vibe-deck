@@ -70,6 +70,7 @@ export interface AcpEvent {
     | 'ToolCall'
     | 'ToolCallUpdate'
     | 'ToolApprovalRequest'
+    | 'UserMessage'
     | 'AskUserQuestion'
     | 'Plan'
     | 'AvailableCommandsUpdate'
@@ -1250,6 +1251,24 @@ export class AcpManager {
    * touching the worker (single-owner boot, see acp:init). */
   announceReady(): void {
     this.emit({ type: 'InitializationComplete', data: { protocolVersion: 1 } })
+  }
+
+  /**
+   * v1.0.10: broadcast a user prompt to EVERY connected client (desktop
+   * window + all web/PWA views). Without this a message sent from one
+   * browser appeared only there - the other clients saw the AI response
+   * but never the user message that triggered it. The deterministic id
+   * lets the sending client (which adds the message optimistically)
+   * recognise its own echo; every other client inserts it fresh.
+   */
+  announceUserMessage(
+    sessionId: string,
+    msg: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> },
+  ): void {
+    this.emit({
+      type: 'UserMessage',
+      data: { sessionId, remoteId: this.remoteTag ?? undefined, ...msg },
+    })
   }
 
   isRemote(): boolean {

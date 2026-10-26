@@ -128,8 +128,8 @@ const api = {
       ipcRenderer.invoke('acp:new-session', cwd, remoteId ?? undefined, applyConfig ?? undefined),
     loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
       ipcRenderer.invoke('acp:load-session', sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined),
-    sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>): Promise<void> =>
-      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined, images ?? []),
+    sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>, userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }): Promise<void> =>
+      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined, images ?? [], userMsg ?? undefined),
     cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:cancel-session', acpSessionId, remoteId ?? undefined),
     setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>

@@ -6070,9 +6070,8 @@ code {
    header; hidden on desktop where the tiny "+" is fine. */
 .project-mobile-new { display: none; }
 @media (max-width: 768px) {
-  /* The ✕ close button floats over the header (top:10 right:12) - keep
-     the 🆕 clear of it and give it a real touch target. */
-  .sidebar.mobile-open .sidebar-sessions-header { padding-right: 52px; }
+  /* v1.0.10: the ✕ close button is gone - the 🆕 button sits at the
+     right edge with a full touch target. */
   .sidebar .sidebar-np-btn {
     min-width: 44px;
     min-height: 40px;
@@ -6082,6 +6081,13 @@ code {
     align-items: center;
     justify-content: center;
   }
+  /* v1.0.10: preview header actions (edit / download) finger-sized */
+  .file-preview-btn {
+    min-width: 44px;
+    min-height: 40px;
+    font-size: 18px;
+  }
+  .file-preview-header { padding: 10px 8px; }
   .project-mobile-new {
     display: flex;
     align-items: center;

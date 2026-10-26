@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
 import { join, dirname } from "path";
+import * as pathMod from "path";
 import fs from "fs";
 import os from "os";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
@@ -505,7 +506,12 @@ app.whenReady().then(() => {
     await getManager(remoteId).loadSession(sessionId, cwd, applyConfig)
   })
 
-  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>) => {
+  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>, userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }) => {
+    // v1.0.10: every connected client (other browsers/phone) must see the
+    // user message - announce it BEFORE the turn streams its response.
+    if (userMsg && acpSessionId) {
+      getManager(remoteId).announceUserMessage(acpSessionId, userMsg)
+    }
     await getManager(remoteId).sendPrompt(text, acpSessionId, images)
   })
 
@@ -657,6 +663,10 @@ app.whenReady().then(() => {
   ipcMain.handle("fs:write-binary", async (_e, filePath: string, base64: string, remoteId?: string) => {
     if (remoteId) return remoteWriteBinary(remoteConnOrThrow(remoteId), filePath, base64);
     try {
+      // v1.0.10: the attachment dir (/tmp/nexus-attachments) may not exist
+      // (fresh boot, wiped tmp) - without mkdir every upload silently
+      // failed with ENOENT and the file never reached the conversation.
+      await fs.promises.mkdir(pathMod.dirname(filePath), { recursive: true });
       await fs.promises.writeFile(filePath, Buffer.from(base64, "base64"));
       return { error: null };
     } catch (err) {

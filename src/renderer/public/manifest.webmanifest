@@ -1,7 +1,8 @@
 {
+  "id": "/",
   "name": "Halny Vibe Deck",
   "short_name": "Halny",
-  "description": "Halny Vibe Deck — unofficial client for the Mistral Vibe coding agent",
+  "description": "Halny Vibe Deck \u2014 unofficial client for the Mistral Vibe coding agent",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -16,8 +17,20 @@
       "purpose": "any"
     },
     {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/icon-256.png",
       "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }

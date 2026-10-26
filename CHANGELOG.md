@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.10 — 2026-10-26
+
+### Fixed
+- **Attachments silently failed with ENOENT.** `fs:write-binary` never
+  created the parent directory - `/tmp/nexus-attachments` does not exist
+  on a fresh boot, so every uploaded attachment (web client "+", drag &
+  drop) failed with a swallowed error and nothing appeared in the chat.
+  Both the local handler and the SSH variant now `mkdir -p` first.
+- **A message sent from one browser never appeared on other clients.**
+  User prompts are now broadcast by the main process to every connected
+  client (desktop window + all web/PWA views) as a `UserMessage` event
+  with a deterministic id; the sending client recognises its own echo by
+  id, so there are never duplicates.
+- **PWA staleness**: the service worker deletes caches of previous
+  releases on activation, and the app reloads once when a new service
+  worker takes over - a phone can no longer keep running the previous
+  bundle. The web manifest now declares a 512x512 icon (any + maskable)
+  and a stable `id`, completing installability requirements.
+  Note: Firefox Android does not install full PWAs (no WebAPK) - it only
+  creates a home-screen shortcut by design; use Chrome for a full
+  install.
+
+### Changed
+- **Mobile**: the 🆕 new-project button sits at the right edge of the
+  sessions header (the close button is gone); preview header actions
+  (edit / download) are finger-sized.
+
 ## 1.0.9 — 2026-10-26
 
 ### Fixed
