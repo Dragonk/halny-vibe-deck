@@ -44,6 +44,30 @@ pub struct SubagentSessionView {
     pub messages: Vec<SubagentMsg>,
 }
 
+/// One thinking block of a session preview message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewThinkingView {
+    pub id: String,
+    pub content: String,
+}
+
+/// One tool call line of a session preview message (`done` | `error`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewToolCallView {
+    pub title: String,
+    pub status: String,
+}
+
+/// One message of a session preview (Nexus `SubagentWorkData.messages`) —
+/// the subagent "Show work" card transcript.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewMessageView {
+    pub role: String,
+    pub content: String,
+    pub thinking: Vec<PreviewThinkingView>,
+    pub tool_calls: Vec<PreviewToolCallView>,
+}
+
 #[cfg(feature = "server")]
 mod imp {
     use super::SessionStatsRow;
@@ -108,6 +132,34 @@ mod imp {
             })
             .collect()
     }
+
+    pub fn session_preview(session_id: &str) -> Option<Vec<PreviewMessageView>> {
+        vibedeck_vibe::stats::load_session_preview(session_id).map(|messages| {
+            messages
+                .into_iter()
+                .map(|m| PreviewMessageView {
+                    role: m.role,
+                    content: m.content,
+                    thinking: m
+                        .thinking
+                        .into_iter()
+                        .map(|t| PreviewThinkingView {
+                            id: t.id,
+                            content: t.content,
+                        })
+                        .collect(),
+                    tool_calls: m
+                        .tool_calls
+                        .into_iter()
+                        .map(|t| PreviewToolCallView {
+                            title: t.title,
+                            status: t.status,
+                        })
+                        .collect(),
+                })
+                .collect()
+        })
+    }
 }
 
 #[server]
@@ -124,4 +176,15 @@ pub async fn api_subagent_logs(
 ) -> Result<Vec<SubagentSessionView>, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::subagent_sessions(&parent_session_id))
+}
+
+/// Session preview (subagent "Show work" card): the child session's
+/// transcript from the unified store. `None` = transcript unavailable.
+#[server]
+pub async fn api_session_preview(
+    token: String,
+    session_id: String,
+) -> Result<Option<Vec<PreviewMessageView>>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::session_preview(&session_id))
 }

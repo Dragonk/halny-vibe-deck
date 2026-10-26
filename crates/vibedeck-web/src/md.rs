@@ -224,7 +224,21 @@ fn handle_marker<'a>(m: &str, rest: &'a str, out: &mut String) -> &'a str {
         "`" => {
             if let Some(e) = rest[1..].find('`') {
                 let inner = &rest[1..1 + e];
-                out.push_str(&format!("<code>{}</code>", esc(inner)));
+                // Clickable path links (Nexus `markdownComponents.code`):
+                // inline code that looks like a file path renders as a
+                // link; the document-level click bridge in chat.rs reads
+                // `data-path` and opens the preview. `data-path` holds the
+                // raw (unresolved) path — state::open_path resolves it.
+                if crate::state::looks_like_inline_path(inner) {
+                    out.push_str(&format!(
+                        "<code class=\"markdown-path-link\" role=\"button\" tabindex=\"0\" title=\"{}\" data-path=\"{}\">{}</code>",
+                        esc_attr(inner),
+                        esc_attr(inner),
+                        esc(inner)
+                    ));
+                } else {
+                    out.push_str(&format!("<code>{}</code>", esc(inner)));
+                }
                 &rest[1 + e + 1..]
             } else {
                 out.push('`');
@@ -470,6 +484,33 @@ mod tests {
         assert!(html.contains("<strong>bold</strong>"));
         assert!(html.contains("<code>code</code>"));
         assert!(html.contains("<ul><li>one</li><li>two</li></ul>"));
+    }
+
+    #[test]
+    fn renders_clickable_path_links() {
+        // plain inline code stays plain
+        let html = to_html("edit `foo` now");
+        assert!(html.contains("<code>foo</code>"));
+        assert!(!html.contains("markdown-path-link"));
+        // path-looking inline code becomes a clickable link with data-path
+        let html = to_html("see `src/main.rs` for details");
+        assert!(html.contains("markdown-path-link"));
+        assert!(html.contains("data-path=\"src/main.rs\""));
+        assert!(html.contains("role=\"button\""));
+        // quotes in plain inline code stay literal in text (esc() escapes
+        // only & < >; attributes go through esc_attr)
+        let html = to_html("run `a \"quoted\" cmd`");
+        assert!(html.contains("<code>a \"quoted\" cmd</code>"));
+        assert!(!html.contains("markdown-path-link"));
+        // Nexus looksLikeInlinePath: a leading quote fails the first-char
+        // check, so quoted paths do NOT become links (resolution of
+        // surrounding noise happens at click time, not in markdown)
+        let html = to_html("see `\"src/a.rs\"` here");
+        assert!(!html.contains("markdown-path-link"));
+        // @-prefixed paths link with the raw text in data-path
+        let html = to_html("open `@docs/spec.md` now");
+        assert!(html.contains("markdown-path-link"));
+        assert!(html.contains("data-path=\"@docs/spec.md\""));
     }
 
     #[test]

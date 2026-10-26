@@ -7,7 +7,9 @@
 
 use serde_json::Value;
 use vibedeck_core::proto::AcpEvent;
-use vibedeck_core::types::{FileAction, FileChange, ToolCall, ToolStatus};
+use vibedeck_core::types::{
+    DiffHunk, FileAction, FileChange, SubagentInfo, ToolCall, ToolStatus,
+};
 
 /// Convert one `session/update` params object into zero or more events.
 pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
@@ -140,6 +142,7 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                 tool_call_id,
                 status: ToolStatus::normalize(raw_status),
                 output,
+                subagent: meta_subagent(update),
             });
         }
     }
@@ -210,6 +213,7 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
                         tool_call_id,
                         status: ToolStatus::normalize(raw_status),
                         output,
+                        subagent: meta_subagent(update),
                     });
                 }
             }
@@ -243,6 +247,40 @@ fn str_field(v: &Value, keys: &[&str]) -> String {
     String::new()
 }
 
+/// v0.13 subagent invocation meta (agents.spawn / task): `_meta.effect_kind
+/// == "subagent"` with `agent`, `task` and — added later via
+/// `tool_call_update` — `child_session_id`. Port of Nexus `metaSubagent`.
+fn meta_subagent(update: &Value) -> Option<SubagentInfo> {
+    let meta = update.get("_meta")?;
+    if meta.get("effect_kind").and_then(Value::as_str) != Some("subagent") {
+        return None;
+    }
+    let mut info = SubagentInfo::default();
+    if let Some(agent) = meta.get("agent").and_then(Value::as_str) {
+        info.agent = Some(agent.to_string());
+    }
+    if let Some(task) = meta.get("task").and_then(Value::as_str) {
+        info.task = Some(task.to_string());
+    }
+    let child = meta
+        .get("child_session_id")
+        .or_else(|| meta.get("childSessionId"))
+        .and_then(Value::as_str);
+    if let Some(child) = child {
+        if !child.is_empty() {
+            info.child_session_id = Some(child.to_string());
+        }
+    }
+    let empty = info.agent.is_none()
+        && info.task.is_none()
+        && info.child_session_id.is_none();
+    if empty {
+        None
+    } else {
+        Some(info)
+    }
+}
+
 fn tool_call_started(session_id: &str, update: &Value) -> Option<AcpEvent> {
     let tool_call_id = str_field(update, &["toolCallId", "tool_call_id"]);
     let title = str_field(update, &["title", "name"]);
@@ -265,6 +303,35 @@ fn tool_call_started(session_id: &str, update: &Value) -> Option<AcpEvent> {
         .and_then(|json| serde_json::from_str::<Value>(json).ok())
         .map(|input| extract_file_changes(&title, &input))
         .unwrap_or_default();
+
+    let diffs = extract_diffs(&title, update, input_json.as_deref());
+
+    // Canonical tool name from `_meta` (e.g. "file_system.edit") — used for
+    // rich content routing in the chat (Nexus `metaToolName`).
+    let tool_name = update
+        .pointer("/_meta/tool_name")
+        .or_else(|| update.pointer("/_meta/toolName"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    // Pre-edit file content carried by edit tools in `rawOutput`.
+    let previous_content = update
+        .pointer("/rawOutput/previousContent")
+        .or_else(|| update.pointer("/raw_output/previous_content"))
+        .or_else(|| update.pointer("/rawOutput/previous_content"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    // Raw structured output (process tools table/status).
+    let raw_output_json = update
+        .get("rawOutput")
+        .or_else(|| update.get("raw_output"))
+        .filter(|r| r.is_object())
+        .map(|r| serde_json::to_string(r).unwrap_or_default());
+
+    // v0.13 subagent invocation meta (agents.spawn / task).
+    let subagent = meta_subagent(update);
 
     // session/load replay carries the final status and the output inside the
     // same `tool_call` event — live calls get them via `tool_call_update`.
@@ -290,6 +357,12 @@ fn tool_call_started(session_id: &str, update: &Value) -> Option<AcpEvent> {
             input_json,
             output,
             file_changes,
+            diffs,
+            tool_name,
+            previous_content,
+            raw_output_json,
+            subagent,
+            started_at: vibedeck_core::types::now_ms(),
         },
     })
 }
@@ -324,6 +397,122 @@ fn extract_file_changes(tool_name: &str, input: &Value) -> Vec<FileChange> {
         FileAction::Modified
     };
     vec![FileChange { path, action }]
+}
+
+/// Extract structured edit diffs for the chat's git-style diff card.
+/// Sources (Nexus parity priority):
+/// 1. wire `content` blocks with `type: "diff"` — `{ path, oldText, newText }`;
+/// 2. the edit tool input — `filePath` + `changes: [{ oldString, newString }]`
+///    (or a single oldString/newString pair);
+/// 3. optional line numbers from `rawOutput.occurrences[0]` (startLine /
+///    newStartLine) attached to the first hunk.
+fn extract_diffs(title: &str, update: &Value, input_json: Option<&str>) -> Vec<DiffHunk> {
+    let lower_title = title.to_lowercase();
+    let looks_like_edit = lower_title.contains("edit")
+        || lower_title.contains("replace")
+        || lower_title.contains("write")
+        || lower_title.contains("creat");
+
+    let mut hunks: Vec<DiffHunk> = Vec::new();
+
+    // 1. wire content diff blocks
+    if let Some(items) = update.get("content").and_then(Value::as_array) {
+        for item in items {
+            let block = match item.get("type").and_then(Value::as_str) {
+                Some("diff") => item,
+                _ => match item.pointer("/content/type").and_then(Value::as_str) {
+                    Some("diff") => item.get("content").unwrap_or(item),
+                    _ => continue,
+                },
+            };
+            let path = block
+                .get("path")
+                .or_else(|| block.get("filePath"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let new_text = block
+                .get("newText")
+                .or_else(|| block.get("new_text"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if path.is_empty() && new_text.is_empty() {
+                continue;
+            }
+            hunks.push(DiffHunk {
+                path,
+                old_text: block
+                    .get("oldText")
+                    .or_else(|| block.get("old_text"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                new_text,
+                start_line: None,
+                new_start_line: None,
+            });
+        }
+    }
+
+    // 2. edit tool input fallback
+    if hunks.is_empty() && looks_like_edit {
+        if let Some(json) = input_json {
+            if let Ok(input) = serde_json::from_str::<Value>(json) {
+                let path = str_field(&input, &["filePath", "file_path", "path", "filename"]);
+                let pairs: Vec<(Option<String>, String)> = input
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|c| {
+                                let old = c.get("oldString").or_else(|| c.get("old_string")).and_then(Value::as_str);
+                                let new = c.get("newString").or_else(|| c.get("new_string")).and_then(Value::as_str)?;
+                                Some((old.map(str::to_string), new.to_string()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_else(|| {
+                        // single oldString/newString pair
+                        match (
+                            input.get("oldString").or_else(|| input.get("old_string")).and_then(Value::as_str),
+                            input.get("newString").or_else(|| input.get("new_string")).and_then(Value::as_str),
+                        ) {
+                            (old, Some(new)) => vec![(old.map(str::to_string), new.to_string())],
+                            _ => Vec::new(),
+                        }
+                    });
+                for (old, new) in pairs {
+                    hunks.push(DiffHunk {
+                        path: path.clone(),
+                        old_text: old,
+                        new_text: new,
+                        start_line: None,
+                        new_start_line: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. line numbers from rawOutput.occurrences (first hunk)
+    if let Some(first) = hunks.first_mut() {
+        let occ = update
+            .pointer("/rawOutput/occurrences/0")
+            .or_else(|| update.pointer("/raw_output/occurrences/0"));
+        if let Some(occ) = occ {
+            let sl = occ.get("startLine").or_else(|| occ.get("start_line")).and_then(Value::as_i64);
+            let nsl = occ
+                .get("newStartLine")
+                .or_else(|| occ.get("new_start_line"))
+                .and_then(Value::as_i64);
+            if let Some(sl) = sl {
+                first.start_line = Some(sl);
+                first.new_start_line = Some(nsl.unwrap_or(sl));
+            }
+        }
+    }
+
+    hunks
 }
 
 /// Convert an agent-initiated request (needs user interaction) into an event.
@@ -460,6 +649,57 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn subagent_meta_extraction() {
+        // agents.spawn tool call with subagent _meta on the wire.
+        let params = serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tc1",
+                "title": "task",
+                "_meta": {
+                    "tool_name": "agents.spawn",
+                    "effect_kind": "subagent",
+                    "agent": "general-purpose",
+                    "task": "Fix the bug"
+                }
+            }
+        });
+        let events = convert_update(&params);
+        match events.as_slice() {
+            [AcpEvent::ToolCallStarted { tool_call, .. }] => {
+                let sa = tool_call.subagent.as_ref().expect("subagent meta");
+                assert_eq!(sa.agent.as_deref(), Some("general-purpose"));
+                assert_eq!(sa.task.as_deref(), Some("Fix the bug"));
+                assert!(sa.child_session_id.is_none());
+                assert_eq!(tool_call.tool_name, "agents.spawn");
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+
+        // The child session id arrives later via tool_call_update.
+        let params = serde_json::json!({
+            "sessionId": "s1",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "tc1",
+                "status": "in_progress",
+                "_meta": {
+                    "effect_kind": "subagent",
+                    "child_session_id": "child-abc"
+                }
+            }
+        });
+        let events = convert_update(&params);
+        match events.as_slice() {
+            [AcpEvent::ToolCallUpdated { subagent: Some(sa), .. }] => {
+                assert_eq!(sa.child_session_id.as_deref(), Some("child-abc"));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
     }
 
     #[test]

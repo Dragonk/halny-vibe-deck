@@ -203,6 +203,50 @@ pub fn Dock() -> Element {
     let active = use_signal(|| None::<u64>);
     let next_id = use_signal(|| 1u64);
 
+    // clickable chat paths (state::open_path, Nexus openFilePreview):
+    // consume one request per `preview_open_seq` bump — a directory
+    // reveals in the Files tab (revealInFileTree: files tab, no active
+    // preview, listing loaded), anything else opens a preview tab.
+    let mut seen_open = use_signal(|| 0u64);
+    {
+        let s = state.read();
+        let seq = s.preview_open_seq;
+        let req = s.preview_open.clone();
+        drop(s);
+        if seq != *seen_open.read() {
+            seen_open.set(seq);
+            if let Some(req) = req {
+                let mut tab_w = tab.clone();
+                let mut active_w = active.clone();
+                let mut cwd_w = cwd.clone();
+                if req.reveal {
+                    tab_w.set("files".to_string());
+                    active_w.set(None);
+                    cwd_w.set(req.path.clone());
+                    let st = state.clone();
+                    let mut entries_w = entries.clone();
+                    let mut files_msg_w = files_msg.clone();
+                    let target = req.path.clone();
+                    spawn(async move {
+                        match api_list_dir(token(&st), target).await {
+                            Ok(v) => entries_w.set(v),
+                            Err(e) => files_msg_w.set(e.to_string()),
+                        }
+                    });
+                } else {
+                    open_file_tab(
+                        state.clone(),
+                        tabs.clone(),
+                        active.clone(),
+                        next_id.clone(),
+                        req.path.clone(),
+                        basename_or(&req.path),
+                    );
+                }
+            }
+        }
+    }
+
     // one-shot bootstrap: fetch the root listing when the dock first shows
     if !*boot.read() {
         boot.set(true);

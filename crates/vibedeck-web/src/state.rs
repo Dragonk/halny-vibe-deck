@@ -33,6 +33,20 @@ pub struct ClientState {
     pub setup_skipped: bool,
     /// One-shot guard for the api_setup_status bootstrap check.
     pub setup_checked: bool,
+    /// Pending dock navigation requested by a clickable chat path
+    /// (markdown path links / tool path chips). Consumed by the dock;
+    /// `preview_open_seq` bumps on every request.
+    pub preview_open: Option<PreviewOpen>,
+    pub preview_open_seq: u64,
+}
+
+/// A pending dock navigation triggered by a clickable chat path
+/// (Nexus `openFilePreview`): a directory revealed in the dock Files
+/// tab (`reveal = true`) or a file opened in a preview tab.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreviewOpen {
+    pub path: String,
+    pub reveal: bool,
 }
 
 /// Refetch the whole snapshot (structural change or first load).
@@ -133,6 +147,8 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
                         id: "thinking".into(),
                         content: text,
                         is_complete: false,
+                        started_at: vibedeck_core::types::now_ms(),
+                        completed_at: 0,
                     }),
                 }
             }
@@ -142,8 +158,12 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             if is_current(&session_id) {
                 let mut s = state.write();
                 if let Some(msg) = s.snapshot.current_messages.last_mut() {
+                    let now = vibedeck_core::types::now_ms();
                     for b in &mut msg.thinking {
                         b.is_complete = true;
+                        if b.completed_at == 0 {
+                            b.completed_at = now;
+                        }
                     }
                 }
             }
@@ -166,6 +186,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             tool_call_id,
             status,
             output,
+            subagent,
         } => {
             if is_current(&session_id) {
                 let mut s = state.write();
@@ -175,6 +196,28 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
                             tc.status = status;
                             if let Some(output) = &output {
                                 tc.output = Some(output.clone());
+                            }
+                            // v0.13: subagent meta merges (child_session_id
+                            // arrives via a later tool_call_update).
+                            if let Some(sa) = &subagent {
+                                match &mut tc.subagent {
+                                    Some(cur) => {
+                                        if sa.agent.is_some() {
+                                            cur.agent = sa.agent.clone();
+                                        }
+                                        if sa.agent_name.is_some() {
+                                            cur.agent_name = sa.agent_name.clone();
+                                        }
+                                        if sa.task.is_some() {
+                                            cur.task = sa.task.clone();
+                                        }
+                                        if sa.child_session_id.is_some() {
+                                            cur.child_session_id =
+                                                sa.child_session_id.clone();
+                                        }
+                                    }
+                                    None => tc.subagent = Some(sa.clone()),
+                                }
                             }
                         }
                     }
@@ -330,4 +373,147 @@ pub async fn save_prefs(
     apply_theme(&theme);
     let tok = token(&state);
     let _ = crate::api::api_set_prefs(tok, language, theme, dock_open, sidebar_limit).await;
+}
+
+// ---------------------------------------------------------------------------
+// Clickable chat paths (port of Nexus MessageBubble.tsx / store.ts)
+// ---------------------------------------------------------------------------
+
+fn is_abs_path(p: &str) -> bool {
+    p.starts_with('/') || p.starts_with('\\') || {
+        let mut cs = p.chars();
+        cs.next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) && cs.next() == Some(':')
+    }
+}
+
+/// Port of Nexus `looksLikeInlinePath`: heuristic deciding whether an
+/// inline markdown code span should render as a clickable path link.
+pub fn looks_like_inline_path(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.len() > 512 {
+        return false;
+    }
+    if t.contains(' ') || t.contains('\t') || t.contains('\n') {
+        return false;
+    }
+    let p = t.strip_prefix('@').unwrap_or(t);
+    if p.contains("://") {
+        return false;
+    }
+    let abs = is_abs_path(p);
+    let rel = (p.contains('/') || p.contains('\\'))
+        && p
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            .unwrap_or(false);
+    abs || rel
+}
+
+/// Port of Nexus `resolveSessionPath`: strip a leading `@`, surrounding
+/// quotes/backticks and trailing punctuation, then resolve relative
+/// paths against the session working directory. (Like Nexus, the
+/// trailing-quote strip keeps single quotes — prose paths end with
+/// `"…",` or "`…`." far more often than with a stray `'`.)
+pub fn resolve_session_path(cwd: &str, raw: &str) -> String {
+    let mut path = raw.trim();
+    if let Some(stripped) = path.strip_prefix('@') {
+        path = stripped;
+    }
+    // Agent prose wraps paths in quotes/backticks and trailing punctuation
+    path = path.trim_start_matches(['"', '\'', '`']);
+    path = path.trim_end_matches(['"', '`']);
+    path = path.trim_end_matches(['.', ',', ';', ':', '!', '?', ')']);
+    if !is_abs_path(path) && !cwd.is_empty() && !path.is_empty() {
+        let sep = if cwd.contains('\\') { '\\' } else { '/' };
+        let base = if cwd.ends_with('/') || cwd.ends_with('\\') {
+            cwd.to_string()
+        } else {
+            format!("{cwd}{sep}")
+        };
+        return format!("{base}{path}");
+    }
+    path.to_string()
+}
+
+/// Port of Nexus `openFilePreview` + `ensureDockOpen`: directories reveal
+/// in the dock Files tab, everything else opens a preview tab (missing
+/// paths and paths outside the working root fall back to a tab, exactly
+/// like the Nexus `fs.stat` → `listDir` → `openFilePreviewTab` chain).
+/// The dock picks the request up through `preview_open_seq`.
+pub async fn open_path(mut state: Signal<ClientState>, raw: &str) {
+    let cwd = state.read().snapshot.working_directory.clone();
+    let mut path = resolve_session_path(&cwd, raw);
+    if path.is_empty() {
+        return;
+    }
+    // Dock paths are working-directory relative (file rows, breadcrumbs,
+    // preview-tab dedupe); absolute paths stay only outside the root.
+    if !cwd.is_empty() {
+        let base = cwd.trim_end_matches(['/', '\\']);
+        if path == cwd {
+            path = String::new();
+        } else if let Some(rest) = path.strip_prefix(&format!("{base}/")) {
+            path = rest.to_string();
+        } else if let Some(rest) = path.strip_prefix(&format!("{base}\\")) {
+            path = rest.to_string();
+        }
+    }
+    // A successful listing means the path is a directory inside the root
+    // → reveal in the Files tab. api_list_dir confines paths to the root
+    // and errors on plain files, mirroring the Nexus isDir check.
+    let reveal = crate::fsgit::api_list_dir(token(&state), path.clone())
+        .await
+        .is_ok();
+    // Nexus `ensureDockOpen`: open the dock and persist the pref.
+    if !state.read().snapshot.config.dock_open {
+        let (language, theme, limit) = {
+            let s = state.read();
+            (
+                s.snapshot.config.language.clone(),
+                s.snapshot.config.theme.clone(),
+                s.snapshot.config.sidebar_sessions_limit.unwrap_or(0),
+            )
+        };
+        save_prefs(state.clone(), language, theme, true, limit).await;
+    }
+    let mut s = state.write();
+    s.preview_open = Some(PreviewOpen { path, reveal });
+    s.preview_open_seq += 1;
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn inline_path_heuristic() {
+        assert!(looks_like_inline_path("src/main.rs"));
+        assert!(looks_like_inline_path("/etc/hosts"));
+        assert!(looks_like_inline_path("C:\\Users\\k\\file.txt"));
+        assert!(looks_like_inline_path("@src/lib.rs"));
+        assert!(looks_like_inline_path("./docs/spec.md"));
+        assert!(!looks_like_inline_path("hello world"));
+        assert!(!looks_like_inline_path("https://example.com/x"));
+        assert!(!looks_like_inline_path("plainword"));
+        assert!(!looks_like_inline_path(""));
+        assert!(!looks_like_inline_path(&"x".repeat(600)));
+    }
+
+    #[test]
+    fn resolves_and_strips_noise() {
+        assert_eq!(resolve_session_path("/w", "src/a.rs"), "/w/src/a.rs");
+        assert_eq!(resolve_session_path("/w", "`src/a.rs`"), "/w/src/a.rs");
+        assert_eq!(resolve_session_path("/w", "src/a.rs,"), "/w/src/a.rs");
+        assert_eq!(resolve_session_path("/w", "\"rel/b\""), "/w/rel/b");
+        assert_eq!(resolve_session_path("/w", "@/abs/x.txt"), "/abs/x.txt");
+        assert_eq!(resolve_session_path("", "src/a.rs"), "src/a.rs");
+        assert_eq!(resolve_session_path("/w", "C:\\x\\y"), "C:\\x\\y");
+        // Nexus quirk preserved 1:1: each strip pass runs once in sequence,
+        // so `` `x`. `` keeps the trailing backtick (quotes strip before
+        // the trailing dot is removed, leaving the quote exposed).
+        assert_eq!(resolve_session_path("/w", "`src/a.rs`."), "/w/src/a.rs`");
+        // trailing single quote survives the quote strip (Nexus behaviour)
+        assert_eq!(resolve_session_path("/w", "it's"), "/w/it's");
+    }
 }
