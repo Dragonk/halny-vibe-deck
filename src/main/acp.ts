@@ -899,6 +899,18 @@ export class AcpManager {
         this.currentSessionId = null
         this.primedSessionId = null
         this.emit({ type: 'Disconnected', data: { code: code ?? -1 } })
+        // v1.0.3: a dead worker must never leave requests hanging - reject
+        // every pending call so the UI fails fast instead of spinning until
+        // the request timeout (an hour for session/prompt) with no feedback.
+        const err = new Error('ACP worker exited before responding (code ' + (code ?? -1) + ')')
+        for (const [, pr] of this.pending) {
+          try {
+            pr.reject(err)
+          } catch {
+            /* reject must never break the exit path */
+          }
+        }
+        this.pending.clear()
       }
     })
 
