@@ -210,8 +210,23 @@ pub fn Sidebar() -> Element {
         }
     };
 
+    let sidebar_cls = if state.read().mobile_sidebar_open {
+        "sidebar mobile-open"
+    } else {
+        "sidebar"
+    };
+
     rsx! {
-        aside { class: "sidebar",
+        aside { class: "{sidebar_cls}",
+            button {
+                class: "mobile-panel-close",
+                title: "{tr(&lang, \"closePanelLabel\")}",
+                onclick: {
+                    let mut state = state.clone();
+                    move |_| { state.write().mobile_sidebar_open = false; }
+                },
+                "✕"
+            }
             div { class: "sidebar-header",
                 button {
                     class: "new-session-btn",

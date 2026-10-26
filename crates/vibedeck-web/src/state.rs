@@ -27,6 +27,9 @@ pub struct ClientState {
     pub view: View,
     /// Prompts typed while the agent is busy (sent on completion).
     pub queue: Vec<String>,
+    /// Mobile (≤768 px): the sidebar drawer is open (Nexus
+    /// mobileSidebarOpen).
+    pub mobile_sidebar_open: bool,
     /// vibe-acp binary missing → show the first-run SetupView.
     pub setup_needed: bool,
     /// User skipped the SetupView.

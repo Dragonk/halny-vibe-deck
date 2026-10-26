@@ -471,6 +471,20 @@ pub fn Dock() -> Element {
     rsx! {
         aside { class: "dock",
             div { class: "dock-resize-handle" }
+            button {
+                class: "mobile-panel-close",
+                title: "{crate::i18n::tr(&lang, \"closePanelLabel\")}",
+                onclick: {
+                    let state = state.clone();
+                    move |_| {
+                        let state = state.clone();
+                        spawn(async move {
+                            crate::components::mobile::set_dock_open(state, false).await;
+                        });
+                    }
+                },
+                "✕"
+            }
             div { class: "dock-tabs",
                 button {
                     class: "{files_cls}",

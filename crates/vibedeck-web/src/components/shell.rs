@@ -19,6 +19,7 @@ pub fn Shell() -> Element {
             resize_init.set(true);
             spawn(async move {
                 dioxus::document::eval(RESIZE_JS);
+                dioxus::document::eval(crate::components::mobile::MOBILE_JS);
             });
         }
     }
@@ -64,6 +65,7 @@ pub fn Shell() -> Element {
         link { rel: "stylesheet", href: asset!("/assets/main.css") }
         div { class: "app-root",
             crate::components::header::Header {}
+            crate::components::mobile::MobileBridges {}
             div { class: "app-body",
                 crate::components::sidebar::Sidebar {}
                 main { class: "app-main", {view_el} }
