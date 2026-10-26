@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
 import { join } from "path";
 import fs from "fs";
+import os from "os";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { loadConfig, saveConfig, AppConfig } from "./config";
 import { menuLabels } from "./i18n";
@@ -243,9 +244,30 @@ const cliPort = argVal("port");
 const cliUser = argVal("user");
 const cliPass = argVal("password");
 const cliCert = argVal("cert");
+// v0.13.8: the Windows update helper drops nexus-update-failed.txt into
+// the temp dir when a self-update could not finish; surface it once on the
+// next launch so update failures are never silent again.
+function showFailedUpdateNotice(): void {
+  if (process.platform !== "win32") return
+  try {
+    const failPath = join(os.tmpdir(), "nexus-update-failed.txt")
+    if (!fs.existsSync(failPath)) return
+    const reason = fs.readFileSync(failPath, "utf8").trim()
+    fs.unlinkSync(failPath)
+    dialog.showErrorBox(
+      "Update failed",
+      "The application update could not be installed:\n\n" +
+        reason + "\n\nDetails: " + join(os.tmpdir(), "nexus-update.log"),
+    )
+  } catch {
+    /* diagnostics only - never block startup */
+  }
+}
+
 const cliKey = argVal("key");
 
 app.whenReady().then(() => {
+  showFailedUpdateNotice();
   installIpcCapture();
   const win: BrowserWindow | null = headless ? null : createWindow();
   if (!win) acpManager.setWindow(null);

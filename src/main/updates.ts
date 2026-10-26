@@ -8,6 +8,7 @@ import { findBinary, tryExec } from "./setup"
 import { sshRun } from "./remote"
 import { loadConfig } from "./config"
 import type { RemoteConnection } from "./config"
+import { buildInstalledUpdateCmd, buildPortableUpdateCmd, extractZip, locatePayloadExe } from "./updateCmd"
 
 // v0.9.0: update system for the app itself (GitHub releases) and the
 // mistral-vibe CLI (PyPI). The renderer orchestrates session restore after a
@@ -384,6 +385,37 @@ export interface AppUpdateResult {
   error: string | null
 }
 
+// v0.13.8: spawn the generated update script with cmd.exe, detached so it
+// survives app.quit(). /d skips AutoRun registry hooks, /s stops cmd from
+// mangling the quoted script path.
+function spawnCmdHelper(scriptPath: string, logPath: string): void {
+  const sysRoot = process.env.SystemRoot ?? "C:\\Windows"
+  const cmdExe = path.join(sysRoot, "System32", "cmd.exe")
+  try {
+    spawn(cmdExe, ["/d", "/s", "/c", scriptPath], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    })
+      .on("error", (e) => {
+        // If cmd.exe cannot even start, leave a trace in the log -
+        // otherwise the app quits with no update and no explanation.
+        try {
+          fs.appendFileSync(logPath, new Date().toISOString() + " cmd spawn failed: " + String(e) + "\n")
+        } catch {
+          /* nothing else to do - we are quitting */
+        }
+      })
+      .unref()
+  } catch (e) {
+    try {
+      fs.appendFileSync(logPath, new Date().toISOString() + " cmd spawn threw: " + String(e) + "\n")
+    } catch {
+      /* nothing else to do - we are quitting */
+    }
+  }
+}
+
 export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promise<AppUpdateResult> {
   if (!app.isPackaged) {
     return { ok: false, error: "Self-update is only available for installed builds" }
@@ -409,12 +441,6 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
   }
   const dlProgress = (received: number, total: number | null): void =>
     emit({ phase: "download", received, total, percent: total ? Math.floor((received / total) * 100) : null })
-  const q = (s: string): string => "'" + s + "'"
-  // v0.13.2: never depend on PATH when spawning the helper - use the
-  // absolute powershell.exe location when it exists (it always does on Windows).
-  const sysRoot = process.env.SystemRoot ?? "C:\\Windows"
-  const psExeAbs = path.join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  const psExe = process.platform === "win32" && fs.existsSync(psExeAbs) ? psExeAbs : "powershell.exe"
   const tmp = path.join(os.tmpdir(), "nexus-update-" + Date.now())
   fs.mkdirSync(tmp, { recursive: true })
   try {
@@ -449,69 +475,35 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
           error: "Downloaded installer looks invalid (" + Math.round(size / 1024) + " KiB) - aborting update",
         }
       }
-      // The NSIS installer is an assisted one (oneClick=false): in silent mode
-      // (/S) it does NOT close a running app and aborts on locked files.
-      // Previous versions launched it while the app was still shutting down,
-      // which silently failed the install and left the app closed. The helper
-      // script now waits for THIS process to fully exit before running the
-      // installer, then relaunches the same executable path. Every step is
-      // appended to nexus-update.log in the temp directory for diagnostics.
+      // v0.13.8: the NSIS installer must not run while the app is alive
+      // (silent mode aborts on locked files). A generated .cmd script run
+      // by cmd.exe waits for this process to exit, runs the installer with
+      // /S, relaunches the same executable path and logs every step to
+      // %TEMP%\nexus-update.log - replacing the old PowerShell
+      // helper, which never even started on some machines.
       const exe = process.execPath
       const logPath = path.join(os.tmpdir(), "nexus-update.log")
-      const scriptPath = path.join(tmp, "nexus-update.ps1")
-      const ps = [
-        "$ErrorActionPreference = 'Continue'",
-        "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
-        "Log ('nexus update start, pid " + process.pid + ", installer ' + " + q(installer) + ")",
-        "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
-        "Start-Sleep -Milliseconds 1500",
-        "function Fail($m) {",
-        "  Log $m",
-        "  try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Log ('relaunch failed: ' + $_.Exception.Message) }",
-        "  exit 1",
-        "}",
-        "Log 'launching installer'",
-        "$p = $null",
-        "try { $p = Start-Process -FilePath " + q(installer) + " -ArgumentList '/S' -Wait -PassThru -ErrorAction Stop } catch { Fail ('installer failed: ' + $_.Exception.Message) }",
-        "Log ('installer exit code ' + $p.ExitCode)",
-        "Log 'relaunching app'",
-        "try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Fail ('relaunch failed: ' + $_.Exception.Message) }",
-        "Log 'done'",
-      ].join("\n")
-      // v0.13.2: the BOM is CRITICAL. Windows PowerShell 5.1 reads BOM-less
-      // files as ANSI, so every non-ASCII character in the embedded paths
-      // (e.g. diacritics in the user profile folder) turns into mojibake and
-      // the helper fails silently: app closed, files not replaced, no relaunch.
-      fs.writeFileSync(scriptPath, "\uFEFF" + ps, "utf8")
-      emit({ phase: "install", received: fs.statSync(installer).size, total: fs.statSync(installer).size, percent: 100 })
-      spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      })
-        .on("error", (e) => {
-          // If powershell cannot even start, leave a trace in the log -
-          // otherwise the app quits with no update and no explanation.
-          try {
-            fs.appendFileSync(logPath, new Date().toISOString() + " powershell spawn failed: " + String(e) + "\n")
-          } catch {
-            /* nothing else to do - we are quitting */
-          }
-        })
-        .unref()
+      const scriptPath = path.join(tmp, "nexus-update.cmd")
+      const script = buildInstalledUpdateCmd({ exe, installer, tmpDir: tmp, pid: process.pid })
+      fs.writeFileSync(scriptPath, script, "utf8")
+      emit({ phase: "install", received: size, total: size, percent: 100 })
+      spawnCmdHelper(scriptPath, logPath)
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
       return { ok: true, error: null }
     }
+
     if (process.platform === "win32") {
-      // v0.13.0: portable flavor - the detached helper does ALL the heavy
-      // work (extract, copy, verify, relaunch) after this process exits.
-      // v0.12.0 extracted in-process and copied with Copy-Item, whose
-      // wildcard merge semantics are unreliable when destination
-      // subdirectories (resources/, locales/) already exist; a silent
-      // copy failure left the app closed with no relaunch and no updated
-      // files. The helper now uses robocopy, verifies the new exe exists
-      // and rolls back to the renamed previous exe on any failure.
+      // v0.13.8: portable flavor. The archive is extracted HERE, inside
+      // the running app (fflate streaming unzip) - extraction errors now
+      // show up as normal in-app errors instead of silently dying after
+      // the quit. Only the file swap must happen after this process exits
+      // (the exe/dlls/asar stay locked while the app lives), and that is
+      // done by a generated .cmd script executed by cmd.exe: move the old
+      // exe aside, robocopy the extracted payload over the app directory,
+      // verify the new exe, relaunch, roll back on failure. Built only
+      // from Windows built-ins - no PowerShell, no execution policy, no
+      // shell profile, nothing for AV/ASR rules to block.
       const zipPath = path.join(tmp, "nexus-portable.zip")
       await downloadTo(info.downloadUrl, zipPath, dlProgress)
       const size = fs.statSync(zipPath).size
@@ -528,75 +520,29 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
       if (sig[0] !== 0x50 || sig[1] !== 0x4b) {
         return { ok: false, error: "Downloaded file is not a zip archive - aborting update" }
       }
-      emit({ phase: "install", received: size, total: size, percent: 100 })
       const exe = process.execPath
       const exeName = path.basename(exe)
       const appDir = path.dirname(exe)
-      const oldExe = path.join(appDir, "nexus-old-" + Date.now() + ".exe")
+      const oldName = "nexus-old-" + Date.now() + ".exe"
+      const oldExe = path.join(appDir, oldName)
       const extractDir = path.join(tmp, "extracted")
-      const logPath = path.join(os.tmpdir(), "nexus-update.log")
-      const scriptPath = path.join(tmp, "nexus-update.ps1")
-      const ps = [
-        "$ErrorActionPreference = 'Continue'",
-        "function Log($m) { try { Add-Content -Path " + q(logPath) + " -Value ((Get-Date -Format s) + ' ' + $m) } catch {} }",
-        "function Fail($m) {",
-        "  Log $m",
-        "  $relaunch = $null",
-        "  if (Test-Path -LiteralPath " + q(exe) + ") { $relaunch = " + q(exe) + " }",
-        "  elseif (Test-Path -LiteralPath " + q(oldExe) + ") { $relaunch = " + q(oldExe) + " }",
-        "  if ($relaunch) { Log ('relaunching ' + $relaunch); try { Start-Process -FilePath $relaunch -ErrorAction Stop } catch { Log ('relaunch failed: ' + $_.Exception.Message) } }",
-        "  exit 1",
-        "}",
-        "Log ('nexus portable update start, pid " + process.pid + "')",
-        "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
-        "Start-Sleep -Milliseconds 1500",
-        "Log 'extracting archive'",
-        "try { Expand-Archive -Path " + q(zipPath) + " -DestinationPath " + q(extractDir) + " -Force -ErrorAction Stop } catch { Fail ('extract failed: ' + $_.Exception.Message) }",
-        "$src = " + q(extractDir),
-        "if (-not (Test-Path -LiteralPath (Join-Path $src " + q(exeName) + "))) {",
-        "  $sub = Get-ChildItem -LiteralPath $src -Directory | Select-Object -First 1",
-        "  if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName " + q(exeName) + "))) { $src = $sub.FullName; Log ('nested zip layout, using ' + $src) }",
-        "  else { Fail 'extracted archive does not contain the app executable' }",
-        "}",
-        "Log 'renaming old exe'",
-        "try { Rename-Item -LiteralPath " + q(exe) + " -NewName " + q(path.basename(oldExe)) + " -ErrorAction Stop } catch { Fail ('rename failed: ' + $_.Exception.Message) }",
-        "Log 'copying new files (robocopy)'",
-        "robocopy $src " + q(appDir) + " /E /R:2 /W:2 /NFL /NDL /NP /NJH /NJS",
-        "$rc = $LASTEXITCODE",
-        "Log ('robocopy exit code ' + $rc)",
-        "if ($rc -ge 8) { Fail ('robocopy failed with exit code ' + $rc) }",
-        "if (-not (Test-Path -LiteralPath " + q(exe) + ")) {",
-        "  Log 'new exe missing after copy - rolling back'",
-        "  Rename-Item -LiteralPath " + q(oldExe) + " -NewName " + q(exeName) + " -Force -ErrorAction SilentlyContinue",
-        "  Fail 'rolled back to previous exe'",
-        "}",
-        "Log 'relaunching app'",
-        "try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Fail ('relaunch failed: ' + $_.Exception.Message) }",
-        "Start-Sleep -Seconds 5",
-        "try { Remove-Item -LiteralPath " + q(oldExe) + " -Force -ErrorAction SilentlyContinue } catch {}",
-        "try { Remove-Item -LiteralPath " + q(tmp) + " -Recurse -Force -ErrorAction SilentlyContinue } catch {}",
-        "Log 'done'",
-      ].join("\n")
-      // v0.13.2: the BOM is CRITICAL. Windows PowerShell 5.1 reads BOM-less
-      // files as ANSI, so every non-ASCII character in the embedded paths
-      // (e.g. diacritics in the user profile folder) turns into mojibake and
-      // the helper fails silently: app closed, files not replaced, no relaunch.
-      fs.writeFileSync(scriptPath, "\uFEFF" + ps, "utf8")
-      spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
+      fs.mkdirSync(extractDir, { recursive: true })
+      emit({ phase: "install", received: 0, total: size, percent: 0 })
+      await extractZip(zipPath, extractDir, (p) => {
+        emit({ phase: "install", received: p.received, total: p.total, percent: Math.floor((p.received / p.total) * 100) })
       })
-        .on("error", (e) => {
-          // If powershell cannot even start, leave a trace in the log -
-          // otherwise the app quits with no update and no explanation.
-          try {
-            fs.appendFileSync(logPath, new Date().toISOString() + " powershell spawn failed: " + String(e) + "\n")
-          } catch {
-            /* nothing else to do - we are quitting */
-          }
-        })
-        .unref()
+      // The portable zip stores files at the root; keep the nested-layout
+      // fallback in case the packaging ever changes.
+      const srcDir = locatePayloadExe(extractDir, exeName)
+      if (!srcDir) {
+        return { ok: false, error: "Downloaded archive does not contain the app executable - aborting update" }
+      }
+      emit({ phase: "install", received: size, total: size, percent: 100 })
+      const logPath = path.join(os.tmpdir(), "nexus-update.log")
+      const scriptPath = path.join(tmp, "nexus-update.cmd")
+      const script = buildPortableUpdateCmd({ exe, appDir, oldName, oldExe, srcDir, tmpDir: tmp, pid: process.pid })
+      fs.writeFileSync(scriptPath, script, "utf8")
+      spawnCmdHelper(scriptPath, logPath)
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
       return { ok: true, error: null }
