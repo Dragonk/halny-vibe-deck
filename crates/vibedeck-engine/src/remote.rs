@@ -10,7 +10,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use vibedeck_core::snapshot::{RemoteConnection, RemoteInstallResult, RemoteSessionInfo, RemoteStatus, RemoteTestResult};
+use vibedeck_core::snapshot::{CliUpdateInfo, CliUpgradeResult, RemoteConnection, RemoteInstallResult, RemoteSessionInfo, RemoteStatus, RemoteTestResult};
 
 /// Split an ssh command string into argv tokens (respects quotes) -
 /// port of Nexus `tokenizeCmd`.
@@ -536,6 +536,159 @@ pub fn load_remote_session_preview(
     Some(build_session_preview(&entries, index_entry.as_ref()))
 }
 
+// ---------------------------------------------------------------------------
+// Remote CLI update check (Nexus updates.ts: checkRemoteCliUpdate /
+// upgradeRemoteCli / pypiLatest / extractVersion / isNewerVersion)
+// ---------------------------------------------------------------------------
+
+/// PyPI package the CLI is published under (Nexus PYPI_PACKAGE).
+const PYPI_PACKAGE: &str = "mistral-vibe";
+
+/// HTTP GET returning the response body via `curl` (the engine has no HTTP
+/// client; curl ships on all supported targets).
+fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
+    let out = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", &timeout_s.to_string(), url])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// PyPI latest-version cache: (version, fetched-at) (Nexus: 5 minutes).
+static PYPI_CACHE: std::sync::Mutex<Option<(String, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// Latest CLI version from PyPI with a 5-minute cache (Nexus `pypiLatest`).
+fn pypi_latest() -> Result<String, String> {
+    if let Ok(guard) = PYPI_CACHE.lock() {
+        if let Some((v, at)) = guard.as_ref() {
+            if at.elapsed().as_secs() < 300 {
+                return Ok(v.clone());
+            }
+        }
+    }
+    let url = format!("https://pypi.org/pypi/{PYPI_PACKAGE}/json");
+    let body = http_get_json(&url, 15)?;
+    let v = serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|e| e.to_string())?
+        .pointer("/info/version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing info.version".to_string())?
+        .to_string();
+    if let Ok(mut guard) = PYPI_CACHE.lock() {
+        *guard = Some((v.clone(), std::time::Instant::now()));
+    }
+    Ok(v)
+}
+
+/// First numeric run containing a dot (Nexus `extractVersion` regex
+/// `\d+\.\d+(\.\d+)?`); trailing dots trimmed. `port 8080 open` -> None.
+pub fn extract_version(s: &str) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            candidates.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        candidates.push(cur);
+    }
+    candidates
+        .into_iter()
+        .map(|c| c.trim_matches('.').to_string())
+        .find(|c| c.contains('.') && c.chars().any(|x| x.is_ascii_digit()))
+}
+
+/// Numeric segment comparison (Nexus `isNewerVersion`): true when `latest`
+/// is strictly newer than `current` (3.1.0 > 3.0.2, 4.0 > 3.9.9).
+pub fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Vec<i64> {
+        v.split('.')
+            .map(|p| p.trim().parse::<i64>().unwrap_or(0))
+            .collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    let n = l.len().max(c.len());
+    for i in 0..n {
+        let a = l.get(i).copied().unwrap_or(0);
+        let b = c.get(i).copied().unwrap_or(0);
+        if a != b {
+            return a > b;
+        }
+    }
+    false
+}
+
+/// CLI update check for one remote connection (Nexus `checkRemoteCliUpdate`):
+/// `vibe --version` over SSH (login shell) + PyPI latest with cache.
+pub fn check_remote_cli_update(conn: &RemoteConnection) -> CliUpdateInfo {
+    let ver = ssh_run(conn, "bash -lc \"vibe --version\"", 15_000, None);
+    if ver.code != 0 {
+        let e = ver.stderr.trim();
+        let e = if e.is_empty() { "command failed".to_string() } else { e.chars().take(300).collect() };
+        return CliUpdateInfo {
+            current_version: None,
+            latest_version: None,
+            update_available: false,
+            error: Some(format!("vibe not found on {}: {e}", conn.name)),
+        };
+    }
+    let current = extract_version(&ver.stdout);
+    let latest = match pypi_latest() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            return CliUpdateInfo {
+                current_version: current,
+                latest_version: None,
+                update_available: false,
+                error: Some(format!("PyPI: {}", e.chars().take(300).collect::<String>())),
+            };
+        }
+    };
+    let update_available = match (&current, &latest) {
+        (Some(c), Some(l)) => is_newer_version(l, c),
+        _ => false,
+    };
+    CliUpdateInfo {
+        current_version: current,
+        latest_version: latest,
+        update_available,
+        error: None,
+    }
+}
+
+/// Upgrade command (Nexus `upgradeRemoteCli`): uv preferred, pip3 fallback.
+const REMOTE_CLI_UPGRADE_CMD: &str = "bash -lc \"command -v uv >/dev/null 2>&1 && uv tool upgrade mistral-vibe || (command -v pip3 >/dev/null 2>&1 && pip3 install --user --upgrade mistral-vibe)\"";
+
+/// Upgrade the CLI on the remote host (up to 5 minutes), then re-read
+/// `vibe --version`. Blocking - call from `tokio::task::spawn_blocking`.
+pub fn upgrade_remote_cli(conn: &RemoteConnection) -> CliUpgradeResult {
+    let res = ssh_run(conn, REMOTE_CLI_UPGRADE_CMD, 300_000, None);
+    if res.code != 0 {
+        let e = format!("{}{}", res.stdout, res.stderr);
+        return CliUpgradeResult {
+            version: None,
+            error: Some(if e.trim().is_empty() {
+                "upgrade failed".to_string()
+            } else {
+                e.trim().chars().take(500).collect()
+            }),
+        };
+    }
+    let ver = ssh_run(conn, "bash -lc \"vibe --version\"", 15_000, None);
+    CliUpgradeResult {
+        version: extract_version(&ver.stdout),
+        error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,5 +723,19 @@ mod tests {
         );
         // A block without a newline (truncated output) is skipped.
         assert_eq!(parse_remote_chunk_blocks("@@@CHUNK:zzz").len(), 0);
+    }
+
+    #[test]
+    fn extract_version_basic() {
+        assert_eq!(extract_version("vibe 3.0.2"), Some("3.0.2".into()));
+        assert_eq!(extract_version("no version here"), None);
+        assert_eq!(extract_version("port 8080 open"), None);
+    }
+
+    #[test]
+    fn newer_version_compare() {
+        assert!(is_newer_version("3.1.0", "3.0.2"));
+        assert!(!is_newer_version("3.0.2", "3.0.2"));
+        assert!(is_newer_version("4.0", "3.9.9"));
     }
 }

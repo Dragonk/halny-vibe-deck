@@ -248,6 +248,29 @@ pub struct RemoteInstallResult {
     pub log: String,
 }
 
+/// CLI update check (Nexus `CliUpdateInfo`): current + latest PyPI
+/// version of the mistral-vibe CLI, local or remote.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CliUpdateInfo {
+    #[serde(default)]
+    pub current_version: Option<String>,
+    #[serde(default)]
+    pub latest_version: Option<String>,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Result of a CLI upgrade (Nexus `CliUpgradeResult`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CliUpgradeResult {
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// UI preferences mirrored from the engine config (subset shown to clients).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UiConfig {

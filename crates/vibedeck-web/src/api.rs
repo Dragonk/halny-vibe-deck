@@ -342,6 +342,30 @@ pub async fn api_install_remote_acp(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// CLI update check for a remote connection (vibe --version + PyPI latest).
+#[server]
+pub async fn api_check_remote_cli_update(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+) -> Result<vibedeck_core::snapshot::CliUpdateInfo, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::check_remote_cli_update(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Upgrade the CLI on a remote connection (uv preferred, pip3 fallback).
+#[server]
+pub async fn api_upgrade_remote_cli(
+    token: String,
+    conn: vibedeck_core::snapshot::RemoteConnection,
+) -> Result<vibedeck_core::snapshot::CliUpgradeResult, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(move || vibedeck_engine::remote::upgrade_remote_cli(&conn))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 /// CLI sessions discovered on a remote host (JSON-RPC over ssh).
 #[server]
 pub async fn api_remote_sessions(

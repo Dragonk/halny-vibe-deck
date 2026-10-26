@@ -1460,6 +1460,85 @@ fn ssh_editor_el(
                         let state = state.clone();
                         let lang = lang.clone();
                         let d = d.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        let ssh_busy = ssh_busy.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let lang = lang.clone();
+                            let d = d.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let mut ssh_busy = ssh_busy.clone();
+                            spawn(async move {
+                                ssh_busy.set(true);
+                                ssh_msg.set(loc(&lang, "Sprawdzam CLI...", "Checking CLI..."));
+                                match crate::api::api_check_remote_cli_update(token(&state), d.to_conn()).await {
+                                    Ok(r) => {
+                                        if let Some(e) = r.error {
+                                            ssh_msg.set(format!("❌ {e}"));
+                                        } else if r.update_available {
+                                            ssh_msg.set(format!(
+                                                "⬆️ CLI {} → {} ({})",
+                                                r.current_version.unwrap_or_default(),
+                                                r.latest_version.unwrap_or_default(),
+                                                loc(&lang, "dostępna aktualizacja", "update available")
+                                            ));
+                                        } else {
+                                            ssh_msg.set(format!(
+                                                "✅ CLI {} ({})",
+                                                r.current_version.unwrap_or_default(),
+                                                loc(&lang, "aktualna wersja", "up to date")
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                                ssh_busy.set(false);
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Sprawdź CLI\", \"Check CLI\")}"
+                }
+                button {
+                    class: "save-btn",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let lang = lang.clone();
+                        let d = d.clone();
+                        let ssh_msg = ssh_msg.clone();
+                        let ssh_busy = ssh_busy.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let lang = lang.clone();
+                            let d = d.clone();
+                            let mut ssh_msg = ssh_msg.clone();
+                            let mut ssh_busy = ssh_busy.clone();
+                            spawn(async move {
+                                ssh_busy.set(true);
+                                ssh_msg.set(loc(&lang, "Aktualizuję CLI (uv/pip3, do 5 min)...", "Upgrading CLI (uv/pip3, up to 5 min)..."));
+                                match crate::api::api_upgrade_remote_cli(token(&state), d.to_conn()).await {
+                                    Ok(r) => {
+                                        if let Some(e) = r.error {
+                                            ssh_msg.set(format!("❌ {e}"));
+                                        } else {
+                                            ssh_msg.set(format!("✅ CLI {}", r.version.unwrap_or_default()));
+                                        }
+                                    }
+                                    Err(e) => ssh_msg.set(format!("❌ {e}")),
+                                }
+                                ssh_busy.set(false);
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Aktualizuj CLI\", \"Upgrade CLI\")}"
+                }
+                button {
+                    class: "save-btn",
+                    disabled: *ssh_busy.read(),
+                    onclick: {
+                        let state = state.clone();
+                        let lang = lang.clone();
+                        let d = d.clone();
                         let ssh_draft = ssh_draft.clone();
                         let ssh_msg = ssh_msg.clone();
                         let ssh_busy = ssh_busy.clone();
