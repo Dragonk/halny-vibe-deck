@@ -168,7 +168,7 @@ jobs:
           mkdir -p dist/halny-vibe-deck-linux
           cp "$CARGO_TARGET_DIR/server-release/halny-vibe-deck" dist/halny-vibe-deck-linux/halny-vibe-deck
           cp pdfium/lib/libpdfium.so dist/halny-vibe-deck-linux/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-linux/public
+          cp -r "$CARGO_TARGET_DIR/dx/halny-vibe-deck/release/web/public" dist/halny-vibe-deck-linux/public
           tar -czf "halny-vibe-deck-${VERSION}-linux-x64.tar.gz" -C dist/halny-vibe-deck-linux .
 
       - name: Assemble windows bundle
@@ -179,18 +179,18 @@ jobs:
           test -n "$WEBVIEW2_LOADER" || { echo "WebView2Loader.dll not found"; exit 1; }
           cp "$WEBVIEW2_LOADER" dist/halny-vibe-deck-win/
           cp pdfium/bin/pdfium.dll dist/halny-vibe-deck-win/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-win/public
+          cp -r "$CARGO_TARGET_DIR/dx/halny-vibe-deck/release/web/public" dist/halny-vibe-deck-win/public
           cd dist/halny-vibe-deck-win && zip -q -r "../../halny-vibe-deck-${VERSION}-windows-x64.zip" .
 
       - name: Assemble appserver bundles
         run: |
           mkdir -p dist/halny-vibe-deck-appserver-linux
           cp "$CARGO_TARGET_DIR/server-release/halny-vibe-deck-appserver" dist/halny-vibe-deck-appserver-linux/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-appserver-linux/public
+          cp -r "$CARGO_TARGET_DIR/dx/halny-vibe-deck/release/web/public" dist/halny-vibe-deck-appserver-linux/public
           tar -czf "halny-vibe-deck-appserver-${VERSION}-linux-x64.tar.gz" -C dist/halny-vibe-deck-appserver-linux .
           mkdir -p dist/halny-vibe-deck-appserver-win
           cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck-appserver.exe" dist/halny-vibe-deck-appserver-win/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-appserver-win/public
+          cp -r "$CARGO_TARGET_DIR/dx/halny-vibe-deck/release/web/public" dist/halny-vibe-deck-appserver-win/public
           cd dist/halny-vibe-deck-appserver-win && zip -q -r "../../halny-vibe-deck-appserver-${VERSION}-windows-x64.zip" .
 
       - name: Upload bundles
