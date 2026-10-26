@@ -492,6 +492,11 @@ export const es = {
   newProjectEmpty: 'Sin subcarpetas',
   newProjectPlaceholder: 'p. ej. /home/user/proyectos/mi-proyecto',
   newProjectCreate: 'Crear proyecto',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'El modelo seleccionado no admite imágenes - pueden ser descritas por el modelo de respaldo o no ser vistas',
+  imgTooLarge: 'La imagen es demasiado grande (límite de 10 MB)',
+  imgBadType: 'Tipo de imagen no admitido (permitidos: PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Demasiadas imágenes (límite de 8 por mensaje)',
   newProjectErrorEmpty: 'Indica una ruta de proyecto',
   newProjectErrorAbsolute: 'La ruta debe ser absoluta (empezar por /)',
   downloadLabel: 'Descargar',

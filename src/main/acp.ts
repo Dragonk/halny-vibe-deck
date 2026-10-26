@@ -1033,7 +1033,12 @@ export class AcpManager {
     }
   }
 
-  async sendPrompt(text: string, acpSessionId?: string): Promise<void> {
+  /** v1.0.8: an image to deliver inside the prompt (ACP ImageContentBlock). */
+  async sendPrompt(
+    text: string,
+    acpSessionId?: string,
+    images?: Array<{ data: string; mimeType: string; uri?: string }>
+  ): Promise<void> {
     // v1.0.2: a prompt must ALWAYS be addressed to an explicit session.
     // The old fallback (acpSessionId ?? this.currentSessionId) delivered
     // unaddressed prompts to whatever session the worker touched last:
@@ -1054,11 +1059,23 @@ export class AcpManager {
     this.turnsInFlight++
     let result: Record<string, unknown>
     try {
+      // v1.0.8: images travel as ACP ImageContentBlocks (base64 data +
+      // mimeType, uri = display alias); the CLI extracts them into
+      // ImageAttachments and hands them to the model's vision input.
+      const blocks: Array<Record<string, unknown>> = [{ type: 'text', text }]
+      for (const img of images ?? []) {
+        blocks.push({
+          type: 'image',
+          data: img.data,
+          mimeType: img.mimeType,
+          ...(img.uri ? { uri: img.uri } : {}),
+        })
+      }
       result = (await this.sendRequest(
         'session/prompt',
         {
           sessionId: sid,
-          prompt: [{ type: 'text', text }]
+          prompt: blocks
         },
         3_600_000
       )) as Record<string, unknown>

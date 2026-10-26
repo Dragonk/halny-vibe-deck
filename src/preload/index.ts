@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 export interface AcpConfigOptionChoice {
@@ -128,8 +128,8 @@ const api = {
       ipcRenderer.invoke('acp:new-session', cwd, remoteId ?? undefined, applyConfig ?? undefined),
     loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
       ipcRenderer.invoke('acp:load-session', sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined),
-    sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
-      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined),
+    sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>): Promise<void> =>
+      ipcRenderer.invoke('acp:send-prompt', text, acpSessionId, remoteId ?? undefined, images ?? []),
     cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
       ipcRenderer.invoke('acp:cancel-session', acpSessionId, remoteId ?? undefined),
     setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>
@@ -209,6 +209,15 @@ const api = {
       ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined),
     writeBinary: (filePath: string, base64: string, remoteId?: string): Promise<{ error: string | null }> =>
       ipcRenderer.invoke('fs:write-binary', filePath, base64, remoteId ?? undefined),
+    // v1.0.8: absolute host path of a dropped File (Electron webUtils) -
+    // null in the browser (the drop handler uploads the bytes instead).
+    pathForFile: (file: File): string | null => {
+      try {
+        return webUtils.getPathForFile(file)
+      } catch {
+        return null
+      }
+    },
     mkdir: (filePath: string, remoteId?: string): Promise<{ error: string | null }> =>
       ipcRenderer.invoke('fs:mkdir', filePath, remoteId ?? undefined)
   },

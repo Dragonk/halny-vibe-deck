@@ -494,6 +494,11 @@ export const it = {
   newProjectEmpty: 'Nessuna sottocartella',
   newProjectPlaceholder: 'es. /home/user/progetti/mio-progetto',
   newProjectCreate: 'Crea progetto',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'Il modello selezionato non supporta le immagini - possono essere descritte dal modello di riserva o non essere viste',
+  imgTooLarge: 'L\'immagine è troppo grande (limite 10 MB)',
+  imgBadType: 'Tipo di immagine non supportato (consentiti: PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Troppe immagini (limite 8 per messaggio)',
   newProjectErrorEmpty: 'Inserisci un percorso di progetto',
   newProjectErrorAbsolute: 'Il percorso deve essere assoluto (iniziare con /)',
   downloadLabel: 'Scarica',

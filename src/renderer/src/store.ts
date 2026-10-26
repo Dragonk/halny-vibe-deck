@@ -30,6 +30,7 @@ interface HistModelCfg {
   display_name?: string;
   thinking?: string;
   thinking_levels?: string[];
+  supports_images?: boolean;
 }
 const keyOf = (m: HistModelCfg): string => m.alias || m.name;
 interface HistAgentCfg {
@@ -171,6 +172,11 @@ interface AppStore {
   sessionPlans: Record<string, PlanEntry[]>;
   setSessionPlan: (acpSessionId: string, entries: PlanEntry[]) => void;
   currentModel: string;
+  /** v1.0.8: models seen in the vibe config with their vision capability. */
+  vibeModels: Array<{ value: string; supportsImages: boolean }>;
+  setVibeModels: (models: Array<{ value: string; supportsImages: boolean }>) => void;
+  /** True when the active model can receive images (unknown = assume yes). */
+  activeModelSupportsImages: () => boolean;
   currentMode: string;
   currentThinking: string;
   setCurrentModel: (model: string) => void;
@@ -783,6 +789,10 @@ export const useStore = create<AppStore>((set, get) => ({
       // levels the freshly picked model does not offer.
       const levels = chosen.thinking_levels;
       if (!levels || levels.length === 0) return;
+      // v1.0.8: refresh the vision capability for the freshly chosen model.
+      get().setVibeModels(
+        merged.map((m) => ({ value: keyOf(m), supportsImages: m.supports_images !== false })),
+      );
       set((s) => ({
         configOptions: s.configOptions.map((o) =>
           o.id === "thinking"
@@ -886,6 +896,10 @@ export const useStore = create<AppStore>((set, get) => ({
       if (cur) get().setCurrentModel(keyOf(cur));
       if (!get().currentMode) get().setCurrentMode("accept-edits");
       get().setCurrentThinking(thinkingCurrent);
+      // v1.0.8: remember vision capability per model for image gating.
+      get().setVibeModels(
+        models.map((m) => ({ value: keyOf(m), supportsImages: m.supports_images !== false })),
+      );
     } catch {
       /* vibe config unavailable - chips populate on the first ACP session */
     }
@@ -900,6 +914,14 @@ export const useStore = create<AppStore>((set, get) => ({
     set((s) => ({ sessionPlans: { ...s.sessionPlans, [acpSessionId]: entries } })),
 
   currentModel: "",
+  vibeModels: [],
+  setVibeModels: (vibeModels) => set({ vibeModels }),
+  activeModelSupportsImages: () => {
+    const wanted = get().currentModel;
+    if (!wanted) return true;
+    const m = get().vibeModels.find((x) => x.value === wanted);
+    return m ? m.supportsImages : true;
+  },
   currentMode: "",
   currentThinking: "",
   setCurrentModel: (currentModel) => set({ currentModel }),

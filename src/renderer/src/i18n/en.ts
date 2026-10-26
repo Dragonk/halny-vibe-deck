@@ -492,6 +492,11 @@ export const en = {
   newProjectEmpty: 'No subfolders here',
   newProjectPlaceholder: 'e.g. /home/user/projects/my-project',
   newProjectCreate: 'Create project',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'The selected model does not support images - they may be described by the vision fallback model or not be seen at all',
+  imgTooLarge: 'The image is too large (10 MB limit)',
+  imgBadType: 'Unsupported image type (allowed: PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Too many images (8 per message limit)',
   newProjectErrorEmpty: 'Enter a project path',
   newProjectErrorAbsolute: 'Path must be absolute (start with /)',
   downloadLabel: 'Download',

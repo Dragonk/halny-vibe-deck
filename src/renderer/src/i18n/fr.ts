@@ -492,6 +492,11 @@ export const fr = {
   newProjectEmpty: 'Aucun sous-dossier',
   newProjectPlaceholder: 'ex. /home/user/projets/mon-projet',
   newProjectCreate: 'Créer le projet',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'Le modèle sélectionné ne prend pas en charge les images - elles peuvent être décrites par le modèle de secours ou ne pas être vues',
+  imgTooLarge: 'L\'image est trop grande (limite 10 Mo)',
+  imgBadType: 'Type d\'image non pris en charge (autorisés : PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Trop d\'images (limite de 8 par message)',
   newProjectErrorEmpty: 'Indiquez un chemin de projet',
   newProjectErrorAbsolute: 'Le chemin doit être absolu (commencer par /)',
   downloadLabel: 'Télécharger',

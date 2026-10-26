@@ -147,8 +147,8 @@ function buildApi(): AppAPI {
         invoke('acp:new-session', [cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
       loadSession: (sessionId: string, cwd: string, remoteId?: string, applyConfig?: AcpApplyConfig): Promise<void> =>
         invoke('acp:load-session', [sessionId, cwd, remoteId ?? undefined, applyConfig ?? undefined]).then(() => undefined),
-      sendPrompt: (text: string, acpSessionId?: string, remoteId?: string): Promise<void> =>
-        invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined]).then(() => undefined),
+      sendPrompt: (text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>): Promise<void> =>
+        invoke('acp:send-prompt', [text, acpSessionId, remoteId ?? undefined, images ?? []]).then(() => undefined),
       cancelSession: (acpSessionId: string, remoteId?: string): Promise<void> =>
         invoke('acp:cancel-session', [acpSessionId, remoteId ?? undefined]).then(() => undefined),
       setConfigOption: (key: string, value: string, sessionId?: string, remoteId?: string): Promise<void> =>
@@ -210,6 +210,9 @@ function buildApi(): AppAPI {
         invoke('fs:write-text', [filePath, content, remoteId ?? undefined]),
       writeBinary: (filePath: string, base64: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:write-binary', [filePath, base64, remoteId ?? undefined]),
+      // v1.0.8: the browser has no host filesystem path for a dropped
+      // File - the drop handler falls back to uploading the bytes.
+      pathForFile: (_file: File): string | null => null,
       mkdir: (filePath: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:mkdir', [filePath, remoteId ?? undefined])
     },

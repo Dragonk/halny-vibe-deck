@@ -492,6 +492,11 @@ export const pl = {
   newProjectEmpty: 'Brak podfolderów',
   newProjectPlaceholder: 'np. /home/dragonk/projekty/moj-projekt',
   newProjectCreate: 'Utwórz projekt',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'Wybrany model nie obsługuje obrazów — mogą zostać opisane przez model zapasowy lub nie być widziane',
+  imgTooLarge: 'Obraz jest za duży (limit 10 MB)',
+  imgBadType: 'Nieobsługiwany typ obrazu (dozwolone: PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Zbyt wiele obrazów (limit 8 na wiadomość)',
   newProjectErrorEmpty: 'Podaj ścieżkę projektu',
   newProjectErrorAbsolute: 'Ścieżka musi być bezwzględna (zaczynać od /)',
   downloadLabel: 'Pobierz',

@@ -6063,7 +6063,43 @@ code {
    duplicate button was removed). */
 .sidebar-np-btn { margin-left: 6px; padding: 0 5px; background: none; border: none; border-radius: 6px; font-size: 14px; font-weight: 400; opacity: 0.55; cursor: pointer; white-space: nowrap; }
 .sidebar-np-btn:hover { opacity: 1; background: var(--panel-hover); }
-
+/* v1.0.8: mobile full-size "new session" row button under each project
+   header; hidden on desktop where the tiny "+" is fine. */
+.project-mobile-new { display: none; }
+@media (max-width: 768px) {
+  /* The ✕ close button floats over the header (top:10 right:12) - keep
+     the 🆕 clear of it and give it a real touch target. */
+  .sidebar.mobile-open .sidebar-sessions-header { padding-right: 52px; }
+  .sidebar .sidebar-np-btn {
+    min-width: 44px;
+    min-height: 40px;
+    font-size: 20px;
+    opacity: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .project-mobile-new {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 14px;
+    margin: 2px 0 4px;
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .project-mobile-new:hover { color: var(--text); background: var(--panel-hover); }
+}
+/* v1.0.8: drag & drop highlight + vision warning banner */
+.input-card-wrap.drag-over .input-card { outline: 2px dashed var(--primary, #5b6cff); outline-offset: 2px; }
+.vision-warn { margin: 0 0 6px; padding: 8px 12px; border: 1px solid #b58a2b66; background: #b58a2b1a; border-radius: 8px; color: #d9a83f; font-size: 12px; line-height: 1.45; }
 .history-load-more { padding: 10px 0 4px; text-align: center; font-size: 12px; opacity: 0.65; }
 .history-remote-marker { opacity: 0.85; }
 

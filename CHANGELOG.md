@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.0.8 — 2026-10-26
+
+### Fixed
+- **Images actually reach the LLM now.** Pasted/attached images were
+  preview-only: `sendPrompt` carried text alone and the `@name` marker
+  of a pasted image pointed at a blob URL that does not exist on disk.
+  Images now travel as real ACP image content blocks (base64 + mime,
+  alias from the file name), matching the CLI contract (PNG/JPEG/GIF/
+  WebP, max 8 per message, 10 MB each) - validated in the UI with
+  clear error messages.
+- **The 🆕 new-project button is unusable on phones** (too small and
+  covered by the floating ✕ close button): on mobile it gets a real
+  44×40 px touch target and the sessions header keeps its distance
+  from the ✕; the bottom duplicate button was already removed in
+  1.0.7.
+- **Per-project "new session" row button on mobile**: every project
+  (and SSH remote) group renders a full-size, session-row-sized
+  button between the header and its session list - desktop keeps
+  the compact "+".
+
+### Added
+- **Drag & drop files onto the chat**: dropping files anywhere over
+  the conversation attaches them - images become prompt blocks (with
+  preview chips), other files are referenced by their host path
+  (Electron `webUtils`) or uploaded to the session's host first
+  (web client / SSH remotes). Sidebar, dock and modals are
+  excluded; drops there behave as before.
+- **Vision capability detection**: the app tracks `supports_images`
+  per model from the vibe config. When images are attached while the
+  active model has no vision, a warning banner explains that they
+  may be described by the CLI's vision fallback model or not be
+  seen at all - never a silent loss, never a hard block.
+
+### Changed
+- **Phones boot into the session list**: the preview dock is closed
+  and the sidebar (sessions) panel is open after login, so the
+  user can start a new session or resume an existing one instead
+  of staring at an auto-expanded preview panel.
+
 ## 1.0.7 — 2026-10-26
 
 ### Changed

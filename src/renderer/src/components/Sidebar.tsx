@@ -437,7 +437,21 @@ export default function Sidebar(): React.JSX.Element {
                   ＋
                 </span>
               </button>
-              {!collapsed && group.sessions.map(renderSession)}
+              {!collapsed && (
+                <>
+                  {/* v1.0.8: phones cannot reliably hit the tiny "+" in
+                      the group header - a full-size row-sized button sits
+                      between the project header and its sessions
+                      (mobile-only, CSS-gated). */}
+                  <button
+                    className="project-mobile-new"
+                    onClick={() => startLocalDraft(group.fullPath || undefined)}
+                  >
+                    ＋ {tr.newSessionHere}
+                  </button>
+                  {group.sessions.map(renderSession)}
+                </>
+              )}
             </div>
           )
         })}
@@ -472,6 +486,14 @@ export default function Sidebar(): React.JSX.Element {
               </button>
               {!collapsed && (
                 <>
+                  {/* v1.0.8: mobile-sized button for the remote group too
+                      (same tap problem as local projects). */}
+                  <button
+                    className="project-mobile-new"
+                    onClick={() => setNpTarget({ remoteId: conn.id, remoteName: conn.name })}
+                  >
+                    🆕 {tr.newProjectLabel} · {conn.name}
+                  </button>
                   {(() => {
                     // v0.13.1: unified per-remote folder list - configured
                     // locations plus session cwds, deduplicated. A configured

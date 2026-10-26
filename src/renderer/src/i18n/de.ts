@@ -492,6 +492,11 @@ export const de = {
   newProjectEmpty: 'Keine Unterordner',
   newProjectPlaceholder: 'z. B. /home/user/projekte/mein-projekt',
   newProjectCreate: 'Projekt erstellen',
+  // v1.0.8: image attachments + vision gating
+  visionWarn: 'Das gewählte Modell unterstützt keine Bilder - sie können vom Ersatzmodell beschrieben oder gar nicht gesehen werden',
+  imgTooLarge: 'Das Bild ist zu groß (Limit 10 MB)',
+  imgBadType: 'Nicht unterstützter Bildtyp (erlaubt: PNG, JPEG, GIF, WebP)',
+  imgTooMany: 'Zu viele Bilder (Limit 8 pro Nachricht)',
   newProjectErrorEmpty: 'Projektpfad angeben',
   newProjectErrorAbsolute: 'Der Pfad muss absolut sein (mit / beginnen)',
   downloadLabel: 'Herunterladen',

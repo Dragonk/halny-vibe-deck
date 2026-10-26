@@ -505,8 +505,8 @@ app.whenReady().then(() => {
     await getManager(remoteId).loadSession(sessionId, cwd, applyConfig)
   })
 
-  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string) => {
-    await getManager(remoteId).sendPrompt(text, acpSessionId)
+  ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>) => {
+    await getManager(remoteId).sendPrompt(text, acpSessionId, images)
   })
 
   ipcMain.handle("acp:cancel-session", (_e, acpSessionId: string, remoteId?: string) => {

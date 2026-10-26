@@ -674,6 +674,14 @@ export default function App(): React.JSX.Element {
         const cfg = cfgRaw as AppConfig
         setConfig(cfg)
         setWorkingDirectory(cfg.workingDirectory || '')
+        // v1.0.8: on the phone, boot into the SESSION LIST - not the
+        // preview dock and not an auto-opened chat. The user starts a
+        // session consciously or resumes one from the list.
+        if (window.matchMedia('(max-width: 768px)').matches) {
+          const st = useStore.getState()
+          if (st.dockOpen) st.setDockOpen(false)
+          if (!st.mobileSidebarOpen) st.setMobileSidebarOpen(true)
+        }
         // v1.0.7: no session is opened at boot - populate the model/mode/
         // thinking chips straight from the vibe config so the user sees
         // what can be passed to the agent before any ACP connection.

@@ -193,7 +193,16 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   const [slashPrompts, setSlashPrompts] = useState<{ name: string; content: string }[]>([])
 
   // Pasted images
-  const [pastedImages, setPastedImages] = useState<{ name: string; url: string }[]>([])
+  // v1.0.8: every entry carries base64 data + mime so the send path can
+  // deliver real ACP image blocks (previously images were preview-only
+  // and never reached the LLM).
+  const [pastedImages, setPastedImages] = useState<
+    { name: string; url: string; data?: string; mimeType?: string }[]
+  >([])
+  // v1.0.8: drag & drop over the chat
+  const [dragOver, setDragOver] = useState(false)
+  // v1.0.8: image attachments while the active model has no vision
+  const [visionWarn, setVisionWarn] = useState(false)
   // v0.13.14: web attachment pickers (native dialogs are unavailable in the browser)
   const webFileInputRef = useRef<HTMLInputElement>(null)
   const webImageInputRef = useRef<HTMLInputElement>(null)
@@ -492,6 +501,31 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
     if (!textToSend && pastedImages.length === 0) return
 
+    // v1.0.8: images travel as real ACP content blocks - validated here
+    // against the CLI's limits (mime whitelist, 8 per message, 10 MB).
+    const promptImages = pastedImages
+      .filter((p) => p.data && p.mimeType)
+      .map((p) => ({ data: p.data!, mimeType: p.mimeType!, uri: p.name }))
+    if (promptImages.length > 8) {
+      setAcpError(tr.imgTooMany)
+      return
+    }
+    for (const img of promptImages) {
+      if (!IMAGE_MIMES.has(img.mimeType)) {
+        setAcpError(tr.imgBadType)
+        return
+      }
+      if ((img.data.length * 3) / 4 > 10 * 1024 * 1024) {
+        setAcpError(tr.imgTooLarge)
+        return
+      }
+    }
+    // v1.0.8: a model without vision still gets the images (the CLI
+    // describes them via its vision fallback) - warn, never block.
+    if (promptImages.length > 0 && !useStore.getState().activeModelSupportsImages()) {
+      setVisionWarn(true)
+    }
+
     // v0.13.1: a new send attempt clears the stale error banner
     setAcpError(null)
     // v0.13.12: Enter bypasses the disabled send button - guard here too.
@@ -675,7 +709,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       }
       useStore.getState().markSessionBusy(linkedSess.id)
       try {
-        await window.api.acp.sendPrompt(expandedText, linkedSess.acpSessionId, rid ?? undefined)
+        await window.api.acp.sendPrompt(expandedText, linkedSess.acpSessionId, rid ?? undefined, promptImages)
       } catch (err) {
         if (linkedSess?.id) useStore.getState().markSessionIdle(linkedSess.id)
         setAcpError((err as Error).message)
@@ -745,7 +779,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       ? `${currentSess.contextSummary}\n\nUser: ${expandedText}`
       : expandedText
     try {
-      await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
+      await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages)
     } catch (err) {
       const errMsg = (err as Error).message
       // Session not in ACP memory (e.g. app restarted) — load it from disk first
@@ -789,7 +823,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
               if (!alreadyThere) stAfter.addUserMessage(textToSend, attachments)
             }
             useStore.getState().markSessionBusy(currentSess.id)
-            await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
+            await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages)
           } catch (loadErr) {
             useStore.getState().setPendingLoadSessionId(null)
             // v0.13.11: never fall back to a new session here. The old
@@ -931,8 +965,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     try {
       const res = await window.api.fs.readBinary(filePath)
       if (res.error || !res.base64) return
-      const url = 'data:' + (res.mime || 'image/png') + ';base64,' + res.base64
-      setPastedImages((prev) => [...prev, { name, url }])
+      const mime = res.mime || 'image/png'
+      const url = 'data:' + mime + ';base64,' + res.base64
+      setPastedImages((prev) => [...prev, { name, url, data: res.base64, mimeType: mime }])
+      refreshVisionWarn()
       insertTextAtCursor('@' + name + ' ')
     } catch (err) {
       console.error('Failed to attach image:', err)
@@ -964,8 +1000,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         if (asImage) {
           setPastedImages((prev) => [
             ...prev,
-            { name: file.name, url: 'data:' + (file.type || 'image/png') + ';base64,' + b64 },
+            { name: file.name, url: 'data:' + (file.type || 'image/png') + ';base64,' + b64, data: b64, mimeType: file.type || 'image/png' },
           ])
+          refreshVisionWarn()
         }
         insertTextAtCursor('@' + target + ' ')
       } catch (err) {
@@ -1002,27 +1039,113 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     e.preventDefault()
     const file = imageItem.getAsFile()
     if (!file) return
-    const url = URL.createObjectURL(file)
-    const name = `image_${Date.now()}.png`
-    setPastedImages((prev) => [...prev, { name, url }])
-    const editor = editorRef.current
-    if (editor) {
-      const textNode = document.createTextNode('@' + name + ' ')
-      const selection = window.getSelection()
-      if (selection && selection.rangeCount > 0) {
-        const range = selection.getRangeAt(0)
-        range.deleteContents()
-        range.insertNode(textNode)
-        range.setStartAfter(textNode)
-        range.collapse(true)
-        selection.removeAllRanges()
-        selection.addRange(range)
-      } else {
-        editor.appendChild(textNode)
+    void handleDroppedFiles([file])
+  }
+
+  // ---- v1.0.8: image + drag & drop plumbing -------------------------------
+
+  // The CLI accepts exactly these image mime types (vibe/acp/image_blocks.py),
+  // up to MAX_IMAGES_PER_MESSAGE (8) and MAX_IMAGE_BYTES (10 MB) each.
+  const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+  const fileToBase64 = (file: File): Promise<{ data: string; mimeType: string }> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const url = String(reader.result ?? '')
+        resolve({ data: url.split(',')[1] ?? '', mimeType: file.type || 'image/png' })
       }
-      setInputText(editor.textContent ?? '')
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(file)
+    })
+
+  /** Images attached while the active model has no vision get a warning. */
+  const refreshVisionWarn = (): void => {
+    setVisionWarn(!useStore.getState().activeModelSupportsImages())
+  }
+
+  /** Handle dropped/pasted files: images become prompt blocks, other
+   * files are stored on the session's host and referenced by @path. */
+  const handleDroppedFiles = async (files: File[]): Promise<void> => {
+    if (files.length === 0) return
+    const attachRid = useStore.getState().currentSession()?.remoteId ?? undefined
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/')
+      try {
+        if (isImage) {
+          if (!IMAGE_MIMES.has(file.type)) {
+            setAcpError(tr.imgBadType)
+            continue
+          }
+          const { data, mimeType } = await fileToBase64(file)
+          if ((data.length * 3) / 4 > 10 * 1024 * 1024) {
+            setAcpError(tr.imgTooLarge)
+            continue
+          }
+          setPastedImages((prev) => {
+            if (prev.length >= 8) {
+              setAcpError(tr.imgTooMany)
+              return prev
+            }
+            return [...prev, { name: file.name, url: 'data:' + mimeType + ';base64,' + data, data, mimeType }]
+          })
+          refreshVisionWarn()
+        } else {
+          // Desktop: the real host path (Electron webUtils); web/remote:
+          // upload the bytes to the session's host and reference the copy.
+          const hostPath = !isWebMode() ? window.api.fs.pathForFile?.(file) : null
+          let target = hostPath ?? ''
+          if (!target) {
+            const b64 = (await fileToBase64(file)).data
+            const safe = file.name.replace(/[^A-Za-z0-9._-]/g, '_')
+            target = '/tmp/nexus-attachments/' + Date.now() + '-' + safe
+            const res = await window.api.fs.writeBinary(target, b64, attachRid)
+            if (res?.error) {
+              console.error('Attachment upload failed:', res.error)
+              continue
+            }
+          }
+          insertTextAtCursor('@' + target + ' ')
+        }
+      } catch (err) {
+        console.error('Failed to attach dropped file:', err)
+      }
     }
   }
+
+  // Window-level drag & drop: files dropped anywhere over the chat
+  // attach to the conversation (sidebar/dock/modals are excluded).
+  useEffect(() => {
+    const hasFiles = (e: DragEvent): boolean =>
+      Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    const excluded = (e: DragEvent): boolean =>
+      !!(e.target as HTMLElement | null)?.closest('.sidebar, .dock, .modal-overlay')
+    const onDragOver = (e: DragEvent): void => {
+      if (!hasFiles(e) || excluded(e)) return
+      e.preventDefault()
+      setDragOver(true)
+    }
+    const onDragLeave = (e: DragEvent): void => {
+      if (!hasFiles(e)) return
+      if (e.relatedTarget !== null) return
+      setDragOver(false) // left the window
+    }
+    const onDrop = (e: DragEvent): void => {
+      if (!hasFiles(e)) return
+      if (excluded(e)) return
+      e.preventDefault()
+      setDragOver(false)
+      void handleDroppedFiles(Array.from(e.dataTransfer?.files ?? []))
+    }
+    document.addEventListener('dragover', onDragOver)
+    document.addEventListener('dragleave', onDragLeave)
+    document.addEventListener('drop', onDrop)
+    return () => {
+      document.removeEventListener('dragover', onDragOver)
+      document.removeEventListener('dragleave', onDragLeave)
+      document.removeEventListener('drop', onDrop)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Config options (model / mode / thinking) ----
   const handleConfigSelect = async (key: string, value: string): Promise<void> => {
@@ -1036,7 +1159,14 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         await window.api.vibe.exposeProjectAgent(value, cwd, rid).catch(console.error)
       }
     }
-    if (key === 'model') setCurrentModel(value)
+    if (key === 'model') {
+      setCurrentModel(value)
+      // v1.0.8: vision capability follows the model - re-evaluate the
+      // image warning immediately.
+      const supports =
+        useStore.getState().vibeModels.find((m) => m.value === value)?.supportsImages ?? true
+      setVisionWarn(pastedImages.length > 0 && !supports)
+    }
     if (key === 'mode') setCurrentMode(value)
     if (key === 'thinking') setCurrentThinking(value)
     // v0.13.14: the thinking level list is model specific - refresh it
@@ -1170,7 +1300,12 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   const pickersReady = configOptions.length > 0
 
   return (
-    <div className="input-card-wrap">
+    <div className={'input-card-wrap' + (dragOver ? ' drag-over' : '')}>
+      {visionWarn && (
+        <div className="vision-warn" role="status">
+          ⚠️ {tr.visionWarn}
+        </div>
+      )}
       <div className="input-card">
         {/* v0.10.5: queued messages panel (Mistral Vibe style), attached to the card top */}
         <MessageQueue config={config} />
