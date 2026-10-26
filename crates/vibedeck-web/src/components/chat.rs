@@ -2703,7 +2703,7 @@ fn SubagentSessionBlock(session: SubagentSessionView) -> Element {
 /// emitted as `.mermaid-container[data-src]` divs and rendered to SVG by
 /// MERMAID_JS below (mermaid@10 from CDN, loaded lazily once per page).
 #[component]
-fn MarkdownLite(text: String) -> Element {
+pub(crate) fn MarkdownLite(text: String) -> Element {
     if text.is_empty() {
         return VNode::empty();
     }

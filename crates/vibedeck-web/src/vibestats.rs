@@ -26,6 +26,9 @@ pub struct SessionStatsRow {
     pub tool_succeeded: f64,
     pub tool_failed: f64,
     pub tool_rejected: f64,
+    /// All models used across generations (unified sessions).
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 /// One message of a subagent transcript (role: `user` | `assistant`).
@@ -110,6 +113,7 @@ mod imp {
                 tool_succeeded: s.stats.tool_calls_succeeded,
                 tool_failed: s.stats.tool_calls_failed,
                 tool_rejected: s.stats.tool_calls_rejected,
+                models: s.models.clone(),
             })
             .collect()
     }
