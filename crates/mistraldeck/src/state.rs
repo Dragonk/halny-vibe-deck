@@ -442,6 +442,9 @@ pub async fn submit(mut state: Signal<ClientState>, text: String) {
         state.write().queue.push(text);
         return;
     }
+    // v0.13.1: a new send attempt clears the stale error banner
+    // (Nexus InputBar handleSend).
+    state.write().snapshot.acp_error.clear();
     let tok = token(&state);
     let _ = crate::api::api_send_message(tok, text).await;
 }

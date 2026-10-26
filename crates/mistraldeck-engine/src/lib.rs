@@ -686,10 +686,17 @@ impl Engine {
                     if let Some(slot) = st.slots.get_mut(&slot_id) {
                         slot.busy = true;
                         slot.last_activity = std::time::Instant::now();
-                        let _ = slot.cmd.send(AcpCommand::Prompt {
-                            session_id: acp_session_id,
-                            text,
-                        });
+                        // v0.13.1: a failed prompt send unblocks the chat.
+                        if slot
+                            .cmd
+                            .send(AcpCommand::Prompt {
+                                session_id: acp_session_id,
+                                text,
+                            })
+                            .is_err()
+                        {
+                            mark_prompt_failed(slot);
+                        }
                     }
                 } else {
                     // Lazy-resumed CLI session (Nexus §2.2): the first
@@ -1318,9 +1325,15 @@ impl Engine {
                         Some(text) => {
                             slot.busy = true;
                             slot.last_activity = std::time::Instant::now();
-                            let _ = slot
+                            // v0.13.1: unblock the chat when the prompt
+                            // send fails (dead worker channel).
+                            if slot
                                 .cmd
-                                .send(AcpCommand::Prompt { session_id, text });
+                                .send(AcpCommand::Prompt { session_id, text })
+                                .is_err()
+                            {
+                                mark_prompt_failed(slot);
+                            }
                         }
                         None => {
                             slot.busy = false;
@@ -1668,6 +1681,17 @@ impl Engine {
         // Anything structural (status, approvals, ready) -> refetch hint.
         self.publish(BusEvent::StructureChanged);
     }
+}
+
+/// v0.13.1: a failed prompt send must not leave the chat stuck busy
+/// (Nexus `markSessionIdle` on every sendPrompt error path) — the worker
+/// process is gone, so the turn can never complete; surface the error and
+/// free the slot. Its Disconnected status makes the next prompt respawn a
+/// fresh worker via `reuse_slot_or_cleanup`.
+pub fn mark_prompt_failed(slot: &mut crate::types::SlotState) {
+    slot.busy = false;
+    slot.status = AcpStatus::Disconnected;
+    slot.error = "Worker unavailable (process gone)".into();
 }
 
 /// v0.10.2 guard against full-entry resends from the CLI — a delta chunk
@@ -2236,5 +2260,48 @@ mod dedupe_tests {
         assert!(m.thinking[0].is_complete);
         assert!(m.thinking[0].completed_at > 0);
         assert_eq!(m.tool_calls[0].status, ToolStatus::Done);
+    }
+}
+
+
+#[cfg(test)]
+mod prompt_unblock_tests {
+    use super::*;
+    use crate::types::{SlotPurpose, SlotState};
+    use mistraldeck_core::proto::AcpCommand;
+    use mistraldeck_core::snapshot::AcpStatus;
+    use std::sync::mpsc;
+
+    #[test]
+    fn failed_prompt_send_unblocks_slot() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx); // channel closed -> send fails
+        let mut s = SlotState {
+            cmd: tx,
+            purpose: SlotPurpose::NewLocal { cwd: "/tmp".into() },
+            status: AcpStatus::Connected,
+            error: String::new(),
+            busy: true,
+            last_activity: std::time::Instant::now(),
+            pending_prompt: None,
+            pending_option: None,
+            approval: None,
+            question: None,
+            usage: Default::default(),
+            load_progress: None,
+            commands: Vec::new(),
+            config_options: Vec::new(),
+            modes: Vec::new(),
+            stream_sent: std::collections::HashMap::new(),
+        };
+        let failed = s
+            .cmd
+            .send(AcpCommand::Prompt { session_id: "x".into(), text: "hi".into() })
+            .is_err();
+        assert!(failed);
+        mark_prompt_failed(&mut s);
+        assert!(!s.busy);
+        assert_eq!(s.status, AcpStatus::Disconnected);
+        assert!(!s.error.is_empty());
     }
 }

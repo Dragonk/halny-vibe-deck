@@ -5983,6 +5983,15 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     border-radius: 10px;
     background: rgba(127, 127, 127, 0.04);
 }
+.plan-card-sticky {
+    position: sticky;
+    bottom: 8px;
+    z-index: 20;
+    background: var(--panel);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    max-height: 45vh;
+    overflow-y: auto;
+}
 .plan-card-header {
     display: flex;
     align-items: center;

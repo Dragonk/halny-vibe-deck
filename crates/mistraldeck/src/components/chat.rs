@@ -140,6 +140,12 @@ pub fn ChatView() -> Element {
                             }
                         }
                     }
+                    // v0.13.1: the error banner renders also when the chat
+                    // already has messages (Nexus ChatView), not only in the
+                    // empty state.
+                    if !messages.is_empty() && !acp_error.is_empty() {
+                        div { class: "chat-error-banner", span { "⚠" } " {acp_error}" }
+                    }
                     // Lazy-resume overlay (Nexus ChatView isResuming):
                     // spinner + label, chunk count once the replay streams.
                     if is_resuming {
@@ -2846,11 +2852,16 @@ pub fn PlanCard(entries: Vec<PlanEntry>) -> Element {
         .cloned();
     let done = entries.iter().filter(|e| e.status == "completed").count();
     let total = entries.len();
-    let card_cls = if collapsed {
-        "plan-card plan-card-collapsed"
-    } else {
-        "plan-card"
-    };
+    // Sticky while the plan is in progress (Nexus v0.13.6): the card
+    // stays pinned to the bottom of the chat viewport while messages
+    // stream in; once all entries are done it returns to normal flow.
+    let mut card_cls = String::from("plan-card");
+    if collapsed {
+        card_cls.push_str(" plan-card-collapsed");
+    }
+    if !all_done {
+        card_cls.push_str(" plan-card-sticky");
+    }
     let chevron_cls = if collapsed {
         "plan-card-chevron"
     } else {
