@@ -4,6 +4,8 @@
 
 ![Chat with the agent](docs/screenshots/chat.png)
 
+> **Unofficial project.** Mistral Vibe Nexus is built by an independent developer and is **not affiliated with, endorsed by, or supported by Mistral AI**. The author has no connection to Mistral — the project simply builds on top of Mistral Vibe and the Mistral Vibe CLI (`vibe-acp`). "Mistral" and "Mistral Vibe" are trademarks of Mistral AI.
+
 Nexus wraps the agent in a full IDE-like workspace: resumable sessions, a file tree with live preview and editing, a git panel, usage/cost statistics, remote SSH projects, and a built-in HTTPS server so you can keep working from a browser or your phone.
 
 | File preview with CodeMirror | New project (local & SSH) | Mobile / PWA |
