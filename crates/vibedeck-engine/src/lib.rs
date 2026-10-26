@@ -237,7 +237,9 @@ impl Engine {
                         .and_then(|id| st.slots.get(&id))
                         .map(|slot| (slot.busy, slot.status.as_str().to_string()))
                         .unwrap_or((false, String::new()));
-                    SessionMeta::from_session(s, busy, &status)
+                    let mut meta = SessionMeta::from_session(s, busy, &status);
+                    meta.stopping = st.stopping.contains(&s.id);
+                    meta
                 })
                 .collect(),
             current_messages: st
@@ -344,6 +346,7 @@ impl Engine {
                 }
             }
             st.sessions.remove(index);
+            st.stopping.remove(&key);
             st.current = match st.current {
                 Some(c) if c == index => Some(0usize.min(st.sessions.len().saturating_sub(1))),
                 Some(c) if c > index => Some(c - 1),
@@ -586,6 +589,9 @@ impl Engine {
             message: user_msg,
         });
         let mut st = self.state.lock().unwrap();
+        // A new turn clears any stale stop request for the session
+        // (Nexus markSessionBusy).
+        st.stopping.remove(&key);
         match acp_id {
             Some(acp_session_id) => {
                 if let Some(slot_id) = st.slot_of_session(&key) {
@@ -676,15 +682,31 @@ impl Engine {
     }
 
     pub fn cancel(&self) {
-        let st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap();
         let (key, acp) = {
             let Some(session) = st.current_session() else { return };
             (session.id.clone(), session.acp_session_id.clone())
         };
         let Some(acp_session_id) = acp else { return };
         let Some(slot_id) = st.slot_of_session(&key) else { return };
+        let mut marked = false;
         if let Some(slot) = st.slots.get(&slot_id) {
-            let _ = slot.cmd.send(AcpCommand::Cancel { session_id: acp_session_id });
+            if slot
+                .cmd
+                .send(AcpCommand::Cancel { session_id: acp_session_id })
+                .is_ok()
+            {
+                // Nexus v0.10.5 markSessionStopping: explicit stopping
+                // feedback while the agent acknowledges session/cancel;
+                // cleared when the turn really ends (or a new turn
+                // starts — send_message_with).
+                st.stopping.insert(key);
+                marked = true;
+            }
+        }
+        drop(st);
+        if marked {
+            self.publish_structure();
         }
     }
 
@@ -911,6 +933,11 @@ impl Engine {
             return; // slot closed while events were in flight
         }
         let slot_session = st.session_of_slot(slot_id);
+        // The owning session's key — used to clear the stopping marker
+        // (Nexus v0.10.5 stoppingSessions) when the turn really ends.
+        let slot_key = slot_session
+            .and_then(|i| st.sessions.get(i))
+            .map(|s| s.id.clone());
         let global_model = self.config().preferred_model.clone();
         // Nexus §2.2 fallback: session/load failed — the pending prompt
         // moves to a fresh session in the same cwd (newSession + resend).
@@ -972,6 +999,11 @@ impl Engine {
                     slot.busy = false;
                     slot.pending_prompt = None;
                     slot.load_progress = None;
+                    // The turn will never end on its own — clear the
+                    // stopping marker (Nexus markSessionIdle).
+                    if let Some(k) = slot_key.as_deref() {
+                        st.stopping.remove(k);
+                    }
                     if let Some(i) = slot_session {
                         if let Some(session) = st.sessions.get_mut(i) {
                             for msg in &mut session.messages {
@@ -1068,6 +1100,12 @@ impl Engine {
                             value,
                         });
                     }
+                    // The wake finished: a new turn may go out with the
+                    // pending prompt (markSessionBusy) or the session is
+                    // idle — either way any stale stopping marker goes.
+                    if let Some(k) = slot_key.as_deref() {
+                        st.stopping.remove(k);
+                    }
                     match slot.pending_prompt.take() {
                         Some(text) => {
                             slot.busy = true;
@@ -1101,6 +1139,9 @@ impl Engine {
                             }
                         }
                         slot.busy = false;
+                        if let Some(k) = slot_key.as_deref() {
+                            st.stopping.remove(k);
+                        }
                     }
                 }
                 AcpEvent::UserMessageChunk { .. } => {}
@@ -1117,6 +1158,10 @@ impl Engine {
                     slot.error = format!("{context}: {message}");
                     slot.busy = false;
                     slot.load_progress = None;
+                    // The turn died — clear the stopping marker.
+                    if let Some(k) = slot_key.as_deref() {
+                        st.stopping.remove(k);
+                    }
                     // Nexus §2.2: session/load failed (CLI session gone
                     // from disk) — silently fall back to a fresh session
                     // in the same cwd; the pending prompt resends there.
@@ -1296,6 +1341,11 @@ impl Engine {
                 }
                 AcpEvent::PromptCompleted { session_id, .. } => {
                     slot.busy = false;
+                    // The turn really ended — clear the stopping marker
+                    // (Nexus markSessionIdle).
+                    if let Some(k) = slot_key.as_deref() {
+                        st.stopping.remove(k);
+                    }
                     if let Some(session) = st
                         .sessions
                         .iter_mut()

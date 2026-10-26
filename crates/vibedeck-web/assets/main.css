@@ -3599,6 +3599,30 @@ code {
     border-color: rgba(239, 83, 80, 0.5);
 }
 
+.ic-stop-btn.stopping {
+    cursor: default;
+    opacity: 0.75;
+}
+
+.ic-stop-btn.stopping:hover {
+    background: rgba(239, 83, 80, 0.12);
+}
+
+.ic-stop-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(239, 83, 80, 0.3);
+    border-top-color: #ef5350;
+    border-radius: 50%;
+    animation: ic-stop-spin 0.7s linear infinite;
+}
+
+@keyframes ic-stop-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 /* Status bar below input card */
 .input-status-bar {
     display: flex;

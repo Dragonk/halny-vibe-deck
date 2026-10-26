@@ -21,6 +21,18 @@ pub fn ChatView() -> Element {
     let busy = s.snapshot.busy;
     let status = s.snapshot.status.clone();
     let acp_error = s.snapshot.acp_error.clone();
+    // Stop feedback (Nexus v0.10.5): session/cancel in flight — the busy
+    // row label switches to "Stopping…".
+    let stopping = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| m.stopping)
+        .unwrap_or(false);
+    let busy_label = tr(
+        &lang,
+        if stopping { "stoppingLabel" } else { "agentWorkingLabel" },
+    );
     // Lazy-resume overlay (Nexus isResuming): the current session's agent
     // is waking via session/load — spinner + "Resuming session… (N)" with
     // the replay chunk count.
@@ -109,7 +121,7 @@ pub fn ChatView() -> Element {
                             if busy && !is_resuming {
                                 div { class: "agent-busy-row",
                                     span { class: "agent-busy-dots", span {}, span {}, span {} }
-                                    "{tr(&lang, \"agentWorkingLabel\")}"
+                                    "{busy_label}"
                                 }
                             }
                         }

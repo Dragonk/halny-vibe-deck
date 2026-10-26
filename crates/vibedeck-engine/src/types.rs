@@ -68,6 +68,11 @@ pub struct EngineState {
     /// Config options chosen on a session whose agent process does not
     /// exist yet — applied (in order) once `SessionReady` arrives.
     pub pending_options: HashMap<String, Vec<(String, String)>>,
+    /// Session keys with a `session/cancel` in flight (Nexus v0.10.5
+    /// `stoppingSessions`). Set by `Engine::cancel`, cleared when the
+    /// turn really ends (PromptCompleted / SessionError / Disconnected)
+    /// or a new turn starts.
+    pub stopping: std::collections::HashSet<String>,
 }
 
 impl Default for EngineState {
@@ -80,6 +85,7 @@ impl Default for EngineState {
             slots: HashMap::new(),
             slot_of: HashMap::new(),
             pending_options: HashMap::new(),
+            stopping: std::collections::HashSet::new(),
         }
     }
 }

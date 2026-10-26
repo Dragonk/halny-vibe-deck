@@ -147,6 +147,12 @@ pub struct SessionMeta {
     /// SSH remote connection this session runs on (None = local).
     #[serde(default)]
     pub remote_id: Option<String>,
+    /// A `session/cancel` is in flight for this session (Nexus v0.10.5
+    /// `stoppingSessions`) — the stop button turns into a disabled
+    /// spinner and the busy row shows the stopping label until the turn
+    /// really ends.
+    #[serde(default)]
+    pub stopping: bool,
 }
 
 impl SessionMeta {
@@ -162,6 +168,7 @@ impl SessionMeta {
             busy,
             status: status.to_string(),
             remote_id: s.remote_id.clone(),
+            stopping: false,
         }
     }
 }

@@ -128,6 +128,14 @@ pub fn InputBar() -> Element {
     let s = state.read();
     let lang = lang(&state);
     let busy = s.snapshot.busy;
+    // Stop feedback (Nexus v0.10.5): session/cancel in flight — the
+    // stop button turns into a disabled spinner.
+    let stopping = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| m.stopping)
+        .unwrap_or(false);
     let wd = s.snapshot.working_directory.clone();
     let cfg_wd = s.snapshot.config.working_directory.clone();
     let status = s.snapshot.status.clone();
@@ -278,10 +286,32 @@ pub fn InputBar() -> Element {
     let slash_len = slash_item_els.len();
 
     let send_btn: Element = if busy {
+        // Nexus v0.10.5: while session/cancel is in flight the button
+        // is disabled, shows a spinner and the stopping title.
+        let stop_cls = if stopping {
+            "ic-stop-btn stopping"
+        } else {
+            "ic-stop-btn"
+        };
+        let stop_title = tr(&lang, if stopping { "stoppingLabel" } else { "stopLabel" }).to_string();
+        let stop_icon: Element = if stopping {
+            rsx! { span { class: "ic-stop-spinner" } }
+        } else {
+            rsx! {
+                svg {
+                    xmlns: "http://www.w3.org/2000/svg",
+                    width: "12", height: "12",
+                    view_box: "0 0 24 24",
+                    fill: "currentColor",
+                    rect { x: "4", y: "4", width: "16", height: "16", rx: "2" }
+                }
+            }
+        };
         rsx! {
             button {
-                class: "ic-stop-btn",
-                title: "Stop",
+                class: "{stop_cls}",
+                title: "{stop_title}",
+                disabled: stopping,
                 onclick: {
                     let state = state.clone();
                     move |_| {
@@ -291,13 +321,7 @@ pub fn InputBar() -> Element {
                         }
                     }
                 },
-                svg {
-                    xmlns: "http://www.w3.org/2000/svg",
-                    width: "12", height: "12",
-                    view_box: "0 0 24 24",
-                    fill: "currentColor",
-                    rect { x: "4", y: "4", width: "16", height: "16", rx: "2" }
-                }
+                {stop_icon}
             }
         }
     } else {
