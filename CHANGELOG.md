@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.12 — 2026-10-26
+
+### Fixed
+- **Chrome could not install the app as a PWA.** The serve mode guards
+  every route behind the auth cookie, but Chrome fetches the web app
+  manifest (and the install icons) WITHOUT credentials - it always got a
+  401 and the install prompt never appeared. The manifest link now sends
+  `crossorigin="use-credentials"`, and the PWA install assets (manifest,
+  service worker, icons) are served without the auth cookie - none of
+  them carries user data.
+
 ## 1.0.11 — 2026-10-26
 
 ### Fixed

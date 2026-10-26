@@ -600,6 +600,15 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       return
     }
 
+    // v1.0.12: PWA install assets are served WITHOUT the auth cookie.
+    // Chrome fetches the manifest (and the install icons) uncredentialed;
+    // a 401 manifest silently kills the install prompt. None of these
+    // files carries user data.
+    if (url === "/manifest.webmanifest" || url === "/sw.js" || url === "/icon-256.png" || url === "/icon.png") {
+      sendFile(req, res, path.join(rendererDir, url), url !== "/manifest.webmanifest")
+      return
+    }
+
     if (!tokenFromRequest(req)) {
       if (url === "/" || url === "/index.html") {
         res.writeHead(302, { Location: "/login" })

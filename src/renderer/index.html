@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- v1.0.12: use-credentials - Chrome fetches the manifest without
+         cookies by default; the serve mode guards everything behind the
+         auth cookie, so the fetch must carry it (or the install prompt
+         never appears). -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <link rel="icon" href="/icon-256.png" />
     <link rel="apple-touch-icon" href="/icon-256.png" />
     <meta name="theme-color" content="#111115" />
