@@ -6429,6 +6429,12 @@ code {
 .plan-card-chevron.open { transform: rotate(180deg); }
 .plan-card-collapsed .plan-row { margin-top: 2px; }
 
+/* v0.13.6: an active (not fully completed) plan stays pinned to the bottom of
+   the chat viewport - scrolling up or incoming messages no longer push it out
+   of view. Opaque panel background so pinned content behind it stays readable;
+   max-height keeps a long expanded plan from covering the whole chat. */
+.plan-card-sticky { position: sticky; bottom: 8px; z-index: 20; background: var(--panel); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); max-height: 45vh; overflow-y: auto; }
+
 /* ===== v0.13.0: settings rebuilt for phones =====
    The old desktop-only layout wrapped 11 tabs into 4 rows and kept the
    master-detail lists beside their panels: on a 390px screen the detail

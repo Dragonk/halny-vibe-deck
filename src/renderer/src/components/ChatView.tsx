@@ -92,7 +92,7 @@ export default function ChatView(): React.JSX.Element {
                 />
               ))}
               {planEntries.length > 0 && (
-                <div className={'plan-card' + (planCollapsed ? ' plan-card-collapsed' : '')}>
+                <div className={'plan-card' + (planCollapsed ? ' plan-card-collapsed' : '') + (!planAllDone ? ' plan-card-sticky' : '')}>
                   <button
                     type="button"
                     className="plan-card-header"
