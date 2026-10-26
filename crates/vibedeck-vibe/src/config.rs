@@ -99,6 +99,67 @@ pub fn estimate_cost(
         / 1_000_000.0
 }
 
+/// Mirror of the CLI's auto_compact_threshold resolution
+/// (vibe/core/config/vibe_schema.py, Nexus `resolveCompactThreshold`):
+/// a per-model cap wins, then the global cap, then 80% of the declared
+/// window, then 200 000. `Some(0)` = never compact; `-1` disables an
+/// override.
+pub fn resolve_compact_threshold(
+    cap: Option<i64>,
+    window: Option<i64>,
+    global: Option<i64>,
+) -> Option<i64> {
+    if let Some(cap) = cap {
+        if cap != -1 && (window.is_none() || cap < window.unwrap()) {
+            return Some(cap);
+        }
+    }
+    let global_set = global.filter(|g| *g != -1);
+    let global_value = global_set.unwrap_or(200_000);
+    if global_set.is_some() && (window.is_none() || global_value < window.unwrap()) {
+        return Some(global_value);
+    }
+    if let Some(w) = window.filter(|w| *w > 0) {
+        return Some((w as f64 * 0.8) as i64);
+    }
+    Some(global_value)
+}
+
+/// Context window (`max_context_length`) and auto-compact threshold of a
+/// model from `~/.vibe/config.toml`, matched by exact `name` or `alias`
+/// (Nexus UsageBar lookup). `window = None` = the model declares no
+/// window and gets no gauge.
+pub fn usage_model_info(model: &str) -> (Option<i64>, Option<i64>) {
+    let path: PathBuf = vibe_home().join("config.toml");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (None, None);
+    };
+    let Ok(value) = content.parse::<Value>() else {
+        return (None, None);
+    };
+    let global = value
+        .get("auto_compact_threshold")
+        .and_then(Value::as_integer);
+    let found = value
+        .get("models")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            arr.iter().find(|m| {
+                let name = m.get("name").and_then(Value::as_str);
+                let alias = m.get("alias").and_then(Value::as_str);
+                name == Some(model) || alias == Some(model)
+            })
+        });
+    let window = found
+        .and_then(|m| m.get("max_context_length"))
+        .and_then(Value::as_integer)
+        .filter(|w| *w > 0);
+    let cap = found
+        .and_then(|m| m.get("auto_compact_threshold"))
+        .and_then(Value::as_integer);
+    (window, resolve_compact_threshold(cap, window, global))
+}
+
 /// A provider preset (`[[providers]]`).
 #[derive(Clone, Debug, Default)]
 pub struct Provider {
@@ -124,6 +185,11 @@ pub struct ModelConfig {
     /// Allowed reasoning efforts (`thinking_levels`; empty/missing = the
     /// CLI default levels off/low/medium/high/max).
     pub thinking_levels: Option<Vec<String>>,
+    /// Model context window (`max_context_length`), tokens.
+    pub max_context_length: Option<i64>,
+    /// Per-model auto-compact override (`auto_compact_threshold`);
+    /// -1 disables the override, 0 = never compact.
+    pub auto_compact_threshold: Option<i64>,
 }
 
 /// An MCP server (`[[mcp_servers]]`).
@@ -629,6 +695,12 @@ fn model_from_table(t: &Table) -> ModelConfig {
                 Some(levels)
             }
         },
+        max_context_length: t
+            .get("max_context_length")
+            .and_then(Value::as_integer),
+        auto_compact_threshold: t
+            .get("auto_compact_threshold")
+            .and_then(Value::as_integer),
     }
 }
 
@@ -653,6 +725,12 @@ fn model_to_table(m: &ModelConfig) -> Table {
             "thinking_levels".into(),
             Value::from(levels.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
         );
+    }
+    if let Some(v) = m.max_context_length {
+        t.insert("max_context_length".into(), Value::from(v));
+    }
+    if let Some(v) = m.auto_compact_threshold {
+        t.insert("auto_compact_threshold".into(), Value::from(v));
     }
     t
 }
@@ -722,6 +800,39 @@ fn mcp_to_table(s: &McpServer) -> Table {
 
 #[cfg(test)]
 mod tests {
+    use super::resolve_compact_threshold;
+
+    #[test]
+    fn compact_threshold_resolution() {
+        // Per-model cap wins when below the window.
+        assert_eq!(
+            resolve_compact_threshold(Some(150_000), Some(262_144), Some(180_000)),
+            Some(150_000)
+        );
+        // -1 disables the per-model cap: the global cap applies.
+        assert_eq!(
+            resolve_compact_threshold(Some(-1), Some(262_144), Some(180_000)),
+            Some(180_000)
+        );
+        // Global -1: falls back to 80% of the window (Nexus: 209715 for 262144).
+        assert_eq!(
+            resolve_compact_threshold(None, Some(262_144), Some(-1)),
+            Some(209_715)
+        );
+        // No overrides at all: 80% of the window.
+        assert_eq!(
+            resolve_compact_threshold(None, Some(100_000), None),
+            Some(80_000)
+        );
+        // No window: the 200k default.
+        assert_eq!(resolve_compact_threshold(None, None, None), Some(200_000));
+        // 0 = never compact.
+        assert_eq!(
+            resolve_compact_threshold(Some(0), Some(262_144), None),
+            Some(0)
+        );
+    }
+
     use super::*;
 
     const SAMPLE: &str = r#"

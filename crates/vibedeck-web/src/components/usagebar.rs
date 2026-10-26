@@ -2,16 +2,21 @@
 //! style), cache hit ratio, in/out tokens, throughput and session cost.
 //! Ported from Nexus UsageBar.tsx (same CSS classes, same layout).
 //!
-//! v0.10.2 Nexus parity: the linear context bar became a circular gauge
-//! — real used context vs the model's context window (runtime value
-//! from usage_update; the config `max_context_length` + auto-compact
-//! marker resolution lands with the stats batch). Cost comes straight
-//! from the wire (`usage_update.cost.amount`, USD).
+//! v0.13.5 parity: the gauge denominator (model context window) comes
+//! ONLY from the config `max_context_length` — the runtime
+//! `usage_update.size` is the CLI-resolved auto-compact threshold, not
+//! the window, so a model that declares no window simply has no gauge
+//! (tokens still show). The 1px marker sits at the model's auto-compact
+//! threshold (per-model cap > global cap > 80% of window > 200k) and the
+//! fill turns red once the used context crosses it. Cost comes from the
+//! wire (`usage_update.cost.amount`); previewed sessions get theirs
+//! computed from the local price table (engine, Nexus parity).
 
 use dioxus::prelude::*;
 
 use crate::i18n::{tf, tr};
-use crate::state::{lang, ClientState};
+use crate::state::{lang, token, ClientState};
+use crate::vibestats::UsageModelInfoView;
 
 fn fmt_tokens(n: f64) -> String {
     if n >= 1_000_000.0 {
@@ -34,22 +39,64 @@ const GAUGE_CIRC: f64 = 2.0 * std::f64::consts::PI * GAUGE_R;
 pub fn UsageBar() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let lang = lang(&state);
-    let u = state.read().snapshot.usage.clone();
+    let mut last_model = use_signal(String::new);
+    let mut model_info =
+        use_signal(|| UsageModelInfoView { window: None, threshold: None });
+
+    let (u, cur_model) = {
+        let s = state.read();
+        let u = s.snapshot.usage.clone();
+        let cm = s
+            .snapshot
+            .config_options
+            .iter()
+            .find(|o| o.id == "model")
+            .map(|o| o.current_value.clone())
+            .unwrap_or_default();
+        (u, cm)
+    };
+
+    // Refetch the model window/threshold whenever the model chip changes
+    // (Nexus: useEffect on [currentModel, sessWd, sessRid]).
+    if cur_model != *last_model.read() {
+        last_model.set(cur_model.clone());
+        if cur_model.is_empty() {
+            model_info.set(UsageModelInfoView {
+                window: None,
+                threshold: None,
+            });
+        } else {
+            let st = state.clone();
+            spawn(async move {
+                if let Ok(info) =
+                    crate::vibestats::api_usage_model_info(token(&st), cur_model.clone()).await
+                {
+                    model_info.set(info);
+                }
+            });
+        }
+    }
+    let info = model_info.read().clone();
 
     if u.updates == 0 && u.total_tokens == 0.0 {
         return VNode::empty();
     }
 
-    let has_context = u.context_size > 0.0;
-    let ctx_pct = if has_context {
-        ((u.context_used / u.context_size) * 100.0).clamp(0.0, 100.0)
-    } else {
-        0.0
+    // v0.13.5: window ONLY from the model config; no window = no gauge.
+    let ctx_window = info.window.filter(|w| *w > 0.0);
+    let has_context = ctx_window.is_some();
+    let ctx_pct = match ctx_window {
+        Some(w) => ((u.context_used / w) * 100.0).clamp(0.0, 100.0),
+        None => 0.0,
     };
-    // Compact-threshold marker arrives with the stats batch; until then
-    // the gauge warns at the same 85% the old linear bar used.
-    let warn = ctx_pct > 85.0;
-    let gauge_fill_cls = if warn {
+    // Auto-compact marker: hidden when disabled (0/-1) or >= 99.5%.
+    let threshold = info.threshold.filter(|t| *t > 0.0);
+    let compact_pct: Option<f64> = match (ctx_window, threshold) {
+        (Some(w), Some(t)) => Some(((t / w) * 100.0).clamp(0.0, 100.0)),
+        _ => None,
+    };
+    let over_compact = compact_pct.map(|c| ctx_pct >= c).unwrap_or(false);
+    let gauge_fill_cls = if over_compact {
         "usage-gauge-fill warn"
     } else {
         "usage-gauge-fill"
@@ -59,16 +106,51 @@ pub fn UsageBar() -> Element {
         (ctx_pct / 100.0) * GAUGE_CIRC,
         GAUGE_CIRC
     );
-    let ctx_title = tf(
-        &lang,
-        "usageContextTooltip",
-        &[
-            ("used", &fmt_int(u.context_used)),
-            ("total", &fmt_int(u.context_size)),
-        ],
-    );
+    // Marker circle: 1px dash at the compact threshold position.
+    let marker_node: Element = match compact_pct.filter(|c| *c < 99.5) {
+        Some(c) => {
+            let mdash = format!("1 {:.2}", GAUGE_CIRC);
+            let moffset = format!("-{:.2}", (c / 100.0) * GAUGE_CIRC);
+            rsx! {
+                circle {
+                    class: "usage-gauge-mark",
+                    cx: "8",
+                    cy: "8",
+                    r: "6",
+                    stroke_dasharray: "{mdash}",
+                    stroke_dashoffset: "{moffset}",
+                }
+            }
+        }
+        None => VNode::empty(),
+    };
+    let ctx_title: String = match (ctx_window, threshold) {
+        (Some(w), Some(t)) => tf(
+            &lang,
+            "usageGaugeTooltip",
+            &[
+                ("used", &fmt_int(u.context_used)),
+                ("window", &fmt_int(w)),
+                ("compact", &fmt_int(t)),
+            ],
+        ),
+        (Some(w), None) => format!(
+            "{} - {}",
+            tf(
+                &lang,
+                "usageContextTooltip",
+                &[("used", &fmt_int(u.context_used)), ("total", &fmt_int(w))],
+            ),
+            tr(&lang, "usageCompactOff")
+        ),
+        _ => String::new(),
+    };
     let hit = u.cache_hit_rate();
-    let hit_pct = if u.prompt_tokens > 0.0 { Some((hit * 100.0).round() as u64) } else { None };
+    let hit_pct = if u.prompt_tokens > 0.0 {
+        Some((hit * 100.0).round() as u64)
+    } else {
+        None
+    };
     let cache_title = tf(
         &lang,
         "usageCacheTooltip",
@@ -109,6 +191,7 @@ pub fn UsageBar() -> Element {
                                 r: "6",
                                 stroke_dasharray: "{dash}",
                             }
+                            {marker_node}
                         }
                     }
                     span { class: "usage-bar-value", "{ctx_pct.round() as u64}%" }

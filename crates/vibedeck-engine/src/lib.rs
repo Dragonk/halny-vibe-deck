@@ -426,6 +426,24 @@ impl Engine {
                     // The preview has no context window size (Nexus sets 0);
                     // a live usage_update fills it in once the agent runs.
                     context_size: 0.0,
+                    // v0.13.5: the preview carries no wire cost - compute
+                    // it from the local price table (Nexus loadSessionPreview)
+                    // so the UsageBar shows $ before the session resumes.
+                    cost: {
+                        let prices = vibedeck_vibe::config::model_prices();
+                        if prices.is_empty() {
+                            0.0
+                        } else {
+                            let model = session.last_model.as_deref();
+                            vibedeck_vibe::stats::session_cost_from_prices(
+                                &prices,
+                                model,
+                                preview.usage.prompt_tokens,
+                                preview.usage.cached_tokens,
+                                preview.usage.completion_tokens,
+                            )
+                        }
+                    },
                     ..Default::default()
                 };
             }

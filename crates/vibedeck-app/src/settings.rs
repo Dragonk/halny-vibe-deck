@@ -883,6 +883,8 @@ fn models(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
             display_name: None,
             thinking: None,
             thinking_levels: None,
+            max_context_length: None,
+            auto_compact_threshold: None,
         });
     }
 }

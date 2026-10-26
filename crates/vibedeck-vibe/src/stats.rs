@@ -332,7 +332,7 @@ fn load_unified_models(session_dir: &Path, fallback: Option<&str>) -> Vec<String
 
 /// Session cost from the local price table (Nexus `computeSessionCost`
 /// via `modelPriceFor`); 0 when the model has no price entry.
-fn session_cost_from_prices(
+pub fn session_cost_from_prices(
     prices: &[crate::config::ModelPrice],
     model: Option<&str>,
     prompt_tokens: f64,

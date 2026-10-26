@@ -79,6 +79,14 @@ pub struct PreviewMessageView {
     pub tool_calls: Vec<PreviewToolCallView>,
 }
 
+/// Context window + auto-compact threshold of the current model
+/// (UsageBar gauge, Nexus v0.13.5). `window = None` = no gauge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UsageModelInfoView {
+    pub window: Option<f64>,
+    pub threshold: Option<f64>,
+}
+
 #[cfg(feature = "server")]
 mod imp {
     use super::SessionStatsRow;
@@ -182,6 +190,14 @@ mod imp {
             })
             .collect()
     }
+
+    pub fn usage_model_info(model: &str) -> UsageModelInfoView {
+        let (window, threshold) = vibedeck_vibe::config::usage_model_info(model);
+        UsageModelInfoView {
+            window: window.map(|v| v as f64),
+            threshold: threshold.map(|v| v as f64),
+        }
+    }
 }
 
 #[server]
@@ -219,4 +235,14 @@ pub async fn api_search_session_content(
 ) -> Result<Vec<ContentMatchView>, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::content_matches(&query))
+}
+
+/// Context window + auto-compact threshold of a model (UsageBar gauge).
+#[server]
+pub async fn api_usage_model_info(
+    token: String,
+    model: String,
+) -> Result<UsageModelInfoView, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::usage_model_info(&model))
 }

@@ -352,16 +352,24 @@ mod imp {
 
     pub fn upsert_model(row: ModelRow) -> Result<(), ServerFnError> {
         let mut cfg = VibeConfigFile::load();
-        // Preserve the per-model fields added for the session chips
-        // (display_name/thinking/thinking_levels) — the settings editor
-        // row does not edit them, but `upsert_model` replaces the whole
-        // `[[models]]` entry.
-        let (display_name, thinking, thinking_levels) = cfg
-            .models()
-            .into_iter()
-            .find(|m| m.name == row.name.trim())
-            .map(|m| (m.display_name, m.thinking, m.thinking_levels))
-            .unwrap_or((None, None, None));
+        // Preserve the per-model fields not edited by the settings row
+        // (display_name/thinking/thinking_levels and the usage-bar fields
+        // max_context_length/auto_compact_threshold) — `upsert_model`
+        // replaces the whole `[[models]]` entry.
+        let (display_name, thinking, thinking_levels, max_context_length, auto_compact_threshold) =
+            cfg.models()
+                .into_iter()
+                .find(|m| m.name == row.name.trim())
+                .map(|m| {
+                    (
+                        m.display_name,
+                        m.thinking,
+                        m.thinking_levels,
+                        m.max_context_length,
+                        m.auto_compact_threshold,
+                    )
+                })
+                .unwrap_or((None, None, None, None, None));
         cfg.upsert_model(&ModelConfig {
             name: row.name.trim().to_string(),
             provider: row.provider.trim().to_string(),
@@ -370,6 +378,8 @@ mod imp {
             display_name,
             thinking,
             thinking_levels,
+            max_context_length,
+            auto_compact_threshold,
         });
         save_cfg(cfg)
     }
