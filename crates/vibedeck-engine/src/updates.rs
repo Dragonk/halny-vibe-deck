@@ -6,7 +6,9 @@
 
 use std::io::Read;
 
-use vibedeck_core::snapshot::{AppUpdateInfo, CliUpdateInfo, CliUpgradeResult};
+use vibedeck_core::snapshot::{
+    AppUpdateInfo, AppUpdateResult, CliUpdateInfo, CliUpgradeResult, UpdateProgress,
+};
 
 use crate::remote::{
     extract_version, http_get_json, is_newer_version, pypi_latest, PYPI_PACKAGE,
@@ -57,7 +59,13 @@ fn pick_asset_url(assets: &[(String, String)], os: &str) -> Option<String> {
 pub fn check_app_update() -> AppUpdateInfo {
     let current_version = app_version();
     let flavor = app_flavor().to_string();
-    let os = if cfg!(target_os = "windows") { "windows" } else { "linux" };
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "macos"
+    };
     match check_app_update_inner(&current_version, &flavor, os) {
         Ok(info) => info,
         Err(e) => AppUpdateInfo {
@@ -271,6 +279,457 @@ pub fn upgrade_local_cli(acp_path: &str) -> CliUpgradeResult {
     }
 }
 
+// ---------------------------------------------------------------------------
+// App self-update (Nexus `updateApp`)
+// ---------------------------------------------------------------------------
+
+/// Shared update state the UI polls: download/install progress and the
+/// terminal error of a failed update.
+#[derive(Clone)]
+struct UpdateState {
+    progress: Option<UpdateProgress>,
+    error: Option<String>,
+    running: bool,
+}
+
+static UPDATE_STATE: std::sync::Mutex<Option<UpdateState>> = std::sync::Mutex::new(None);
+
+fn set_progress(p: UpdateProgress) {
+    if let Ok(mut guard) = UPDATE_STATE.lock() {
+        let st = guard.get_or_insert_with(|| UpdateState {
+            progress: None,
+            error: None,
+            running: true,
+        });
+        st.progress = Some(p);
+        st.running = true;
+    }
+}
+
+fn set_error(e: String) {
+    if let Ok(mut guard) = UPDATE_STATE.lock() {
+        let st = guard.get_or_insert_with(|| UpdateState {
+            progress: None,
+            error: None,
+            running: false,
+        });
+        st.error = Some(e);
+        st.running = false;
+    }
+}
+
+/// Current self-update progress + terminal error (poll from the UI).
+pub fn update_progress() -> (Option<UpdateProgress>, Option<String>) {
+    if let Ok(guard) = UPDATE_STATE.lock() {
+        if let Some(st) = guard.as_ref() {
+            return (st.progress.clone(), st.error.clone());
+        }
+    }
+    (None, None)
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// `floor(received / total * 100)` like Nexus `Math.floor` (None without a
+/// usable total).
+fn percent_of(received: u64, total: Option<u64>) -> Option<i64> {
+    total.filter(|t| *t > 0).map(|t| {
+        ((received as f64 / t as f64) * 100.0).floor() as i64
+    })
+}
+
+/// Content-Length of the final redirect target (curl resolves redirects);
+/// GitHub release assets redirect to signed S3 URLs.
+fn content_length(url: &str) -> Option<u64> {
+    let (code, out, _) = run_capture("curl", &["-fsSLI", "--max-time", "20", url], 25_000)?;
+    if code != 0 {
+        return None;
+    }
+    for line in out.lines() {
+        let lower = line.to_lowercase();
+        if let Some(rest) = lower.strip_prefix("content-length:") {
+            if let Ok(n) = rest.trim().parse::<u64>() {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Download `url` to `dest` with throttled progress reports (Nexus
+/// `downloadTo`: 250ms throttle, curl follows up to the default redirects).
+fn download_to(url: &str, dest: &std::path::Path, total: Option<u64>) -> Result<(), String> {
+    let dest_s = dest.to_string_lossy().to_string();
+    let mut child = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "600", "-o", &dest_s, url])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let report = |received: u64| {
+        set_progress(UpdateProgress {
+            phase: "download".to_string(),
+            received,
+            total,
+            percent: percent_of(received, total),
+        });
+    };
+    let mut last_report = std::time::Instant::now();
+    report(0);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return Err(format!("Download failed (curl exit code {status})"));
+                }
+                let received = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+                report(received);
+                return Ok(());
+            }
+            Ok(None) => {
+                if last_report.elapsed() >= std::time::Duration::from_millis(250) {
+                    last_report = std::time::Instant::now();
+                    let received =
+                        std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+                    report(received);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// App self-update (Nexus `updateApp`): download the platform asset and
+/// install it per flavor. Runs on a detached thread so the server fn can
+/// return immediately - the UI polls `update_progress`; on success the
+/// spawned helper relaunches the app and this process exits.
+pub fn update_app() -> AppUpdateResult {
+    let busy = match UPDATE_STATE.lock() {
+        Ok(mut guard) => {
+            if let Some(st) = guard.as_ref() {
+                if st.running {
+                    true
+                } else {
+                    *guard = Some(UpdateState {
+                        progress: None,
+                        error: None,
+                        running: true,
+                    });
+                    false
+                }
+            } else {
+                *guard = Some(UpdateState {
+                    progress: None,
+                    error: None,
+                    running: true,
+                });
+                false
+            }
+        }
+        Err(_) => false,
+    };
+    if busy {
+        return AppUpdateResult {
+            ok: false,
+            error: Some("Update already in progress".to_string()),
+        };
+    }
+    std::thread::spawn(|| {
+        if let Err(e) = update_app_inner() {
+            set_error(e);
+        }
+    });
+    AppUpdateResult { ok: true, error: None }
+}
+
+fn update_app_inner() -> Result<(), String> {
+    let flavor = app_flavor();
+    if flavor == "dev" {
+        return Err("Self-update is only available for installed builds".to_string());
+    }
+    let info = check_app_update();
+    // Never downgrade: the button is gated in the UI, but the handler must
+    // refuse on its own (a stale client could invoke it).
+    let Some(download_url) = info.download_url.clone() else {
+        return Err(info.error.clone().unwrap_or_else(|| {
+            if info.update_available {
+                "No update asset available for this platform".to_string()
+            } else {
+                "Already up to date".to_string()
+            }
+        }));
+    };
+    let tmp = std::env::temp_dir().join(format!("vibedeck-update-{}", now_ms()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let install_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .ok_or_else(|| "current_exe unavailable".to_string())?;
+    #[cfg(target_os = "windows")]
+    return update_app_windows(&download_url, &tmp, &install_dir);
+    #[cfg(target_os = "linux")]
+    return update_app_linux(&download_url, &tmp, &install_dir);
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    return Err("Unsupported platform for self-update".to_string());
+}
+
+/// Windows portable flavor (v0.13.0/v0.13.2 flow): the detached PowerShell
+/// helper does ALL the heavy work (extract, robocopy, verify, rollback,
+/// relaunch) after this process exits.
+#[cfg(target_os = "windows")]
+fn update_app_windows(
+    download_url: &str,
+    tmp: &std::path::Path,
+    install_dir: &std::path::Path,
+) -> Result<(), String> {
+    let zip_path = tmp.join("vibedeck-portable.zip");
+    let total = content_length(download_url);
+    download_to(download_url, &zip_path, total)?;
+    let size = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+    if size < 20 * 1024 * 1024 {
+        return Err(format!(
+            "Downloaded archive looks invalid ({} MB) - aborting update",
+            size / 1024 / 1024
+        ));
+    }
+    // Cheap sanity check before quitting: every zip starts with the PK
+    // signature; a failed download (proxy error page, truncated body)
+    // would otherwise only surface in the helper, after the app closed.
+    let sig = {
+        use std::io::Read;
+        let mut f = std::fs::File::open(&zip_path).map_err(|e| e.to_string())?;
+        let mut b = [0u8; 2];
+        f.read_exact(&mut b).map_err(|e| e.to_string())?;
+        b
+    };
+    if sig[0] != 0x50 || sig[1] != 0x4b {
+        return Err("Downloaded file is not a zip archive - aborting update".to_string());
+    }
+    set_progress(UpdateProgress {
+        phase: "install".to_string(),
+        received: size,
+        total: Some(size),
+        percent: Some(100),
+    });
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_s = exe.to_string_lossy().to_string();
+    let exe_name = exe
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let old_exe = install_dir.join(format!("vibedeck-old-{}.exe", now_ms()));
+    let old_exe_s = old_exe.to_string_lossy().to_string();
+    let old_name = old_exe
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let extract_dir = tmp.join("extracted");
+    let extract_s = extract_dir.to_string_lossy().to_string();
+    let zip_s = zip_path.to_string_lossy().to_string();
+    let dir_s = install_dir.to_string_lossy().to_string();
+    let tmp_s = tmp.to_string_lossy().to_string();
+    let log_path = std::env::temp_dir().join("vibedeck-update.log");
+    let log_s = log_path.to_string_lossy().to_string();
+    let script_path = tmp.join("vibedeck-update.ps1");
+    let q = |s: &str| format!("'{s}'");
+    let pid = std::process::id();
+    let ps_lines: Vec<String> = vec![
+        "$ErrorActionPreference = 'Continue'".to_string(),
+        format!(
+            "function Log($m) {{ try {{ Add-Content -Path {} -Value ((Get-Date -Format s) + ' ' + $m) }} catch {{}} }}",
+            q(&log_s)
+        ),
+        "function Fail($m) {".to_string(),
+        "  Log $m".to_string(),
+        "  $relaunch = $null".to_string(),
+        format!(
+            "  if (Test-Path -LiteralPath {0}) {{ $relaunch = {0} }}",
+            q(&exe_s)
+        ),
+        format!(
+            "  elseif (Test-Path -LiteralPath {0}) {{ $relaunch = {0} }}",
+            q(&old_exe_s)
+        ),
+        "  if ($relaunch) { Log ('relaunching ' + $relaunch); try { Start-Process -FilePath $relaunch -ErrorAction Stop } catch { Log ('relaunch failed: ' + $_.Exception.Message) } }".to_string(),
+        "  exit 1".to_string(),
+        "}".to_string(),
+        format!("Log ('vibedeck portable update start, pid {pid}')"),
+        format!(
+            "try {{ Wait-Process -Id {pid} -Timeout 90 -ErrorAction Stop }} catch {{ Log 'app still running after 90s, forcing stop'; Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue }}"
+        ),
+        "Start-Sleep -Milliseconds 1500".to_string(),
+        "Log 'extracting archive'".to_string(),
+        format!(
+            "try {{ Expand-Archive -Path {0} -DestinationPath {1} -Force -ErrorAction Stop }} catch {{ Fail ('extract failed: ' + $_.Exception.Message) }}",
+            q(&zip_s),
+            q(&extract_s)
+        ),
+        format!("$src = {}", q(&extract_s)),
+        format!(
+            "if (-not (Test-Path -LiteralPath (Join-Path $src {0}))) {{",
+            q(&exe_name)
+        ),
+        "  $sub = Get-ChildItem -LiteralPath $src -Directory | Select-Object -First 1".to_string(),
+        format!(
+            "  if ($sub -and (Test-Path -LiteralPath (Join-Path $sub.FullName {0}))) {{ $src = $sub.FullName; Log ('nested zip layout, using ' + $src) }}",
+            q(&exe_name)
+        ),
+        "  else { Fail 'extracted archive does not contain the app executable' }".to_string(),
+        "}".to_string(),
+        "Log 'renaming old exe'".to_string(),
+        format!(
+            "try {{ Rename-Item -LiteralPath {0} -NewName {1} -ErrorAction Stop }} catch {{ Fail ('rename failed: ' + $_.Exception.Message) }}",
+            q(&exe_s),
+            q(&old_name)
+        ),
+        "Log 'copying new files (robocopy)'".to_string(),
+        format!(
+            "robocopy $src {0} /E /R:2 /W:2 /NFL /NDL /NP /NJH /NJS",
+            q(&dir_s)
+        ),
+        "$rc = $LASTEXITCODE".to_string(),
+        "Log ('robocopy exit code ' + $rc)".to_string(),
+        "if ($rc -ge 8) { Fail ('robocopy failed with exit code ' + $rc) }".to_string(),
+        format!("if (-not (Test-Path -LiteralPath {0})) {{", q(&exe_s)),
+        "  Log 'new exe missing after copy - rolling back'".to_string(),
+        format!(
+            "  Rename-Item -LiteralPath {0} -NewName {1} -Force -ErrorAction SilentlyContinue",
+            q(&old_exe_s),
+            q(&exe_name)
+        ),
+        "  Fail 'rolled back to previous exe'".to_string(),
+        "}".to_string(),
+        "Log 'relaunching app'".to_string(),
+        format!(
+            "try {{ Start-Process -FilePath {0} -ErrorAction Stop }} catch {{ Fail ('relaunch failed: ' + $_.Exception.Message) }}",
+            q(&exe_s)
+        ),
+        "Start-Sleep -Seconds 5".to_string(),
+        format!(
+            "try {{ Remove-Item -LiteralPath {0} -Force -ErrorAction SilentlyContinue }} catch {{}}",
+            q(&old_exe_s)
+        ),
+        format!(
+            "try {{ Remove-Item -LiteralPath {0} -Recurse -Force -ErrorAction SilentlyContinue }} catch {{}}",
+            q(&tmp_s)
+        ),
+        "Log 'done'".to_string(),
+    ];
+    let ps = ps_lines.join("\n");
+    // The BOM is CRITICAL (Nexus v0.13.2): Windows PowerShell 5.1 reads
+    // BOM-less files as ANSI, so every non-ASCII character in the embedded
+    // paths (e.g. diacritics in the user profile folder) turns into mojibake
+    // and the helper fails silently.
+    std::fs::write(&script_path, format!("\u{feff}{ps}")).map_err(|e| e.to_string())?;
+
+    // v0.13.2: never depend on PATH when spawning the helper - use the
+    // absolute powershell.exe location when it exists.
+    let sys_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let ps_exe_abs = std::path::Path::new(&sys_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let ps_exe = if ps_exe_abs.exists() {
+        ps_exe_abs.to_string_lossy().to_string()
+    } else {
+        "powershell.exe".to_string()
+    };
+
+    use std::os::windows::process::CommandExt;
+    let spawned = std::process::Command::new(&ps_exe)
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(0x0000_0008) // DETACHED_PROCESS
+        .spawn();
+    if let Err(e) = spawned {
+        // Leave a trace in the log - otherwise the app quits with no
+        // update and no explanation.
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&log_path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{:?} powershell spawn failed: {}", std::time::SystemTime::now(), e)
+            });
+    }
+    set_progress(UpdateProgress {
+        phase: "relaunch".to_string(),
+        received: 0,
+        total: None,
+        percent: None,
+    });
+    std::process::exit(0);
+}
+
+/// Linux portable flavor: the app directory is the folder holding the
+/// executable (install-linux.sh layout). Replacing files of a running
+/// Linux process is safe - the kernel keeps the old inode mapped.
+#[cfg(target_os = "linux")]
+fn update_app_linux(
+    download_url: &str,
+    tmp: &std::path::Path,
+    install_dir: &std::path::Path,
+) -> Result<(), String> {
+    let archive = tmp.join("vibedeck-linux.tar.gz");
+    let total = content_length(download_url);
+    download_to(download_url, &archive, total)?;
+    let size = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
+    if size < 20 * 1024 * 1024 {
+        return Err(format!(
+            "Downloaded archive looks invalid ({} MB) - aborting update",
+            size / 1024 / 1024
+        ));
+    }
+    set_progress(UpdateProgress {
+        phase: "install".to_string(),
+        received: size,
+        total: Some(size),
+        percent: Some(100),
+    });
+    let archive_s = archive.to_string_lossy().to_string();
+    let dir_s = install_dir.to_string_lossy().to_string();
+    let res = run_capture("tar", &["-xzf", &archive_s, "-C", &dir_s], 180_000);
+    match res {
+        Some((0, _, _)) => {}
+        Some((code, out, err)) => {
+            let e = format!("{out}{err}");
+            return Err(format!(
+                "tar failed (exit {code}): {}",
+                e.trim().chars().take(500).collect::<String>()
+            ));
+        }
+        None => return Err("tar could not run".to_string()),
+    }
+    set_progress(UpdateProgress {
+        phase: "relaunch".to_string(),
+        received: size,
+        total: Some(size),
+        percent: Some(100),
+    });
+    // Relaunch the (now replaced) executable and exit; the kernel keeps
+    // the old inode mapped for the dying process.
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let _ = std::process::Command::new(&exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    std::process::exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +750,15 @@ mod tests {
     fn app_version_is_plain_number() {
         let v = app_version();
         assert!(v.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false), "got {v}");
+    }
+
+    #[test]
+    fn percent_of_matches_nexus_floor() {
+        assert_eq!(percent_of(50, Some(200)), Some(25));
+        assert_eq!(percent_of(3, Some(4)), Some(75));
+        assert_eq!(percent_of(10, None), None);
+        assert_eq!(percent_of(10, Some(0)), None);
+        assert_eq!(percent_of(300, Some(300)), Some(100));
     }
 
     #[test]

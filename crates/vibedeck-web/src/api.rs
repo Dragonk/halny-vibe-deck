@@ -401,6 +401,35 @@ pub async fn api_upgrade_local_cli(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// App self-update: download + install on a detached engine thread
+/// (fire-and-forget; poll `api_update_progress` for phases/errors - on
+/// success the app relaunches itself).
+#[server]
+pub async fn api_update_app(
+    token: String,
+) -> Result<vibedeck_core::snapshot::AppUpdateResult, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(vibedeck_engine::updates::update_app)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Current app self-update progress + terminal error (phase
+/// download/install/relaunch).
+#[server]
+pub async fn api_update_progress(
+    token: String,
+) -> Result<
+    (
+        Option<vibedeck_core::snapshot::UpdateProgress>,
+        Option<String>,
+    ),
+    ServerFnError,
+> {
+    check(&token)?;
+    Ok(vibedeck_engine::updates::update_progress())
+}
+
 /// Raw remote config.toml content ("" when missing), global or project scope.
 #[server]
 pub async fn api_get_remote_vibe_config(
