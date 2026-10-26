@@ -1,9 +1,11 @@
 //! History view: title/content search (debounced, min 2 chars), time and
 //! project filters, hidden sessions/projects with restore, and lazy rows
 //! from the Vibe CLI stats store (Nexus `HistoryView` parity). Rows come
-//! from `api_vibe_stats` (disk sessions); reactivation refreshes the CLI
-//! session list first so any disk session can be opened, then goes through
-//! `api_open_backend_session` like the sidebar.
+//! from `api_vibe_stats` (disk sessions) plus remote CLI sessions of every
+//! enabled SSH connection (Nexus remoteRows - remote work shows here too);
+//! reactivation refreshes the CLI session list first so any disk session
+//! can be opened, then goes through `api_open_backend_session` (remote
+//! rows through the lazy `api_open_remote_session`) like the sidebar.
 
 use dioxus::prelude::*;
 
@@ -20,6 +22,7 @@ pub fn HistoryView() -> Element {
     let mut loaded = use_signal(|| false);
     let mut fetched = use_signal(|| false);
     let mut rows = use_signal(|| Vec::<SessionStatsRow>::new());
+    let mut remote_rows = use_signal(|| Vec::<RemoteHist>::new());
     let mut query = use_signal(String::new);
     // 0 = title only, 1 = title + message content.
     let mut search_mode = use_signal(|| 0u8);
@@ -44,11 +47,52 @@ pub fn HistoryView() -> Element {
             if let Ok(r) = crate::vibestats::api_vibe_stats(token(&st)).await {
                 rows.set(r);
             }
+            // Remote rows (Nexus HistoryView remoteRows): CLI sessions of
+            // every enabled connection - remote work shows in History too.
+            let conns: Vec<(String, String)> = {
+                let s = st.read();
+                s.snapshot
+                    .config
+                    .remote_connections
+                    .iter()
+                    .filter(|c| c.enabled)
+                    .map(|c| (c.id.clone(), c.name.clone()))
+                    .collect()
+            };
+            let mut remote: Vec<RemoteHist> = Vec::new();
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (cid, cname) in conns {
+                if let Ok(list) = crate::api::api_remote_sessions(token(&st), cid.clone()).await {
+                    for s in list {
+                        if s.session_id.is_empty() {
+                            continue;
+                        }
+                        if !seen.insert(format!("{cid}:{}", s.session_id)) {
+                            continue;
+                        }
+                        remote.push(RemoteHist {
+                            conn_id: cid.clone(),
+                            conn_name: cname.clone(),
+                            session_id: s.session_id,
+                            title: s.title,
+                            cwd: s.cwd,
+                            updated_at: s.updated_at.clone(),
+                            updated_ms: s
+                                .updated_at
+                                .parse::<i64>()
+                                .ok()
+                                .or_else(|| iso_to_ms(&s.updated_at)),
+                        });
+                    }
+                }
+            }
+            remote_rows.set(remote);
             fetched.set(true);
         });
     }
 
     let all = rows.read().clone();
+    let remote_all = remote_rows.read().clone();
     let loading = !*fetched.read();
     let q = query.read().trim().to_lowercase();
     let q_len = q.chars().count();
@@ -75,6 +119,17 @@ pub fn HistoryView() -> Element {
         }
         if !projects.contains(&r.working_directory) {
             projects.push(r.working_directory.clone());
+        }
+    }
+    for r in &remote_all {
+        if r.cwd.is_empty() {
+            continue;
+        }
+        if !*show_hidden.read() && hidden_projects.iter().any(|h| h == &r.cwd) {
+            continue;
+        }
+        if !projects.contains(&r.cwd) {
+            projects.push(r.cwd.clone());
         }
     }
     projects.sort();
@@ -138,6 +193,49 @@ pub fn HistoryView() -> Element {
             },
             hidden,
             sort_ms: t0.unwrap_or(0),
+            remote: None,
+        });
+    }
+    // Remote rows (Nexus HistoryView remoteRows): hidden + project +
+    // cutoff + title-query filters, newest first by updatedAt.
+    let remote_word = if lang == "pl" { "Zdalne" } else { "Remote" };
+    for r in &remote_all {
+        let hidden = hidden_sessions.iter().any(|h| h == &r.session_id)
+            || (!r.cwd.is_empty() && hidden_projects.iter().any(|h| h == &r.cwd));
+        let t0 = r.updated_ms.unwrap_or(0);
+        let past = cutoff.map(|c| t0 < c).unwrap_or(false);
+        if past || (!*show_hidden.read() && hidden) {
+            continue;
+        }
+        if !pf.is_empty() && r.cwd != pf {
+            continue;
+        }
+        if !q.is_empty() && !r.title.to_lowercase().contains(&q) {
+            continue;
+        }
+        let title = if r.title.is_empty() {
+            tr(&lang, "untitledSession").to_string()
+        } else {
+            r.title.clone()
+        };
+        let dir_short = if r.cwd.is_empty() {
+            "\u{2014}".to_string()
+        } else {
+            base_name(&r.cwd)
+        };
+        rows_out.push(Row {
+            key: format!("{}:{}", r.conn_id, r.session_id),
+            title,
+            date: iso_date(&r.updated_at),
+            duration: "\u{2014}".to_string(),
+            messages: "\u{2014}".to_string(),
+            cost: "0.00".to_string(),
+            dir: r.cwd.clone(),
+            dir_short,
+            model: remote_word.to_string(),
+            hidden,
+            sort_ms: t0,
+            remote: Some(r.clone()),
         });
     }
     rows_out.sort_by(|a, b| b.sort_ms.cmp(&a.sort_ms));
@@ -366,6 +464,17 @@ pub fn HistoryView() -> Element {
 }
 
 #[derive(Clone)]
+struct RemoteHist {
+    conn_id: String,
+    conn_name: String,
+    session_id: String,
+    title: String,
+    cwd: String,
+    updated_at: String,
+    updated_ms: Option<i64>,
+}
+
+#[derive(Clone)]
 struct Row {
     key: String,
     title: String,
@@ -378,6 +487,7 @@ struct Row {
     model: String,
     hidden: bool,
     sort_ms: i64,
+    remote: Option<RemoteHist>,
 }
 
 fn row_el(
@@ -387,6 +497,13 @@ fn row_el(
     snippet: Option<String>,
 ) -> Element {
     let key = row.key.clone();
+    // Hidden remote rows unhide by the raw CLI session id, not the
+    // composite history key (Nexus unhideSessions([sessionId])).
+    let restore_key = row
+        .remote
+        .as_ref()
+        .map(|r| r.session_id.clone())
+        .unwrap_or_else(|| row.key.clone());
     let dir = row.dir.clone();
     let hidden_suffix = if row.hidden {
         format!(" ({})", tr(&lang, "hiddenBadge"))
@@ -394,15 +511,20 @@ fn row_el(
         String::new()
     };
     let title_line = format!("{}{}", row.title, hidden_suffix);
-    let meta = format!(
-        "{} · {} · {} {} · {} ${}",
-        row.date,
-        row.duration,
-        tr(&lang, "messagesLabel"),
-        row.messages,
-        tr(&lang, "costLabel"),
-        row.cost
-    );
+    let remote_word = if lang == "pl" { "Zdalne" } else { "Remote" };
+    let meta = if let Some(r) = &row.remote {
+        format!("{} · {} · {}", row.date, remote_word, r.conn_name)
+    } else {
+        format!(
+            "{} · {} · {} {} · {} ${}",
+            row.date,
+            row.duration,
+            tr(&lang, "messagesLabel"),
+            row.messages,
+            tr(&lang, "costLabel"),
+            row.cost
+        )
+    };
     let row_class = if row.hidden {
         "session-row session-row-clickable history-row history-row-hidden".to_string()
     } else {
@@ -421,7 +543,7 @@ fn row_el(
                 class: "history-restore-btn",
                 onclick: {
                     let state = state.clone();
-                    let key = key.clone();
+                    let key = restore_key.clone();
                     let dir = dir.clone();
                     move |_| {
                         let state = state.clone();
@@ -444,24 +566,43 @@ fn row_el(
     };
 
     let reactivate_el: Element = {
+        let remote = row.remote.clone();
+        let lang_r = lang.clone();
         rsx! {
             button {
                 class: "history-reactivate-btn",
                 onclick: {
                     let state = state.clone();
                     let key = key.clone();
+                    let remote = remote.clone();
                     move |_| {
                         let state = state.clone();
                         let key = key.clone();
+                        let remote = remote.clone();
                         async move {
-                            let _ = crate::api::api_refresh_sessions(token(&state)).await;
-                            let _ = crate::api::api_open_backend_session(token(&state), key).await;
+                            if let Some(r) = remote {
+                                // Remote rows reactivate through the lazy
+                                // open (SSH preview, no spawn - Nexus
+                                // loadRemoteSession).
+                                let _ = crate::api::api_open_remote_session(
+                                    token(&state),
+                                    r.conn_id,
+                                    r.session_id,
+                                    r.title,
+                                    r.cwd,
+                                )
+                                .await;
+                            } else {
+                                let _ = crate::api::api_refresh_sessions(token(&state)).await;
+                                let _ =
+                                    crate::api::api_open_backend_session(token(&state), key).await;
+                            }
                             crate::state::refresh(state).await;
                             crate::app::set_view(state, View::Chat);
                         }
                     }
                 },
-                "{tr(&lang, \"reactivateLabel\")}"
+                "{tr(&lang_r, \"reactivateLabel\")}"
             }
         }
     };
@@ -474,12 +615,26 @@ fn row_el(
                 onclick: {
                     let state = state.clone();
                     let key = key.clone();
+                    let remote = row.remote.clone();
                     move |_| {
                         let state = state.clone();
                         let key = key.clone();
+                        let remote = remote.clone();
                         async move {
-                            let _ = crate::api::api_refresh_sessions(token(&state)).await;
-                            let _ = crate::api::api_open_backend_session(token(&state), key).await;
+                            if let Some(r) = remote {
+                                let _ = crate::api::api_open_remote_session(
+                                    token(&state),
+                                    r.conn_id,
+                                    r.session_id,
+                                    r.title,
+                                    r.cwd,
+                                )
+                                .await;
+                            } else {
+                                let _ = crate::api::api_refresh_sessions(token(&state)).await;
+                                let _ =
+                                    crate::api::api_open_backend_session(token(&state), key).await;
+                            }
                             crate::state::refresh(state).await;
                             crate::app::set_view(state, View::Chat);
                         }

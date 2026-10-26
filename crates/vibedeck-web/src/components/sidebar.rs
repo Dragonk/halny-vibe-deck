@@ -186,7 +186,13 @@ pub fn Sidebar() -> Element {
                 .filter(|(_, m)| m.remote_id.as_deref() == Some(conn.id.as_str()))
                 .cloned()
                 .collect();
-            let pane = remote_panes.read().get(&conn.id).cloned().unwrap_or_default();
+            let mut pane = remote_panes.read().get(&conn.id).cloned().unwrap_or_default();
+            // v0.13.x hide parity: remote CLI sessions respect hidden
+            // sessions/projects (Nexus Sidebar isHidden filter).
+            pane.sessions.retain(|s| {
+                !cfg.hidden_sessions.iter().any(|h| h == &s.session_id)
+                    && (s.cwd.is_empty() || !cfg.hidden_projects.iter().any(|h| h == &s.cwd))
+            });
             remote_conn_el(
                 state,
                 lang.clone(),
@@ -885,7 +891,7 @@ fn remote_folder_el(
                 confirm.clone(),
                 ctx.clone(),
             ),
-            RemoteItem::Cli(s) => remote_cli_el(state.clone(), lang.clone(), conn_id, s),
+            RemoteItem::Cli(s) => remote_cli_el(state.clone(), lang.clone(), conn_id, s, ctx.clone()),
         })
         .collect();
     let wd2 = wd.to_string();
@@ -983,6 +989,7 @@ fn remote_cli_el(
     lang: String,
     conn_id: &str,
     s: &RemoteSessionInfo,
+    ctx: Signal<Option<CtxMenu>>,
 ) -> Element {
     let name = if s.title.is_empty() {
         loc(&lang, "Sesja zdalna", "Remote session")
@@ -1006,11 +1013,30 @@ fn remote_cli_el(
     let sid = s.session_id.clone();
     let title = s.title.clone();
     let cwd = s.cwd.clone();
+    let name = name.clone();
 
     rsx! {
         button {
             class: "session-item remote-location-item",
             title: "{cwd}",
+            oncontextmenu: {
+                let mut ctx = ctx.clone();
+                let name = name.clone();
+                let key = sid.clone();
+                move |e| {
+                    e.prevent_default();
+                    let p = e.data().client_coordinates();
+                    ctx.set(Some(CtxMenu {
+                        x: p.x,
+                        y: p.y,
+                        target: ConfirmTarget {
+                            is_project: false,
+                            label: name.clone(),
+                            key: key.clone(),
+                        },
+                    }));
+                }
+            },
             onclick: {
                 let state = state.clone();
                 let cid = cid.clone();
