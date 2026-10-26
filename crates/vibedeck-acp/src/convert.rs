@@ -85,6 +85,9 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
         let meta = update.get("_meta");
         let f = |v: Option<&Value>| v.and_then(Value::as_f64).unwrap_or(0.0);
         let (used, size) = (f(update.get("used")), f(update.get("size")));
+        // v0.10.2: the server reports the running session cost directly
+        // (`update.cost.amount`, USD) — no local price estimation needed.
+        let cost = update.pointer("/cost/amount").and_then(Value::as_f64).unwrap_or(0.0);
         events.push(AcpEvent::UsageUpdate {
             session_id: session_id.clone(),
             prompt_tokens: f(meta.and_then(|m| m.get("promptTokens"))),
@@ -95,6 +98,21 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
             last_turn_duration_ms: f(meta.and_then(|m| m.get("lastTurnDuration"))),
             context_used: used,
             context_size: size,
+            cost,
+        });
+    }
+
+    // --- agent plan / todo checklist (modern wire) ------------------------
+    // Nexus v0.11.1: `sessionUpdate: "plan"` (older servers: "plan_update")
+    // carries the cumulative checklist snapshot in `entries`.
+    if session_update == Some("plan") || session_update == Some("plan_update") {
+        let entries = update
+            .get("entries")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
+        events.push(AcpEvent::PlanUpdate {
+            session_id: session_id.clone(),
+            entries_json: serde_json::to_string(&entries).unwrap_or_default(),
         });
     }
 
@@ -197,14 +215,18 @@ pub fn convert_update(params: &Value) -> Vec<AcpEvent> {
             }
         }
         Some("plan") => {
-            let entries = update
-                .get("entries")
-                .cloned()
-                .unwrap_or(Value::Array(Vec::new()));
-            events.push(AcpEvent::PlanUpdate {
-                session_id: session_id.clone(),
-                entries_json: serde_json::to_string(&entries).unwrap_or_default(),
-            });
+            // Guard: the modern `sessionUpdate: "plan"` branch already
+            // emitted — never double-emit the same snapshot.
+            if session_update != Some("plan") && session_update != Some("plan_update") {
+                let entries = update
+                    .get("entries")
+                    .cloned()
+                    .unwrap_or(Value::Array(Vec::new()));
+                events.push(AcpEvent::PlanUpdate {
+                    session_id: session_id.clone(),
+                    entries_json: serde_json::to_string(&entries).unwrap_or_default(),
+                });
+            }
         }
         _ => {}
     }

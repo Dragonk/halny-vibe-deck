@@ -182,6 +182,18 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
+        // Agent plan / todo checklist: cumulative snapshot, applied in
+        // place for the open session (no refetch flicker).
+        AcpEvent::PlanUpdate {
+            session_id,
+            entries_json,
+        } => {
+            if is_current(&session_id) {
+                let entries = vibedeck_core::types::PlanEntry::parse_list(&entries_json);
+                state.write().snapshot.current_plan = entries;
+            }
+            false
+        }
         // Everything else (SessionReady, SessionHistory, SessionsList,
         // errors, PromptCompleted...) is structural -> refetch snapshot.
         _ => true,

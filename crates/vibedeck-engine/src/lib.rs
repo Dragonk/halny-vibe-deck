@@ -241,9 +241,18 @@ impl Engine {
                 .current_session()
                 .map(|s| s.messages.clone())
                 .unwrap_or_default(),
+            current_plan: st
+                .current_session()
+                .map(|s| s.plan.clone())
+                .unwrap_or_default(),
             modes: current_slot.map(|s| s.modes.clone()).unwrap_or_default(),
-            config_options: current_slot
+            // Per-session config wins (survives switching without a slot);
+            // the live slot fills in for sessions that never went ready.
+            config_options: st
+                .current_session()
                 .map(|s| s.config_options.clone())
+                .filter(|o| !o.is_empty())
+                .or_else(|| current_slot.map(|s| s.config_options.clone()))
                 .unwrap_or_default(),
             commands: current_slot.map(|s| s.commands.clone()).unwrap_or_default(),
             backend_sessions: st.backend_sessions.clone(),
@@ -608,7 +617,10 @@ impl Engine {
         }
     }
 
-    /// Select a config option locally + on the session's agent.
+    /// Select a config option locally + on the session's agent. The value
+    /// is mirrored on the ChatSession (chips survive slot-less switching
+    /// and lazy respawns); sessions without a running agent queue the
+    /// change until `SessionReady`.
     pub fn set_config_option(&self, id: &str, value: String) {
         if id == "model" {
             self.update_config(|c| c.preferred_model = Some(value.clone()));
@@ -617,18 +629,40 @@ impl Engine {
         let Some(session) = st.current_session() else { return };
         let key = session.id.clone();
         let acp_id = session.acp_session_id.clone();
-        let Some(slot_id) = st.slot_of_session(&key) else { return };
-        let Some(slot) = st.slots.get_mut(&slot_id) else { return };
-        if let Some(opt) = slot.config_options.iter_mut().find(|o| o.id == id) {
-            opt.current_value = value.clone();
+        // Mirror on the session first (works with no agent process).
+        if let Some(session) = st.current_session_mut() {
+            if let Some(opt) = session.config_options.iter_mut().find(|o| o.id == id) {
+                opt.current_value = value.clone();
+            }
         }
-        if let Some(session_id) = acp_id {
-            let _ = slot.cmd.send(AcpCommand::SetConfigOption {
-                session_id,
-                key: id.to_string(),
-                value,
-            });
+        match st.slot_of_session(&key) {
+            Some(slot_id) => {
+                if let Some(slot) = st.slots.get_mut(&slot_id) {
+                    if let Some(opt) = slot.config_options.iter_mut().find(|o| o.id == id) {
+                        opt.current_value = value.clone();
+                    }
+                    if let Some(session_id) = acp_id {
+                        let _ = slot.cmd.send(AcpCommand::SetConfigOption {
+                            session_id,
+                            key: id.to_string(),
+                            value,
+                        });
+                    }
+                }
+            }
+            None => {
+                // No agent process yet — apply on SessionReady. The wire
+                // never notifies for set_config_option, so the local
+                // mirror stays the source of truth for the UI.
+                st.pending_options
+                    .entry(key)
+                    .or_default()
+                    .push((id.to_string(), value));
+            }
         }
+        drop(st);
+        // Chips in every connected client must see the new value.
+        self.publish_structure();
     }
 
     // ---------------- auth ----------------
@@ -833,7 +867,7 @@ impl Engine {
                     slot.status = AcpStatus::Connected;
                     slot.error.clear();
                     slot.modes = modes;
-                    slot.config_options = config_options;
+                    slot.config_options = config_options.clone();
                     if let Some(i) = slot_session {
                         if let Some(session) = st.sessions.get_mut(i) {
                             session.acp_session_id = Some(session_id.clone());
@@ -842,7 +876,31 @@ impl Engine {
                                     session.name = title;
                                 }
                             }
+                            // Per-session config mirror: the chips keep their
+                            // values across slot-less switching + respawns.
+                            session.config_options = config_options.clone();
                             session.last_active_ms = now_ms();
+                        }
+                    }
+                    // Config options chosen before the agent was ready:
+                    // apply them (in order) to the fresh session.
+                    if let Some(i) = slot_session {
+                        if let Some(session) = st.sessions.get(i) {
+                            let key = session.id.clone();
+                            if let Some(pending) = st.pending_options.remove(&key) {
+                                for (opt_id, opt_value) in pending {
+                                    if let Some(opt) =
+                                        slot.config_options.iter_mut().find(|o| o.id == opt_id)
+                                    {
+                                        opt.current_value = opt_value.clone();
+                                    }
+                                    let _ = slot.cmd.send(AcpCommand::SetConfigOption {
+                                        session_id: session_id.clone(),
+                                        key: opt_id,
+                                        value: opt_value,
+                                    });
+                                }
+                            }
                         }
                     }
                     if let Some((key, value)) = slot.pending_option.take() {
@@ -867,6 +925,7 @@ impl Engine {
                 AcpEvent::SessionHistory {
                     session_id,
                     messages,
+                    plan,
                 } => {
                     let matches_purpose = matches!(
                         &slot.purpose,
@@ -879,6 +938,7 @@ impl Engine {
                         if let Some(i) = slot_session {
                             if let Some(session) = st.sessions.get_mut(i) {
                                 session.messages = messages;
+                                session.plan = plan;
                                 session.last_active_ms = now_ms();
                             }
                         }
@@ -1007,7 +1067,20 @@ impl Engine {
                     session_id,
                     entries_json,
                 } => {
-                    let _ = (session_id, entries_json);
+                    // Cumulative checklist state: the last update wins.
+                    // Stored on the session so it survives switching.
+                    let entries = vibedeck_core::types::PlanEntry::parse_list(&entries_json);
+                    let target = st
+                        .sessions
+                        .iter()
+                        .position(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .or(slot_session);
+                    if let Some(i) = target {
+                        if let Some(session) = st.sessions.get_mut(i) {
+                            session.plan = entries;
+                            session.last_active_ms = now_ms();
+                        }
+                    }
                 }
                 AcpEvent::AvailableCommands { commands, .. } => {
                     slot.commands = commands;

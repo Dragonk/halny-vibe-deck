@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use vibedeck_core::proto::{
     AcpCommand, AcpEvent, AcpSessionInfo, ConfigOption, ConfigOptionChoice, ModeInfo,
 };
-use vibedeck_core::types::{Message, MessageSender, ThinkingBlock};
+use vibedeck_core::types::{Message, MessageSender, PlanEntry, ThinkingBlock};
 
 pub const CLIENT_INFO_NAME: &str = "VibeDeck";
 
@@ -616,11 +616,12 @@ impl Worker {
         match outcome {
             Ok(result) => {
                 let (sid, modes, config_options) = parse_new_session(&result);
-                let history = replay_to_messages(&replay);
-                if !history.is_empty() {
+                let (history, plan) = replay_to_messages(&replay);
+                if !history.is_empty() || !plan.is_empty() {
                     self.emit(AcpEvent::SessionHistory {
                         session_id: session_id.to_string(),
                         messages: history,
+                        plan,
                     });
                 }
                 self.finish_session_ready(
@@ -933,15 +934,17 @@ fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption
 }
 
 /// Fold collected `session/load` replay updates into a message list the
-/// UI can show as conversation history.
+/// UI can show as conversation history, plus the last plan snapshot.
 ///
 /// The replay arrives as `user_message_chunk` / `agent_message_chunk` /
 /// `agent_thought_chunk` / `tool_call` notifications; user chunks start a
 /// new turn, everything else appends to the currently open assistant
 /// message. Everything is marked complete — the replay is a finished
-/// transcript, not a live stream.
-fn replay_to_messages(updates: &[Value]) -> Vec<Message> {
+/// transcript, not a live stream. The plan is cumulative state: only the
+/// last replayed snapshot matters (Nexus v0.11.1 `assembleHistory`).
+fn replay_to_messages(updates: &[Value]) -> (Vec<Message>, Vec<PlanEntry>) {
     let mut messages: Vec<Message> = Vec::new();
+    let mut plan: Vec<PlanEntry> = Vec::new();
     for params in updates {
         for ev in crate::convert::convert_update(params) {
             match ev {
@@ -990,7 +993,10 @@ fn replay_to_messages(updates: &[Value]) -> Vec<Message> {
                         }
                     }
                 }
-                _ => {} // usage / plan / commands are not part of the transcript
+                AcpEvent::PlanUpdate { entries_json, .. } => {
+                    plan = PlanEntry::parse_list(&entries_json);
+                }
+                _ => {} // usage / commands are not part of the transcript
             }
         }
     }
@@ -1000,7 +1006,7 @@ fn replay_to_messages(updates: &[Value]) -> Vec<Message> {
             block.is_complete = true;
         }
     }
-    messages
+    (messages, plan)
 }
 
 /// Find or open the assistant message replay events append to.
@@ -1071,7 +1077,7 @@ mod tests {
                 "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "done" } }
             }),
         ];
-        let messages = replay_to_messages(&updates);
+        let (messages, plan) = replay_to_messages(&updates);
         assert_eq!(messages.len(), 4);
         assert_eq!(messages[0].sender, MessageSender::User);
         assert_eq!(messages[0].content, "hello");
@@ -1083,6 +1089,7 @@ mod tests {
         assert_eq!(messages[3].tool_calls.len(), 1);
         assert_eq!(messages[3].tool_calls[0].title, "read_file");
         assert!(messages.iter().all(|m| m.is_complete));
+        assert!(plan.is_empty());
     }
 
     #[test]

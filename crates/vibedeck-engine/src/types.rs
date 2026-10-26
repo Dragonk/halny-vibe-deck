@@ -59,6 +59,9 @@ pub struct EngineState {
     pub slots: HashMap<u64, SlotState>,
     /// ChatSession.id -> slot id
     pub slot_of: HashMap<String, u64>,
+    /// Config options chosen on a session whose agent process does not
+    /// exist yet — applied (in order) once `SessionReady` arrives.
+    pub pending_options: HashMap<String, Vec<(String, String)>>,
 }
 
 impl Default for EngineState {
@@ -70,6 +73,7 @@ impl Default for EngineState {
             next_slot: 1,
             slots: HashMap::new(),
             slot_of: HashMap::new(),
+            pending_options: HashMap::new(),
         }
     }
 }

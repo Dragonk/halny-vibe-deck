@@ -540,10 +540,12 @@ impl VibedeckApp {
             AcpEvent::SessionHistory {
                 session_id,
                 messages,
+                plan,
             } => {
                 if self.loading_session.as_deref() == Some(session_id.as_str()) {
                     if let Some(session) = self.current_session_mut() {
                         session.messages = messages;
+                        session.plan = plan;
                         session.last_active_ms = vibedeck_core::types::now_ms();
                     }
                 }

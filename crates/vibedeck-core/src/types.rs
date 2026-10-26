@@ -140,6 +140,56 @@ impl Message {
     }
 }
 
+/// One entry of the agent plan / todo checklist (`sessionUpdate: "plan"`).
+/// Mirrors Nexus `PlanEntry`: status is one of pending / in_progress /
+/// completed (anything else on the wire normalizes to "pending").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanEntry {
+    pub content: String,
+    pub status: String,
+    #[serde(default)]
+    pub priority: Option<String>,
+}
+
+impl PlanEntry {
+    /// Normalize a raw wire status the same way Nexus does.
+    pub fn normalize_status(raw: &str) -> String {
+        match raw {
+            "completed" | "in_progress" => raw.to_string(),
+            _ => "pending".to_string(),
+        }
+    }
+
+    /// Parse the `entries` array of a plan update / replay snapshot.
+    pub fn parse_list(entries_json: &str) -> Vec<Self> {
+        use serde_json::Value;
+        let Ok(Value::Array(entries)) =
+            serde_json::from_str::<Value>(entries_json)
+        else {
+            return Vec::new();
+        };
+        entries
+            .iter()
+            .map(|e| Self {
+                content: e
+                    .get("content")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                status: Self::normalize_status(
+                    e.get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("pending"),
+                ),
+                priority: e.get("priority").map(|p| match p {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                }),
+            })
+            .collect()
+    }
+}
+
 /// A local chat session, optionally linked to a backend ACP session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSession {
@@ -156,6 +206,14 @@ pub struct ChatSession {
     /// SSH remote connection this session runs on (None = local).
     #[serde(default)]
     pub remote_id: Option<String>,
+    /// Current agent plan / todo checklist (cumulative — the last
+    /// `plan` update wins; mirrors Nexus v0.11.1 `session.plans`).
+    #[serde(default)]
+    pub plan: Vec<PlanEntry>,
+    /// Last reported config options (model/mode/thinking) — per-session
+    /// chips survive slot-less switching and lazy respawns.
+    #[serde(default)]
+    pub config_options: Vec<crate::proto::ConfigOption>,
 }
 
 impl ChatSession {
@@ -170,6 +228,8 @@ impl ChatSession {
             last_active_ms: now,
             working_directory: working_directory.to_string(),
             remote_id: None,
+            plan: Vec::new(),
+            config_options: Vec::new(),
         }
     }
 }

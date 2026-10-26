@@ -95,6 +95,10 @@ pub enum AcpEvent {
         last_turn_duration_ms: f64,
         context_used: f64,
         context_size: f64,
+        /// Session cost from the wire (`update.cost.amount`, USD) —
+        /// vibe-acp ≥ 3.0 reports it with every usage update.
+        #[serde(default)]
+        cost: f64,
     },
     /// A worker operation failed.
     SessionError { context: String, message: String },
@@ -103,10 +107,13 @@ pub enum AcpEvent {
     /// Replayed user text (`session/load` history, `user_message_chunk`).
     UserMessageChunk { session_id: String, text: String },
     /// Full conversation history replayed by `session/load` — the UI
-    /// replaces the local mirror's messages with these.
+    /// replaces the local mirror's messages with these. The plan is
+    /// cumulative state: only the last replayed snapshot matters.
     SessionHistory {
         session_id: String,
         messages: Vec<crate::types::Message>,
+        #[serde(default)]
+        plan: Vec<crate::types::PlanEntry>,
     },
     /// Streaming assistant reasoning text.
     ThinkingChunk { session_id: String, text: String },

@@ -4812,28 +4812,34 @@ code {
     font-variant-numeric: tabular-nums;
 }
 .usage-context {
-    min-width: 140px;
+    gap: 6px;
 }
-.usage-context-track {
-    position: relative;
+/* v0.10.2 Nexus parity: Zed-style circular context gauge */
+.usage-gauge {
+    flex: none;
     display: inline-block;
-    width: 80px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--border);
-    overflow: hidden;
+    width: 16px;
+    height: 16px;
 }
-.usage-context-fill {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    border-radius: 2px;
-    background: var(--accent);
-    transition: width 0.3s ease;
+.usage-gauge-track {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 2.5;
 }
-.usage-context-fill.warn {
-    background: var(--color-danger);
+.usage-gauge-fill {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transition: stroke-dasharray 0.3s ease;
+}
+.usage-gauge-fill.warn {
+    stroke: var(--color-danger);
+}
+.usage-gauge-mark {
+    fill: none;
+    stroke: var(--text-dim);
+    stroke-width: 3;
 }
 .usage-cache .usage-bar-value {
     color: var(--color-success);
@@ -5910,3 +5916,198 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* ===== v0.11.1 Nexus parity: agent plan / todo card ===== */
+.plan-card {
+    margin: 4px 2px 14px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(127, 127, 127, 0.04);
+}
+.plan-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    border: none;
+    background: none;
+    padding: 0;
+    width: 100%;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+}
+.plan-card-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.plan-card-count {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+.plan-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.plan-card-chevron {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-dim);
+    transition: transform 0.15s ease;
+}
+.plan-card-chevron.open {
+    transform: rotate(180deg);
+}
+.plan-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+.plan-icon {
+    flex-shrink: 0;
+    width: 16px;
+    text-align: center;
+}
+.plan-content {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.plan-row.plan-completed .plan-icon {
+    color: #3fb950;
+}
+.plan-row.plan-completed .plan-content {
+    text-decoration: line-through;
+    color: var(--text-dim);
+}
+.plan-row.plan-in_progress {
+    color: var(--text);
+    font-weight: 500;
+}
+.plan-row.plan-in_progress .plan-icon {
+    color: var(--accent);
+    animation: plan-pulse 1.6s ease-in-out infinite;
+}
+@keyframes plan-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+.plan-card-collapsed .plan-row {
+    margin-top: 2px;
+}
+
+/* ===== v0.10.5 Nexus parity: message queue panel (input card top) ===== */
+.msg-queue {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    border-radius: 11px 11px 0 0;
+    flex-shrink: 0;
+}
+.msg-queue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 8px 4px 14px;
+}
+.msg-queue-title {
+    margin: 0;
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+.msg-queue-clear {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+.msg-queue-clear:hover { background: var(--panel-hover); color: var(--text); }
+.msg-queue-list {
+    max-height: 144px;
+    overflow-y: auto;
+    padding: 1px 8px 8px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.msg-queue-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.msg-queue-item:hover { background: var(--panel-hover); }
+.msg-queue-num {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--border-subtle);
+    height: 18px;
+    min-width: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    padding: 0 4px;
+    font-variant-numeric: tabular-nums;
+}
+.msg-queue-text {
+    margin: 0;
+    font-size: 13px;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+.msg-queue-edit {
+    width: 100%;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--input-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    outline: none;
+    min-width: 0;
+}
+.msg-queue-edit:focus { border-color: var(--accent); }
+.msg-queue-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.msg-queue-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    padding: 0;
+}
+.msg-queue-btn:hover { background: var(--surface); color: var(--text); }

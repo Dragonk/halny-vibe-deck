@@ -17,6 +17,9 @@ pub struct UsageStats {
     pub context_used: f64,
     pub context_size: f64,
     pub updates: u32,
+    /// Session cost in USD (from the wire `usage_update.cost.amount`).
+    #[serde(default)]
+    pub cost: f64,
 }
 
 impl UsageStats {
@@ -40,6 +43,7 @@ impl UsageStats {
             last_turn_duration_ms,
             context_used,
             context_size,
+            cost,
             ..
         } = e
         {
@@ -51,6 +55,7 @@ impl UsageStats {
             self.last_turn_duration_ms = *last_turn_duration_ms;
             self.context_used = *context_used;
             self.context_size = *context_size;
+            self.cost = *cost;
             self.updates += 1;
             true
         } else {
@@ -269,6 +274,9 @@ pub struct Snapshot {
     pub current: Option<usize>,
     pub sessions: Vec<SessionMeta>,
     pub current_messages: Vec<crate::types::Message>,
+    /// Current session's agent plan / todo checklist (last update wins).
+    #[serde(default)]
+    pub current_plan: Vec<crate::types::PlanEntry>,
     pub modes: Vec<ModeInfo>,
     pub config_options: Vec<ConfigOption>,
     pub commands: Vec<AvailableCommand>,
@@ -290,6 +298,7 @@ impl Default for Snapshot {
             current: None,
             sessions: Vec::new(),
             current_messages: Vec::new(),
+            current_plan: Vec::new(),
             modes: Vec::new(),
             config_options: Vec::new(),
             commands: Vec::new(),

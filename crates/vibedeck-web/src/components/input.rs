@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use vibedeck_core::proto::ConfigOption;
 
-use crate::i18n::tr;
+use crate::i18n::{tf, tr};
 use crate::state::{lang, submit, token, ClientState};
 
 /// One `/` picker entry (Nexus SlashItem).
@@ -116,6 +116,10 @@ pub fn InputBar() -> Element {
     // attach menu
     let mut attach_open = use_signal(|| false);
 
+    // queued-message panel edit state (Nexus v0.10.5 MessageQueue)
+    let editing_idx = use_signal(|| Option::<usize>::None);
+    let edit_draft = use_signal(String::new);
+
     let s = state.read();
     let lang = lang(&state);
     let busy = s.snapshot.busy;
@@ -126,7 +130,6 @@ pub fn InputBar() -> Element {
 
     let cwd = if wd.is_empty() { cfg_wd } else { wd };
     let project_label = short_dir(&cwd);
-    let queue_len = s_read_queue(&state);
 
     let send_text = move |text: String| {
         let state = state.clone();
@@ -286,9 +289,220 @@ pub fn InputBar() -> Element {
         }
     };
 
+    // ----- v0.10.5 Nexus parity: queued-message panel (card top) -----
+    let queue: Vec<String> = state.read().queue.clone();
+    let queue_panel: Option<Element> = if queue.is_empty() {
+        None
+    } else {
+        let title = if queue.len() == 1 {
+            tr(&lang, "messageInQueueOne").to_string()
+        } else {
+            tf(&lang, "messagesInQueue", &[("count", &queue.len().to_string())])
+        };
+        let clear_label = tr(&lang, "clearQueueLabel").to_string();
+        // Rows are precomputed: the rsx! macro forbids statements in children.
+        let rows: Vec<Element> = queue
+            .iter()
+            .enumerate()
+            .map(|(idx, msg)| {
+                let editing = editing_idx() == Some(idx);
+                let msg = msg.clone();
+                rsx! {
+                    div { class: "msg-queue-item",
+                        span { class: "msg-queue-num", "{idx + 1}" }
+                        if editing {
+                            input {
+                                class: "msg-queue-edit",
+                                r#type: "text",
+                                value: "{edit_draft.read()}",
+                                autofocus: true,
+                                oninput: {
+                                    let mut edit_draft = edit_draft;
+                                    move |e| edit_draft.set(e.value())
+                                },
+                                onkeydown: {
+                                    let state = state.clone();
+                                    let mut editing_idx = editing_idx;
+                                    let mut edit_draft = edit_draft;
+                                    move |e: Event<KeyboardData>| {
+                                        match e.key() {
+                                            Key::Enter => {
+                                                let text = edit_draft.read().trim().to_string();
+                                                let mut st = state;
+                                                if text.is_empty() {
+                                                    if Some(idx) == editing_idx() {
+                                                        editing_idx.set(None);
+                                                    }
+                                                    let mut s = st.write();
+                                                    if idx < s.queue.len() {
+                                                        s.queue.remove(idx);
+                                                    }
+                                                } else {
+                                                    let mut s = st.write();
+                                                    if idx < s.queue.len() {
+                                                        s.queue[idx] = text;
+                                                    }
+                                                    editing_idx.set(None);
+                                                }
+                                                edit_draft.set(String::new());
+                                            }
+                                            Key::Escape => {
+                                                editing_idx.set(None);
+                                                edit_draft.set(String::new());
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            p { class: "msg-queue-text", "{msg}" }
+                        }
+                        div { class: "msg-queue-actions",
+                            if editing {
+                                button {
+                                    class: "msg-queue-btn",
+                                    title: "{tr(&lang, \"mqSave\")}",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let mut editing_idx = editing_idx;
+                                        let mut edit_draft = edit_draft;
+                                        move |_| {
+                                            let text = edit_draft.read().trim().to_string();
+                                            let mut st = state;
+                                            if text.is_empty() {
+                                                editing_idx.set(None);
+                                                let mut s = st.write();
+                                                if idx < s.queue.len() {
+                                                    s.queue.remove(idx);
+                                                }
+                                            } else {
+                                                let mut s = st.write();
+                                                if idx < s.queue.len() {
+                                                    s.queue[idx] = text;
+                                                }
+                                                editing_idx.set(None);
+                                            }
+                                            edit_draft.set(String::new());
+                                        }
+                                    },
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        width: "14", height: "14",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        fill: "none",
+                                        path { d: "M20 6L9 17L4 12" }
+                                    }
+                                }
+                                button {
+                                    class: "msg-queue-btn",
+                                    title: "{tr(&lang, \"mqCancel\")}",
+                                    onclick: {
+                                        let mut editing_idx = editing_idx;
+                                        let mut edit_draft = edit_draft;
+                                        move |_| {
+                                            editing_idx.set(None);
+                                            edit_draft.set(String::new());
+                                        }
+                                    },
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        width: "14", height: "14",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        fill: "none",
+                                        path { d: "M20 4L4 20" }
+                                        path { d: "M4 4L20 20" }
+                                    }
+                                }
+                            } else {
+                                button {
+                                    class: "msg-queue-btn",
+                                    title: "{tr(&lang, \"mqEdit\")}",
+                                    onclick: {
+                                        let mut editing_idx = editing_idx;
+                                        let mut edit_draft = edit_draft;
+                                        move |_| {
+                                            editing_idx.set(Some(idx));
+                                            edit_draft.set(msg.clone());
+                                        }
+                                    },
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        width: "14", height: "14",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        fill: "none",
+                                        path { d: "M8 21L21.5 7.5L16.5 2.5L3 16L3 21L8 21Z" }
+                                    }
+                                }
+                                button {
+                                    class: "msg-queue-btn",
+                                    title: "{tr(&lang, \"mqRemove\")}",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let mut editing_idx = editing_idx;
+                                        move |_| {
+                                            if Some(idx) == editing_idx() {
+                                                editing_idx.set(None);
+                                            }
+                                            let mut st = state;
+                                            let mut s = st.write();
+                                            if idx < s.queue.len() {
+                                                s.queue.remove(idx);
+                                            }
+                                        }
+                                    },
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        width: "14", height: "14",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        fill: "none",
+                                        path { d: "M20 4L4 20" }
+                                        path { d: "M4 4L20 20" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
+        Some(rsx! {
+            div { class: "msg-queue",
+                div { class: "msg-queue-header",
+                    p { class: "msg-queue-title", "{title}" }
+                    button {
+                        class: "msg-queue-clear",
+                        onclick: {
+                            let state = state.clone();
+                            let mut editing_idx = editing_idx;
+                            move |_| {
+                                editing_idx.set(None);
+                                let mut st = state;
+                                st.write().queue.clear();
+                            }
+                        },
+                        "{clear_label}"
+                    }
+                }
+                div { class: "msg-queue-list",
+                    {rows.iter().cloned()}
+                }
+            }
+        })
+    };
+
     rsx! {
         div { class: "input-card-wrap",
             div { class: "input-card",
+                {queue_panel.iter().cloned()}
                 div { class: "input-editor-wrap",
                     textarea {
                         class: "input-card-editor",
@@ -483,13 +697,6 @@ pub fn InputBar() -> Element {
                         }
                     }
                 }
-                if queue_len > 0 {
-                    div { class: "input-attachments",
-                        div { class: "attachment-chip",
-                            span { class: "attachment-name", "⏳ {queue_len}" }
-                        }
-                    }
-                }
                 div { class: "input-card-toolbar",
                     div { class: "input-card-left",
                         button {
@@ -604,10 +811,6 @@ pub fn InputBar() -> Element {
             }
         }
     }
-}
-
-fn s_read_queue(state: &Signal<ClientState>) -> usize {
-    state.read().queue.len()
 }
 
 fn short_dir(dir: &str) -> String {

@@ -5,7 +5,7 @@
 //! Ported from Nexus ChatView + MessageBubble (same CSS classes).
 
 use dioxus::prelude::*;
-use vibedeck_core::types::{Attachment, Message, MessageSender, ToolStatus};
+use vibedeck_core::types::{Attachment, Message, MessageSender, PlanEntry, ToolStatus};
 
 use crate::i18n::tr;
 use crate::state::{lang, ClientState};
@@ -17,10 +17,10 @@ pub fn ChatView() -> Element {
 
     let s = state.read();
     let messages = s.snapshot.current_messages.clone();
+    let plan = s.snapshot.current_plan.clone();
     let busy = s.snapshot.busy;
     let status = s.snapshot.status.clone();
     let acp_error = s.snapshot.acp_error.clone();
-    let queue_len = s.queue.len();
     drop(s);
 
     // one-shot: install the mermaid MutationObserver renderer (client only;
@@ -45,9 +45,6 @@ pub fn ChatView() -> Element {
 
     rsx! {
         div { class: "chat-view-wrap",
-            if queue_len > 0 {
-                div { class: "tool-approval-queue-hint", style: "position:static;margin:0 16px 4px;", "⏳ {queue_len}" }
-            }
             div { class: "chat-messages",
                 div { class: "chat-inner",
                     if messages.is_empty() {
@@ -63,6 +60,9 @@ pub fn ChatView() -> Element {
                         div { class: "message-list",
                             for (idx, msg) in messages.iter().enumerate() {
                                 MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1 }
+                            }
+                            if !plan.is_empty() {
+                                PlanCard { entries: plan.clone() }
                             }
                             if busy {
                                 div { class: "agent-busy-row",
@@ -918,3 +918,87 @@ const MERMAID_JS: &str = r#"
   scan();
 })();
 "#;
+
+/// Nexus v0.11.1: agent plan / todo checklist card, rendered after the
+/// messages (cumulative state — the last `plan` update wins). Collapses
+/// to the current entry; auto-collapses once everything is done.
+#[component]
+pub fn PlanCard(entries: Vec<PlanEntry>) -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let lang = lang(&state);
+    let mut collapsed_manual: Signal<Option<bool>> = use_signal(|| None);
+
+    let all_done = !entries.is_empty() && entries.iter().all(|e| e.status == "completed");
+    let collapsed = collapsed_manual().unwrap_or(all_done);
+    let current = entries
+        .iter()
+        .find(|e| e.status == "in_progress")
+        .or_else(|| entries.last())
+        .cloned();
+    let done = entries.iter().filter(|e| e.status == "completed").count();
+    let total = entries.len();
+    let card_cls = if collapsed {
+        "plan-card plan-card-collapsed"
+    } else {
+        "plan-card"
+    };
+    let chevron_cls = if collapsed {
+        "plan-card-chevron"
+    } else {
+        "plan-card-chevron open"
+    };
+
+    // Precompute the rows: collapsed -> only the current entry,
+    // expanded -> the full checklist (Nexus ChatView markup 1:1).
+    let rows: Vec<Element> = if collapsed {
+        current
+            .map(|e| rsx! { PlanRow { entry: e } })
+            .into_iter()
+            .collect()
+    } else {
+        entries
+            .iter()
+            .map(|e| rsx! { PlanRow { entry: e.clone() } })
+            .collect()
+    };
+
+    rsx! {
+        div { class: "{card_cls}",
+            button {
+                class: "plan-card-header",
+                onclick: move |_| collapsed_manual.set(Some(!collapsed)),
+                span { class: "plan-card-title", "{tr(&lang, \"planLabel\")}" }
+                span { class: "plan-card-meta",
+                    span { class: "plan-card-count", "{done}/{total}" }
+                    span { class: "{chevron_cls}",
+                        svg {
+                            width: "10",
+                            height: "10",
+                            view_box: "0 0 10 10",
+                            fill: "currentColor",
+                            path { d: "M1 3l4 4 4-4" }
+                        }
+                    }
+                }
+            }
+            {rows.iter().cloned()}
+        }
+    }
+}
+
+/// One plan row: status icon (✓ / ◐ / ○) + content text.
+#[component]
+fn PlanRow(entry: PlanEntry) -> Element {
+    let icon = match entry.status.as_str() {
+        "completed" => "✓",
+        "in_progress" => "◐",
+        _ => "○",
+    };
+    let cls = format!("plan-row plan-{}", entry.status);
+    rsx! {
+        div { class: "{cls}",
+            span { class: "plan-icon", "{icon}" }
+            span { class: "plan-content", "{entry.content}" }
+        }
+    }
+}
