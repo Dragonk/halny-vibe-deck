@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.4 — 2026-10-26
+
+### Fixed
+- **A dead vibe-acp worker no longer leaves the UI hanging.** When the ACP
+  worker process exited during a turn (killed by the update helper's
+  `app.exit(0)`, or a crash in a long session), every in-flight request sat
+  unresolved until its timeout — up to an hour for `session/prompt` — with
+  no feedback. The worker exit handler now rejects all pending requests
+  immediately with a clear `ACP worker exited before responding (code N)`
+  error, so the UI fails fast instead of spinning.
+- Note: release 1.0.3 was tagged before this fix landed, so the published
+  1.0.3 does not include it; this patch release does.
+
 ## 1.0.3 — 2026-10-26
 
 ### Fixed
