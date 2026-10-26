@@ -268,5 +268,5 @@ jobs:
             - `./mistraldeck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
             - `./mistraldeck --mode gui` — force desktop window.
             - `./mistraldeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
-- `./mistraldeck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
+            - `./mistraldeck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
             - `./mistraldeck --port 1234` / `--set-login user pass` — configure the remote server.
