@@ -991,8 +991,15 @@ export class AcpManager {
   }
 
   async sendPrompt(text: string, acpSessionId?: string): Promise<void> {
-    const sid = acpSessionId ?? this.currentSessionId
-    if (!sid) throw new Error('No active session')
+    // v1.0.2: a prompt must ALWAYS be addressed to an explicit session.
+    // The old fallback (acpSessionId ?? this.currentSessionId) delivered
+    // unaddressed prompts to whatever session the worker touched last:
+    // when the draft's link raced the newSession reply (easy over the
+    // web/WS bridge), the first message of a new session contaminated
+    // another session - "A turn is already running" and the message
+    // landing in the wrong chat. Refuse instead of guessing.
+    if (!acpSessionId) throw new Error('No target session for this prompt')
+    const sid = acpSessionId
     if (sid !== this.currentSessionId) {
       this.currentSessionId = sid
     }

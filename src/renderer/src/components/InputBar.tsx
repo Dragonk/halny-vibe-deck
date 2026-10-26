@@ -612,18 +612,63 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       }
       setIsStarting(false)
       setSessionStarting(false)
-      // SessionInitialized has fired by now → the local session is linked
-      const linkedSess = useStore.getState().currentSession()
-      if (linkedSess?.id && !linkedSess.workingDirectory) {
+      // v1.0.2: the SessionInitialized event links the draft to the fresh
+      // ACP session. Over the web/WS bridge the newSession reply can beat
+      // the event, so poll briefly for the link instead of assuming it -
+      // an unaddressed prompt must never be sent (main now refuses it; it
+      // used to fall back to the worker's last-active session and
+      // contaminate it).
+      const draftId = currentSess?.id ?? null
+      let linkedSess = draftId
+        ? useStore.getState().sessions.find((s) => s.id === draftId) ?? null
+        : useStore.getState().currentSession()
+      for (let wait = 0; wait < 25 && !(linkedSess && linkedSess.acpSessionId); wait++) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        linkedSess = draftId
+          ? useStore.getState().sessions.find((s) => s.id === draftId) ?? null
+          : useStore.getState().currentSession()
+      }
+      if (!linkedSess?.acpSessionId) {
+        setAcpError('New session did not initialize. Please try sending again.')
+        setPendingNewSession(true)
+        return
+      }
+      if (!linkedSess.workingDirectory) {
         updateSession(linkedSess.id, { workingDirectory: cwd || undefined })
       }
       setInputText('')
       if (editorRef.current) editorRef.current.textContent = ''
       setPastedImages([])
-      addUserMessage(textToSend, attachments)
-      if (linkedSess?.id) useStore.getState().markSessionBusy(linkedSess.id)
+      // v1.0.2: the message belongs to the session the prompt is sent to.
+      // addUserMessage writes into currentSessionId - when the user has
+      // switched sessions during the (rare) link wait, append to the draft
+      // directly so the text can never land in the chat being viewed.
+      const storeNow = useStore.getState()
+      if (storeNow.currentSessionId === linkedSess.id) {
+        addUserMessage(textToSend, attachments)
+      } else {
+        const orphanMsg = {
+          id: 'msg-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+          sender: 'user' as const,
+          content: textToSend,
+          isComplete: true,
+          timestamp: Date.now(),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        }
+        storeNow.updateSession(linkedSess.id, {
+          messages: [...linkedSess.messages, orphanMsg],
+          lastActive: Date.now(),
+          updatedAt: Date.now(),
+          name:
+            linkedSess.messages.length === 0
+              ? textToSend.slice(0, 40) + (textToSend.length > 40 ? '…' : '')
+              : linkedSess.name,
+        })
+      }
+      useStore.getState().markSessionBusy(linkedSess.id)
       try {
-        await window.api.acp.sendPrompt(expandedText, linkedSess?.acpSessionId ?? undefined, rid ?? undefined)
+        await window.api.acp.sendPrompt(expandedText, linkedSess.acpSessionId, rid ?? undefined)
       } catch (err) {
         if (linkedSess?.id) useStore.getState().markSessionIdle(linkedSess.id)
         setAcpError((err as Error).message)
