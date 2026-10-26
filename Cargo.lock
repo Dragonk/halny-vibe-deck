@@ -8108,6 +8108,7 @@ dependencies = [
  "tokio",
  "vibedeck-acp",
  "vibedeck-core",
+ "vibedeck-vibe",
 ]
 
 [[package]]

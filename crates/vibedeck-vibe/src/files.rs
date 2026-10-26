@@ -27,6 +27,9 @@ pub struct AgentFile {
     pub agent_type: Option<String>,
     pub active_model: Option<String>,
     pub system_prompt_id: Option<String>,
+    /// Human-friendly label shown in pickers (`display_name`).
+    pub display_name: Option<String>,
+    pub description: Option<String>,
     pub enabled_tools: Vec<String>,
     pub disabled_tools: Vec<String>,
     /// `(tool_name, permission)` pairs from `[tools.<name>]` blocks.
@@ -34,10 +37,17 @@ pub struct AgentFile {
 }
 
 impl AgentFile {
+    /// Load the global profiles (`~/.vibe/agents/*.toml`).
     pub fn load_all() -> Vec<AgentFile> {
-        let dir = agents_dir();
+        Self::load_all_in(&agents_dir())
+    }
+
+    /// Load profiles from any agents dir (e.g. the project-level
+    /// `<cwd>/.vibe/agents/` — the source of the "project agents" that
+    /// join the mode chip dropdown, Nexus `vibe:get-agents("project")`).
+    pub fn load_all_in(dir: &std::path::Path) -> Vec<AgentFile> {
         let mut agents = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             return agents;
         };
         for entry in entries.flatten() {
@@ -68,6 +78,18 @@ impl AgentFile {
         }
         if let Some(prompt) = &self.system_prompt_id {
             table.insert("system_prompt_id".into(), Value::from(prompt.as_str()));
+        }
+        // Empty values must never be written (the CLI rejects empty
+        // strings on these fields — Nexus `agentFileData` rule).
+        if let Some(display_name) = &self.display_name {
+            if !display_name.is_empty() {
+                table.insert("display_name".into(), Value::from(display_name.as_str()));
+            }
+        }
+        if let Some(description) = &self.description {
+            if !description.is_empty() {
+                table.insert("description".into(), Value::from(description.as_str()));
+            }
         }
         if !self.enabled_tools.is_empty() {
             table.insert(
@@ -146,6 +168,14 @@ fn parse_agent(name: &str, table: &Table) -> AgentFile {
             .map(str::to_string),
         system_prompt_id: table
             .get("system_prompt_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        display_name: table
+            .get("display_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        description: table
+            .get("description")
             .and_then(Value::as_str)
             .map(str::to_string),
         enabled_tools: table

@@ -83,6 +83,10 @@ pub enum AcpEvent {
         /// `configOptions`; older servers fall back to `models`/`modes`).
         config_options: Vec<ConfigOption>,
         title: Option<String>,
+        /// `modes.currentModeId` from the wire (Nexus `parseModes`: falls
+        /// back to the first mode) — updates the mode chip display.
+        #[serde(default)]
+        current_mode_id: Option<String>,
     },
     /// Live token usage for a turn (`session/update` → `usage_update`).
     UsageUpdate {
@@ -130,6 +134,10 @@ pub enum AcpEvent {
         tool_call_id: String,
         status: ToolStatus,
         output: Option<String>,
+        /// v0.13 subagent meta (`_meta.effect_kind == "subagent"`) — merged
+        /// into the running call, carries `child_session_id` once spawned.
+        #[serde(default)]
+        subagent: Option<crate::types::SubagentInfo>,
     },
     /// The agent asks the user to approve a tool call / permission.
     ToolApprovalRequest {

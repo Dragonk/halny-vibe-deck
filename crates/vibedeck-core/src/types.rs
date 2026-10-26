@@ -37,6 +37,34 @@ pub struct FileChange {
     pub action: FileAction,
 }
 
+/// One structured edit diff hunk (git-style rendering in the chat).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DiffHunk {
+    pub path: String,
+    #[serde(default)]
+    pub old_text: Option<String>,
+    #[serde(default)]
+    pub new_text: String,
+    #[serde(default)]
+    pub start_line: Option<i64>,
+    #[serde(default)]
+    pub new_start_line: Option<i64>,
+}
+
+/// v0.13 subagent invocation meta (`_meta.effect_kind == "subagent"` on
+/// `tool_call` / `tool_call_update` — agents.spawn / task tools).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SubagentInfo {
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub child_session_id: Option<String>,
+}
+
 /// One agent tool call (execute / read / edit / …).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -50,6 +78,26 @@ pub struct ToolCall {
     pub output: Option<String>,
     #[serde(default)]
     pub file_changes: Vec<FileChange>,
+    /// Structured edit diffs (edit tool) — git-style hunks in the chat.
+    #[serde(default)]
+    pub diffs: Vec<DiffHunk>,
+    /// Canonical tool name from the ACP `_meta.tool_name` (rich routing).
+    #[serde(default)]
+    pub tool_name: String,
+    /// Pre-edit file content (edit tool `rawOutput.previousContent`) —
+    /// enables git-style context lines around hunks.
+    #[serde(default)]
+    pub previous_content: Option<String>,
+    /// Raw structured output (`rawOutput`) serialized as JSON — process
+    /// tool tables/status; unwrapped like Nexus `processRawFrom`.
+    #[serde(default)]
+    pub raw_output_json: Option<String>,
+    /// v0.13 subagent invocation meta (agents.spawn / task).
+    #[serde(default)]
+    pub subagent: Option<SubagentInfo>,
+    /// Unix epoch ms when the call was first seen (steps timeline ordering).
+    #[serde(default)]
+    pub started_at: i64,
 }
 
 /// A reasoning/thinking stream block.
@@ -58,6 +106,12 @@ pub struct ThinkingBlock {
     pub id: String,
     pub content: String,
     pub is_complete: bool,
+    /// Unix epoch ms when the block started streaming.
+    #[serde(default)]
+    pub started_at: i64,
+    /// Unix epoch ms when the block was finalized (0 while streaming).
+    #[serde(default)]
+    pub completed_at: i64,
 }
 
 /// A file or folder attached to a prompt via `@` mention.
@@ -214,6 +268,16 @@ pub struct ChatSession {
     /// chips survive slot-less switching and lazy respawns.
     #[serde(default)]
     pub config_options: Vec<crate::proto::ConfigOption>,
+    /// Last config actually used by this session (Nexus `lastModel`/
+    /// `lastMode`/`lastThinking`): recorded on every confirmed config
+    /// change and on SessionReady, restored from disk
+    /// (`runtime-state.json`) for sessions never spawned this run.
+    #[serde(default)]
+    pub last_model: Option<String>,
+    #[serde(default)]
+    pub last_mode: Option<String>,
+    #[serde(default)]
+    pub last_thinking: Option<String>,
 }
 
 impl ChatSession {
@@ -230,6 +294,9 @@ impl ChatSession {
             remote_id: None,
             plan: Vec::new(),
             config_options: Vec::new(),
+            last_model: None,
+            last_mode: None,
+            last_thinking: None,
         }
     }
 }

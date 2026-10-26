@@ -880,6 +880,9 @@ fn models(app: &mut VibedeckApp, ui: &mut Ui, t: &Str) {
             provider: String::new(),
             alias: None,
             enabled: Some(true),
+            display_name: None,
+            thinking: None,
+            thinking_levels: None,
         });
     }
 }

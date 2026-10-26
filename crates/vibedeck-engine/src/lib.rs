@@ -309,6 +309,11 @@ impl Engine {
                 return;
             }
             st.current = Some(index);
+            // Nexus `restoreSessionChips`: a session without recorded
+            // option lists (historical / never spawned this run) gets
+            // display-only lists built from the vibe config of its
+            // working directory + the recorded last model/mode/thinking.
+            restore_session_chips(&mut st);
         }
         self.publish(BusEvent::StructureChanged);
     }
@@ -634,6 +639,14 @@ impl Engine {
             if let Some(opt) = session.config_options.iter_mut().find(|o| o.id == id) {
                 opt.current_value = value.clone();
             }
+            // Nexus handleConfigSelect: record the choice on the session
+            // so switching back (and the next session/load) restores it.
+            match id {
+                "model" => session.last_model = Some(value.clone()),
+                "mode" => session.last_mode = Some(value.clone()),
+                "thinking" => session.last_thinking = Some(value.clone()),
+                _ => {}
+            }
         }
         match st.slot_of_session(&key) {
             Some(slot_id) => {
@@ -863,6 +876,7 @@ impl Engine {
                     modes,
                     config_options,
                     title,
+                    current_mode_id,
                 } => {
                     slot.status = AcpStatus::Connected;
                     slot.error.clear();
@@ -880,6 +894,36 @@ impl Engine {
                             // values across slot-less switching + respawns.
                             session.config_options = config_options.clone();
                             session.last_active_ms = now_ms();
+                            // Nexus records lastModel/lastMode/lastThinking on
+                            // every confirmed config-options payload
+                            // (SessionInitialized / ConfigOptionsUpdate); the
+                            // mode chip also honours `currentModeId`.
+                            for opt in &config_options {
+                                match opt.id.as_str() {
+                                    "model" => {
+                                        session.last_model = Some(opt.current_value.clone())
+                                    }
+                                    "mode" => session.last_mode =
+                                        Some(opt.current_value.clone()),
+                                    "thinking" => {
+                                        session.last_thinking =
+                                            Some(opt.current_value.clone())
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let Some(cm) = &current_mode_id {
+                                if session.last_mode.is_none() {
+                                    session.last_mode = Some(cm.clone());
+                                }
+                                if let Some(opt) = session
+                                    .config_options
+                                    .iter_mut()
+                                    .find(|o| o.id == "mode" && o.current_value.is_empty())
+                                {
+                                    opt.current_value = cm.clone();
+                                }
+                            }
                         }
                     }
                     // Config options chosen before the agent was ready:
@@ -987,6 +1031,8 @@ impl Engine {
                                 id: "thinking".into(),
                                 content: text,
                                 is_complete: false,
+                                started_at: vibedeck_core::types::now_ms(),
+                                completed_at: 0,
                             }),
                         }
                     }
@@ -998,8 +1044,12 @@ impl Engine {
                         .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         if let Some(msg) = session.messages.last_mut() {
+                            let now = vibedeck_core::types::now_ms();
                             for block in &mut msg.thinking {
                                 block.is_complete = true;
+                                if block.completed_at == 0 {
+                                    block.completed_at = now;
+                                }
                             }
                         }
                     }
@@ -1021,6 +1071,7 @@ impl Engine {
                     tool_call_id,
                     status,
                     output,
+                    subagent,
                 } => {
                     if let Some(session) = st
                         .sessions
@@ -1033,6 +1084,24 @@ impl Engine {
                                     tc.status = status;
                                     if let Some(ref o) = output {
                                         tc.output = Some(o.to_owned());
+                                    }
+                                    // v0.13: subagent meta merges.
+                                    if let Some(sa) = &subagent {
+                                        match &mut tc.subagent {
+                                            Some(cur) => {
+                                                if sa.agent.is_some() {
+                                                    cur.agent = sa.agent.clone();
+                                                }
+                                                if sa.task.is_some() {
+                                                    cur.task = sa.task.clone();
+                                                }
+                                                if sa.child_session_id.is_some() {
+                                                    cur.child_session_id =
+                                                        sa.child_session_id.clone();
+                                                }
+                                            }
+                                            None => tc.subagent = Some(sa.clone()),
+                                        }
                                     }
                                 }
                             }
@@ -1123,4 +1192,174 @@ pub fn ensure_ai_message(session: &mut ChatSession) -> &mut Message {
         session.messages.push(Message::new_ai());
     }
     session.messages.last_mut().expect("just pushed")
+}
+
+// ---------------------------------------------------------------------------
+// Per-session chips (Nexus restoreSessionChips / syncSessionChips)
+// ---------------------------------------------------------------------------
+
+fn capitalize(s: &str) -> String {
+    let mut cs = s.chars();
+    match cs.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + cs.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Port of Nexus `restoreSessionChips` (+ the disk half of
+/// `syncSessionChips`): a session without recorded option lists — a
+/// historical session never spawned this run — gets display-only
+/// model/mode/thinking lists built from the vibe config of its working
+/// directory, with the recorded last values (falling back to the unified
+/// store on disk, `generations/*/runtime-state.json`) as the current
+/// values. A session that never went live never inherits the option
+/// lists of the previously viewed session.
+fn restore_session_chips(st: &mut EngineState) {
+    use vibedeck_core::proto::{ConfigOption, ConfigOptionChoice};
+    let Some(i) = st.current else { return };
+    let Some(session) = st.sessions.get(i) else { return };
+    if !session.config_options.is_empty() {
+        return; // live (or already restored) — keep the recorded lists
+    }
+    let acp_id = session.acp_session_id.clone();
+    let wd = session.working_directory.clone();
+    let mut model = session.last_model.clone();
+    let mut mode = session.last_mode.clone();
+    let mut thinking = session.last_thinking.clone();
+    // Missing last* values come from the unified store on disk (Nexus
+    // `vibeSessionLastConfig`: newest generation with an active_model).
+    if model.is_none() || mode.is_none() || thinking.is_none() {
+        if let Some(last) = acp_id
+            .as_deref()
+            .and_then(vibedeck_vibe::load_session_last_config)
+        {
+            model = model.or(last.model);
+            mode = mode.or(last.mode);
+            thinking = thinking.or(last.thinking);
+        }
+    }
+
+    // Model list: global config + project config of the session cwd,
+    // merged by key (alias||name) — project entries override.
+    let key_of = |m: &vibedeck_vibe::ModelConfig| {
+        m.alias.clone().unwrap_or_else(|| m.name.clone())
+    };
+    let mut models = vibedeck_vibe::VibeConfigFile::load().models();
+    if !wd.is_empty() {
+        if let Some(p) = vibedeck_vibe::find_project_config(std::path::Path::new(&wd)) {
+            if let Ok(pcfg) = vibedeck_vibe::VibeConfigFile::load_at(&p) {
+                for pm in pcfg.models() {
+                    match models.iter().position(|m| key_of(m) == key_of(&pm)) {
+                        Some(idx) => models[idx] = pm,
+                        None => models.push(pm),
+                    }
+                }
+            }
+        }
+    }
+    let cur_model = model
+        .as_deref()
+        .and_then(|lm| models.iter().find(|m| key_of(m) == lm || m.name == lm));
+
+    // CLI defaults: the five levels; an explicitly empty set means "off".
+    let levels: Vec<String> = cur_model
+        .and_then(|m| m.thinking_levels.clone())
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| {
+            ["off", "low", "medium", "high", "max"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        });
+    let mut thinking_current = thinking.clone().unwrap_or_default();
+    if !levels.iter().any(|l| *l == thinking_current) {
+        let dl = cur_model.and_then(|m| m.thinking.clone());
+        thinking_current = dl
+            .filter(|d| levels.iter().any(|l| *l == *d))
+            .or_else(|| levels.iter().find(|l| *l == "high").cloned())
+            .unwrap_or_else(|| levels.last().cloned().unwrap_or_default());
+    }
+
+    // Agents join the mode list (global + project, top-level only,
+    // deduped by name — Nexus `agentNames` set).
+    let mut agents = vibedeck_vibe::AgentFile::load_all();
+    if !wd.is_empty() {
+        agents.extend(vibedeck_vibe::AgentFile::load_all_in(
+            &std::path::Path::new(&wd).join(".vibe").join("agents"),
+        ));
+    }
+    let mut mode_choices: Vec<ConfigOptionChoice> = [
+        ("ask", "Ask"),
+        ("accept-edits", "Accept Edits"),
+        ("smart-approve", "Smart Approve"),
+        ("auto-approve", "Auto Approve"),
+    ]
+    .iter()
+    .map(|(v, n)| ConfigOptionChoice {
+        value: v.to_string(),
+        name: n.to_string(),
+        description: String::new(),
+    })
+    .collect();
+    let mut seen = std::collections::HashSet::new();
+    for a in &agents {
+        if a.agent_type.as_deref() == Some("subagent") {
+            continue;
+        }
+        if a.name.is_empty() || !seen.insert(a.name.clone()) {
+            continue;
+        }
+        mode_choices.push(ConfigOptionChoice {
+            value: a.name.clone(),
+            name: a.display_name.clone().unwrap_or_else(|| a.name.clone()),
+            description: String::new(),
+        });
+    }
+
+    let options = vec![
+        ConfigOption {
+            id: "mode".to_string(),
+            name: "Mode".to_string(),
+            current_value: mode.clone().unwrap_or_else(|| "accept-edits".to_string()),
+            choices: mode_choices,
+        },
+        ConfigOption {
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            current_value: model.clone().unwrap_or_default(),
+            choices: models
+                .iter()
+                .map(|m| ConfigOptionChoice {
+                    value: key_of(m),
+                    name: m.display_name.clone().unwrap_or_else(|| m.name.clone()),
+                    description: m.name.clone(),
+                })
+                .collect(),
+        },
+        ConfigOption {
+            id: "thinking".to_string(),
+            name: "Thinking".to_string(),
+            current_value: thinking_current.clone(),
+            choices: levels
+                .iter()
+                .map(|l| ConfigOptionChoice {
+                    value: l.clone(),
+                    name: capitalize(l),
+                    description: String::new(),
+                })
+                .collect(),
+        },
+    ];
+
+    let Some(session) = st.sessions.get_mut(i) else { return };
+    if session.config_options.is_empty() {
+        session.config_options = options;
+        session.last_model = model;
+        session.last_mode = mode;
+        session.last_thinking = if thinking_current.is_empty() {
+            thinking
+        } else {
+            Some(thinking_current)
+        };
+    }
 }

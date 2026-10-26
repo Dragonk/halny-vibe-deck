@@ -102,6 +102,11 @@ pub fn InputBar() -> Element {
     let mut draft = use_signal(String::new);
     let open_chip = use_signal(String::new);
 
+    // Project agents (Nexus extraModeChoices) — loaded per working
+    // directory of the current session (`<cwd>/.vibe/agents/`).
+    let project_agents: Signal<Vec<crate::api::AgentChoiceView>> = use_signal(Vec::new);
+    let project_agents_cwd = use_signal(String::new);
+
     // @ picker
     let mut at_open = use_signal(|| false);
     let at_items: Signal<Vec<crate::fsgit::FileEntry>> = use_signal(Vec::new);
@@ -130,6 +135,50 @@ pub fn InputBar() -> Element {
 
     let cwd = if wd.is_empty() { cfg_wd } else { wd };
     let project_label = short_dir(&cwd);
+
+    // Working directory of the current session — where project agents
+    // live (Nexus loads them on `projectCwd` change).
+    let session_cwd = {
+        let s = state.read();
+        s.snapshot
+            .current
+            .and_then(|i| s.snapshot.sessions.get(i))
+            .map(|m| m.working_directory.clone())
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| cwd.clone())
+    };
+
+    // Reload the project agents whenever the session working directory
+    // changes (Nexus useEffect on projectCwd → vibe:get-agents("project")).
+    {
+        let mut project_agents = project_agents.clone();
+        let mut project_agents_cwd = project_agents_cwd.clone();
+        let state = state.clone();
+        use_effect(move || {
+            // Reads happen synchronously so the effect subscribes to the
+            // snapshot and re-runs on every poll update.
+            let cwd = {
+                let s = state.read();
+                s.snapshot
+                    .current
+                    .and_then(|i| s.snapshot.sessions.get(i))
+                    .map(|m| m.working_directory.clone())
+                    .filter(|d| !d.is_empty())
+                    .unwrap_or_else(|| s.snapshot.working_directory.clone())
+            };
+            if cwd.is_empty() || cwd == project_agents_cwd.peek().clone() {
+                return;
+            }
+            project_agents_cwd.set(cwd.clone());
+            project_agents.set(Vec::new());
+            spawn(async move {
+                match crate::api::api_project_agents(token(&state), cwd).await {
+                    Ok(agents) => project_agents.set(agents),
+                    Err(_) => {}
+                }
+            });
+        });
+    }
 
     let send_text = move |text: String| {
         let state = state.clone();
@@ -792,9 +841,9 @@ pub fn InputBar() -> Element {
                         }
                     }
                     div { class: "input-card-right",
-                        { config_chip(state.clone(), lang.clone(), "model", tr(&lang, "modelPicker").to_string(), open_chip.clone()) }
-                        { config_chip(state.clone(), lang.clone(), "mode", tr(&lang, "modePicker").to_string(), open_chip.clone()) }
-                        { config_chip(state.clone(), lang.clone(), "thinking", tr(&lang, "thinkingPicker").to_string(), open_chip.clone()) }
+                        { config_chip(state.clone(), lang.clone(), "model", tr(&lang, "modelPicker").to_string(), open_chip.clone(), project_agents.clone(), session_cwd.clone()) }
+                        { config_chip(state.clone(), lang.clone(), "mode", tr(&lang, "modePicker").to_string(), open_chip.clone(), project_agents.clone(), session_cwd.clone()) }
+                        { config_chip(state.clone(), lang.clone(), "thinking", tr(&lang, "thinkingPicker").to_string(), open_chip.clone(), project_agents.clone(), session_cwd.clone()) }
                         {send_btn}
                     }
                 }
@@ -821,10 +870,12 @@ fn short_dir(dir: &str) -> String {
 /// One model/mode/thinking chip with a dropdown (Nexus ConfigChip).
 fn config_chip(
     state: Signal<ClientState>,
-    _lang: String,
+    lang: String,
     id: &'static str,
     label: String,
     open: Signal<String>,
+    project_agents: Signal<Vec<crate::api::AgentChoiceView>>,
+    cwd: String,
 ) -> Element {
     let s = state.read();
     let busy = s.snapshot.busy;
@@ -835,25 +886,74 @@ fn config_chip(
     // mid-session, so their dropdowns must stay clickable (bug: lists did not
     // open after the first message).
     let disabled = option.is_none() || (id == "model" && busy);
-    let items: Vec<(String, String, String)> = option
-        .as_ref()
-        .map(|o| {
-            o.choices
-                .iter()
-                .map(|c| (c.value.clone(), c.name.clone(), c.description.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+
+    // Choices, Nexus parity:
+    // - model: dedupe by NAME, keep-first (v0.12 modelOption dedupe);
+    // - mode: append project agents not already offered by the backend as
+    //   extra choices — value=name, label=displayName, description =
+    //   projectAgentBadge (+ " — " + agent description);
+    // - others: raw choices.
+    let mut items: Vec<(String, String, String)> = Vec::new();
+    if let Some(o) = &option {
+        let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for c in &o.choices {
+            if id == "model" && !seen_names.insert(c.name.clone()) {
+                continue;
+            }
+            items.push((c.value.clone(), c.name.clone(), c.description.clone()));
+        }
+    }
+    if id == "mode" {
+        let badge = tr(&lang, "projectAgentBadge").to_string();
+        let mut values: std::collections::HashSet<String> =
+            items.iter().map(|(v, _, _)| v.clone()).collect();
+        for a in project_agents.read().iter() {
+            if a.name.is_empty() || !values.insert(a.name.clone()) {
+                continue;
+            }
+            let name = a
+                .display_name
+                .clone()
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| a.name.clone());
+            let desc = match a.description.as_deref() {
+                Some(d) if !d.is_empty() => format!("{badge} — {d}"),
+                _ => badge.clone(),
+            };
+            items.push((a.name.clone(), name, desc));
+        }
+    }
+
     let is_open = open.read().clone() == id;
     let current_value = option
         .as_ref()
         .map(|o| o.current_value.clone())
         .unwrap_or_default();
-    let current_label = option
-        .as_ref()
-        .map(|o| o.current_label())
-        .unwrap_or_else(|| "—".to_string());
+    // Label resolves against the merged item list so a project-agent mode
+    // shows its displayName, not the raw agent name.
+    let current_label = items
+        .iter()
+        .find(|(v, _, _)| *v == current_value)
+        .map(|(_, n, _)| n.clone())
+        .unwrap_or_else(|| {
+            option
+                .as_ref()
+                .map(|o| o.current_label())
+                .unwrap_or_else(|| "—".to_string())
+        });
     let cls = if disabled { "ic-chip ic-chip-disabled" } else { "ic-chip" };
+
+    // Values the backend itself offered (project agents coming only from
+    // the merge need to be exposed to ~/.vibe/agents before activation).
+    let cli_values: std::collections::HashSet<String> = option
+        .as_ref()
+        .map(|o| o.choices.iter().map(|c| c.value.clone()).collect())
+        .unwrap_or_default();
+    let agent_names: std::collections::HashSet<String> = project_agents
+        .read()
+        .iter()
+        .map(|a| a.name.clone())
+        .collect();
 
     // Precompute the dropdown items (rsx children cannot contain raw
     // statements) — one element per choice.
@@ -862,6 +962,9 @@ fn config_chip(
         .map(|(value, name, desc)| {
             let state = state.clone();
             let open = open.clone();
+            let cwd = cwd.clone();
+            let needs_expose =
+                id == "mode" && agent_names.contains(&value) && !cli_values.contains(&value);
             let active = value == current_value;
             let item_cls = if active { "ic-chip-item active" } else { "ic-chip-item" };
             let check: &str = if active { "✓" } else { "" };
@@ -874,8 +977,23 @@ fn config_chip(
                         let mut state = state.clone();
                         let mut open = open.clone();
                         let value = value.clone();
+                        let cwd = cwd.clone();
                         async move {
                             open.set(String::new());
+                            // Nexus handleConfigSelect: a project agent that
+                            // the backend did not offer must first be copied
+                            // into ~/.vibe/agents (exposeProjectAgent); a
+                            // "Unsupported config option" error for a freshly
+                            // exposed agent is tolerated — the mode applies
+                            // from the next session on.
+                            if needs_expose {
+                                let _ = crate::api::api_expose_project_agent(
+                                    token(&state),
+                                    cwd.clone(),
+                                    value.clone(),
+                                )
+                                .await;
+                            }
                             {
                                 let mut s = state.write();
                                 if let Some(o) = s.snapshot.config_options.iter_mut().find(|o| o.id == id) {

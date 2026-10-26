@@ -498,6 +498,7 @@ impl VibedeckApp {
                 modes,
                 config_options,
                 title,
+                current_mode_id: _,
             } => {
                 self.status = AcpStatus::Connected;
                 self.modes = modes;
@@ -578,6 +579,8 @@ impl VibedeckApp {
                             id: "thinking".into(),
                             content: text,
                             is_complete: false,
+                            started_at: 0,
+                            completed_at: 0,
                         }),
                     }
                 }
@@ -604,15 +607,34 @@ impl VibedeckApp {
                 tool_call_id,
                 status,
                 output,
+                subagent,
             } => {
                 if let Some(session) = self.session_by_acp_id_mut(&session_id) {
                     let status_clone = status.clone();
                     for msg in session.messages.iter_mut().rev() {
                         for tc in &mut msg.tool_calls {
                             if tc.id == tool_call_id {
-                                tc.status = status_clone;
+                                tc.status = status_clone.clone();
                                 if let Some(output) = &output {
                                     tc.output = Some(output.clone());
+                                }
+                                // v0.13: subagent meta merges.
+                                if let Some(sa) = &subagent {
+                                    match &mut tc.subagent {
+                                        Some(cur) => {
+                                            if sa.agent.is_some() {
+                                                cur.agent = sa.agent.clone();
+                                            }
+                                            if sa.task.is_some() {
+                                                cur.task = sa.task.clone();
+                                            }
+                                            if sa.child_session_id.is_some() {
+                                                cur.child_session_id =
+                                                    sa.child_session_id.clone();
+                                            }
+                                        }
+                                        None => tc.subagent = Some(sa.clone()),
+                                    }
                                 }
                             }
                         }

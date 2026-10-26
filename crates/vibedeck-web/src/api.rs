@@ -397,3 +397,64 @@ pub async fn api_open_remote_session(
     vibedeck_engine::Engine::global().open_remote_session(&conn_id, &session_id, &title, &cwd);
     Ok(())
 }
+
+/// A project agent (`<cwd>/.vibe/agents/<name>.toml`) surfaced in the
+/// mode chip dropdown — Nexus `vibe:get-agents("project")` view.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AgentChoiceView {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Project-level agents for the mode chip (top-level only, no subagents).
+#[server]
+pub async fn api_project_agents(
+    token: String,
+    cwd: String,
+) -> Result<Vec<AgentChoiceView>, ServerFnError> {
+    check(&token)?;
+    let dir = std::path::Path::new(&cwd).join(".vibe").join("agents");
+    let agents = vibedeck_vibe::AgentFile::load_all_in(&dir);
+    Ok(agents
+        .into_iter()
+        .filter(|a| a.agent_type.as_deref() != Some("subagent") && !a.name.is_empty())
+        .map(|a| AgentChoiceView {
+            name: a.name,
+            display_name: a.display_name,
+            description: a.description,
+        })
+        .collect())
+}
+
+/// Copy a project agent into `~/.vibe/agents/` so the CLI backend can
+/// activate it as a mode (Nexus `vibe:expose-project-agent`).
+#[server]
+pub async fn api_expose_project_agent(
+    token: String,
+    cwd: String,
+    name: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    // Sanitize: the name selects a file directly under the agents dir.
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name == "."
+    {
+        return Err(ServerFnError::new("invalid agent name"));
+    }
+    let src = std::path::Path::new(&cwd)
+        .join(".vibe")
+        .join("agents")
+        .join(format!("{name}.toml"));
+    if !src.is_file() {
+        return Err(ServerFnError::new("project agent file not found"));
+    }
+    let dest_dir = vibedeck_vibe::vibe_home().join("agents");
+    std::fs::create_dir_all(&dest_dir).map_err(|e| ServerFnError::new(e.to_string()))?;
+    let dest = dest_dir.join(format!("{name}.toml"));
+    std::fs::copy(&src, &dest).map_err(|e| ServerFnError::new(e.to_string()))?;
+    Ok(())
+}

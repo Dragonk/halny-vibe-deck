@@ -570,7 +570,8 @@ impl Worker {
         let params = json!({ "cwd": cwd, "mcpServers": [] });
         match client.request("session/new", &params, REQUEST_TIMEOUT) {
             Ok(result) => {
-                let (session_id, modes, config_options) = parse_new_session(&result);
+                let (session_id, modes, config_options, current_mode_id) =
+                    parse_new_session(&result);
                 if session_id.is_empty() {
                     self.emit(AcpEvent::SessionError {
                         context: "new_session".into(),
@@ -580,7 +581,14 @@ impl Worker {
                 }
                 // NOTE: `session/name` was removed — vibe-acp 3.0.2
                 // answers it with -32601 and titles come from the UI anyway.
-                self.finish_session_ready(session_id, modes, config_options, None, model);
+                self.finish_session_ready(
+                    session_id,
+                    modes,
+                    config_options,
+                    None,
+                    model,
+                    current_mode_id,
+                );
             }
             Err(e) => self.emit(AcpEvent::SessionError {
                 context: "new_session".into(),
@@ -615,7 +623,7 @@ impl Worker {
             .unwrap_or_default();
         match outcome {
             Ok(result) => {
-                let (sid, modes, config_options) = parse_new_session(&result);
+                let (sid, modes, config_options, current_mode_id) = parse_new_session(&result);
                 let (history, plan) = replay_to_messages(&replay);
                 if !history.is_empty() || !plan.is_empty() {
                     self.emit(AcpEvent::SessionHistory {
@@ -634,6 +642,7 @@ impl Worker {
                     config_options,
                     None,
                     model,
+                    current_mode_id,
                 );
             }
             Err(e) => self.emit(AcpEvent::SessionError {
@@ -658,7 +667,7 @@ impl Worker {
         let params = json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] });
         match client.request("session/resume", &params, REQUEST_TIMEOUT) {
             Ok(result) => {
-                let (sid, modes, config_options) = parse_new_session(&result);
+                let (sid, modes, config_options, current_mode_id) = parse_new_session(&result);
                 self.finish_session_ready(
                     if sid.is_empty() {
                         session_id.to_string()
@@ -669,6 +678,7 @@ impl Worker {
                     config_options,
                     None,
                     model,
+                    current_mode_id,
                 );
             }
             Err(e) => {
@@ -691,6 +701,7 @@ impl Worker {
         config_options: Vec<ConfigOption>,
         title: Option<String>,
         model: Option<String>,
+        current_mode_id: Option<String>,
     ) {
         // Apply the requested model if the server advertises a model option.
         if let Some(model) = model.clone() {
@@ -718,6 +729,7 @@ impl Worker {
             modes,
             config_options,
             title,
+            current_mode_id,
         });
     }
 
@@ -802,7 +814,9 @@ fn parse_session_list(result: &Value) -> Vec<AcpSessionInfo> {
 /// vibe-acp ≥ 3.0 reports `configOptions` (model / mode / thinking…);
 /// older servers report `models.availableModels` — folded into a
 /// synthesized "model" option so the UI always has one shape to render.
-fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption>) {
+fn parse_new_session(
+    result: &Value,
+) -> (String, Vec<ModeInfo>, Vec<ConfigOption>, Option<String>) {
     let session_id = result
         .get("sessionId")
         .and_then(Value::as_str)
@@ -815,7 +829,7 @@ fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption
         .cloned()
         .or_else(|| result.get("modes").filter(|v| v.is_array()).cloned())
         .unwrap_or(Value::Array(Vec::new()));
-    let modes = modes_value
+    let modes: Vec<ModeInfo> = modes_value
         .as_array()
         .map(|a| {
             a.iter()
@@ -930,7 +944,15 @@ fn parse_new_session(result: &Value) -> (String, Vec<ModeInfo>, Vec<ConfigOption
         }
     }
 
-    (session_id, modes, config_options)
+    // `modes.currentModeId` (Nexus `parseModes`): falls back to the first
+    // mode when the server does not report one.
+    let current_mode_id = result
+        .pointer("/modes/currentModeId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| modes.first().map(|m| m.id.clone()));
+
+    (session_id, modes, config_options, current_mode_id)
 }
 
 /// Fold collected `session/load` replay updates into a message list the
@@ -962,13 +984,19 @@ fn replay_to_messages(updates: &[Value]) -> (Vec<Message>, Vec<PlanEntry>) {
                             id: "thinking".into(),
                             content: text,
                             is_complete: false,
+                            started_at: vibedeck_core::types::now_ms(),
+                            completed_at: 0,
                         }),
                     }
                 }
                 AcpEvent::ThinkingComplete { .. } => {
                     if let Some(msg) = messages.last_mut() {
+                        let now = vibedeck_core::types::now_ms();
                         for block in &mut msg.thinking {
                             block.is_complete = true;
+                            if block.completed_at == 0 {
+                                block.completed_at = now;
+                            }
                         }
                     }
                 }
@@ -1032,12 +1060,33 @@ mod tests {
             "modes": { "availableModes": [ { "id": "ask", "name": "Ask" } ] },
             "models": { "availableModels": [ { "modelId": "mistral-medium-3.5" } ] }
         });
-        let (sid, modes, config_options) = parse_new_session(&result);
+        let (sid, modes, config_options, current_mode_id) = parse_new_session(&result);
         assert_eq!(sid, "abc");
         assert_eq!(modes.len(), 1);
+        assert_eq!(current_mode_id.as_deref(), Some("ask"));
         let model_opt = config_options.iter().find(|o| o.id == "model").unwrap();
         assert_eq!(model_opt.current_value, "mistral-medium-3.5");
         assert_eq!(model_opt.choices.len(), 1);
+    }
+
+    #[test]
+    fn parses_new_session_current_mode_id() {
+        // Explicit `modes.currentModeId` wins; without it the first
+        // available mode is the fallback (Nexus currentModeId).
+        let result = serde_json::json!({
+            "sessionId": "abc",
+            "modes": {
+                "currentModeId": "smart-approve",
+                "availableModes": [
+                    { "id": "ask", "name": "Ask" },
+                    { "id": "smart-approve", "name": "Smart Approve" }
+                ]
+            }
+        });
+        let (sid, modes, _config_options, current_mode_id) = parse_new_session(&result);
+        assert_eq!(sid, "abc");
+        assert_eq!(modes.len(), 2);
+        assert_eq!(current_mode_id.as_deref(), Some("smart-approve"));
     }
 
     #[test]
@@ -1131,7 +1180,7 @@ mod tests {
                 }
             ]
         });
-        let (sid, _modes, config_options) = parse_new_session(&result);
+        let (sid, _modes, config_options, _current_mode) = parse_new_session(&result);
         assert_eq!(sid, "abc");
         assert_eq!(config_options.len(), 3);
         let model = config_options.iter().find(|o| o.id == "model").unwrap();
@@ -1149,7 +1198,7 @@ mod tests {
             "modes": [ { "id": "ask", "name": "Ask" } ],
             "models": [ { "modelId": "m1" }, { "modelId": "m2" } ]
         });
-        let (_, modes, options) = parse_new_session(&result);
+        let (_, modes, options, _current_mode) = parse_new_session(&result);
         assert_eq!(modes.len(), 1);
         // legacy bare `models` array becomes a synthetic "model" option
         let model_opt = options

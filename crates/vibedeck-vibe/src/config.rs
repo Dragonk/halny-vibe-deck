@@ -99,6 +99,13 @@ pub struct ModelConfig {
     pub provider: String,
     pub alias: Option<String>,
     pub enabled: Option<bool>,
+    /// Human-friendly label shown in pickers (`display_name`).
+    pub display_name: Option<String>,
+    /// Default reasoning effort of the model (`thinking`).
+    pub thinking: Option<String>,
+    /// Allowed reasoning efforts (`thinking_levels`; empty/missing = the
+    /// CLI default levels off/low/medium/high/max).
+    pub thinking_levels: Option<Vec<String>>,
 }
 
 /// An MCP server (`[[mcp_servers]]`).
@@ -594,6 +601,16 @@ fn model_from_table(t: &Table) -> ModelConfig {
         provider: table_str(t, "provider").unwrap_or_default(),
         alias: table_str(t, "alias"),
         enabled: t.get("enabled").and_then(Value::as_bool),
+        display_name: table_str(t, "display_name"),
+        thinking: table_str(t, "thinking"),
+        thinking_levels: {
+            let levels = table_str_list(t, "thinking_levels");
+            if levels.is_empty() {
+                None
+            } else {
+                Some(levels)
+            }
+        },
     }
 }
 
@@ -606,6 +623,18 @@ fn model_to_table(m: &ModelConfig) -> Table {
     }
     if let Some(enabled) = m.enabled {
         t.insert("enabled".into(), Value::from(enabled));
+    }
+    if let Some(display_name) = &m.display_name {
+        t.insert("display_name".into(), Value::from(display_name.as_str()));
+    }
+    if let Some(thinking) = &m.thinking {
+        t.insert("thinking".into(), Value::from(thinking.as_str()));
+    }
+    if let Some(levels) = &m.thinking_levels {
+        t.insert(
+            "thinking_levels".into(),
+            Value::from(levels.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+        );
     }
     t
 }

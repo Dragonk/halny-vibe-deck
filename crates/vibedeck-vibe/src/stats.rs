@@ -425,6 +425,291 @@ pub fn aggregate(sessions: &[VibeSession]) -> AggregateStats {
     )
 }
 
+// --- v0.13 session preview (subagent "Show work") -------------------------
+
+/// One thinking block of a preview message.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewThinking {
+    pub id: String,
+    pub content: String,
+}
+
+/// One tool call line of a preview message (`status`: `done` | `error`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewToolCall {
+    pub title: String,
+    pub status: String,
+}
+
+/// One message of a session preview (Nexus `SubagentWorkData.messages`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewMessage {
+    pub role: String,
+    pub content: String,
+    #[serde(default)]
+    pub thinking: Vec<PreviewThinking>,
+    #[serde(default)]
+    pub tool_calls: Vec<PreviewToolCall>,
+}
+
+const PREVIEW_MAX_CHUNKS: usize = 48;
+const PREVIEW_MAX_MESSAGES: usize = 2000;
+
+/// Locate the unified session dir for an id. Also accepts child sessions
+/// (`unified/child-<id>/` — those carry no `meta.json`, so the directory
+/// itself is the only marker).
+fn find_preview_dir(session_id: &str) -> Option<PathBuf> {
+    let base = sessions_log_dir().join("unified");
+    let stripped = session_id.strip_prefix("child-").unwrap_or(session_id);
+    for name in [
+        session_id.to_string(),
+        format!("child-{session_id}"),
+        stripped.to_string(),
+    ] {
+        let dir = base.join(name);
+        if dir.join("CURRENT").is_file() || dir.join("chunks").is_dir() {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// Read the raw projection entries from the session's chunk files (Nexus
+/// `readUnifiedChunks`): `CURRENT` → generation → `manifest.json` →
+/// `projection_state.chunks` (last 48 shas) → `chunks/<sha>.json`. Falls
+/// back to reading every `chunks/*.json` when the manifest is unavailable.
+fn read_preview_entries(dir: &Path) -> Option<Vec<serde_json::Value>> {
+    let mut entries: Vec<serde_json::Value> = Vec::new();
+    let via_manifest = (|| -> Option<Vec<String>> {
+        let cur: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("CURRENT")).ok()?).ok()?;
+        let gen = cur.get("generation").and_then(|g| g.as_str()).unwrap_or("");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                dir.join("generations").join(gen).join("manifest.json"),
+            )
+            .ok()?,
+        )
+        .ok()?;
+        let list = manifest
+            .pointer("/projection_state/chunks")?
+            .as_array()?
+        .iter()
+            .filter_map(|s| s.as_str().map(str::to_string))
+            .collect();
+        Some(list)
+    })();
+    if let Some(mut shas) = via_manifest {
+        if shas.len() > PREVIEW_MAX_CHUNKS {
+            let skip = shas.len() - PREVIEW_MAX_CHUNKS;
+            shas.drain(..skip);
+        }
+        for sha in &shas {
+            if let Ok(raw) =
+                std::fs::read_to_string(dir.join("chunks").join(format!("{sha}.json")))
+            {
+                if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) {
+                    entries.extend(list);
+                }
+            }
+        }
+        return Some(entries);
+    }
+    // Fallback: every chunk file, sorted for a stable order.
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("chunks")).ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return None;
+    }
+    for path in files {
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) {
+                entries.extend(list);
+            }
+        }
+    }
+    Some(entries)
+}
+
+/// Build the UI-friendly history from raw projection entries (Nexus
+/// `buildSessionPreview`, trimmed to what the subagent work card shows:
+/// user/ai text, thinking blocks, tool call lines).
+fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> {
+    let mut messages: Vec<PreviewMessage> = Vec::new();
+    let mut cur_ai: Option<PreviewMessage> = None;
+    let mut pending_thinking: Vec<PreviewThinking> = Vec::new();
+    for e in entries {
+        if messages.len() > PREVIEW_MAX_MESSAGES {
+            break;
+        }
+        match e.get("type").and_then(|t| t.as_str()) {
+            Some("message") => {
+                let is_user = e.get("role").and_then(|r| r.as_str()) == Some("user");
+                let mut text = String::new();
+                if let Some(blocks) = e.get("content").and_then(|c| c.as_array()) {
+                    for b in blocks {
+                        if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                                text.push_str(t);
+                            }
+                        }
+                    }
+                }
+                if is_user {
+                    if let Some(msg) = cur_ai.take() {
+                        messages.push(msg);
+                    }
+                    pending_thinking.clear();
+                    messages.push(PreviewMessage {
+                        role: "user".to_string(),
+                        content: text,
+                        thinking: Vec::new(),
+                        tool_calls: Vec::new(),
+                    });
+                } else {
+                    if let Some(msg) = cur_ai.take() {
+                        messages.push(msg);
+                    }
+                    let thinking = std::mem::take(&mut pending_thinking);
+                    cur_ai = Some(PreviewMessage {
+                        role: "ai".to_string(),
+                        content: text,
+                        thinking,
+                        tool_calls: Vec::new(),
+                    });
+                }
+            }
+            Some("reasoning") => {
+                let block = PreviewThinking {
+                    id: e
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("reasoning")
+                        .to_string(),
+                    content: e
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                };
+                match &mut cur_ai {
+                    Some(ai) => ai.thinking.push(block),
+                    None => pending_thinking.push(block),
+                }
+            }
+            Some("effect") => {
+                if cur_ai.is_none() {
+                    let thinking = std::mem::take(&mut pending_thinking);
+                    cur_ai = Some(PreviewMessage {
+                        role: "ai".to_string(),
+                        content: String::new(),
+                        thinking,
+                        tool_calls: Vec::new(),
+                    });
+                }
+                let det = e.get("detail");
+                let display = det.and_then(|d| d.get("display"));
+                let state = e.get("state");
+                let decision = state
+                    .and_then(|s| s.get("decision"))
+                    .and_then(|d| d.as_str());
+                let success = display
+                    .and_then(|d| d.get("success"))
+                    .and_then(|s| s.as_bool())
+                    != Some(false)
+                    && matches!(decision, None | Some("execute"));
+                let title = display
+                    .and_then(|d| d.get("summary"))
+                    .and_then(|s| s.as_str())
+                    .or_else(|| {
+                        det.and_then(|d| d.get("toolName"))
+                            .and_then(|s| s.as_str())
+                    })
+                    .unwrap_or("tool");
+                if let Some(ai) = &mut cur_ai {
+                    ai.tool_calls.push(PreviewToolCall {
+                        title: title.to_string(),
+                        status: if success { "done" } else { "error" }.to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(msg) = cur_ai.take() {
+        messages.push(msg);
+    }
+    messages
+}
+
+/// Session preview for the subagent "Show work" card (Nexus
+/// `loadSessionPreview`): the child session transcript as UI-friendly
+/// messages. `None` when the session (or its chunks) cannot be found.
+pub fn load_session_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
+    let dir = find_preview_dir(session_id)?;
+    let entries = read_preview_entries(&dir)?;
+    Some(build_preview_messages(&entries))
+}
+
+/// Last config actually used by a session (Nexus `loadSessionLastConfig`):
+/// the newest generation of `unified/<id>/generations/*/runtime-state.json`
+/// carrying `session_metadata.active_model` wins; `agent_name` is the
+/// mode, `reasoning_effort` the thinking level.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionLastConfig {
+    pub model: Option<String>,
+    pub mode: Option<String>,
+    pub thinking: Option<String>,
+}
+
+pub fn load_session_last_config(session_id: &str) -> Option<SessionLastConfig> {
+    let stripped = session_id.strip_prefix("child-").unwrap_or(session_id);
+    let generations_dir = sessions_log_dir()
+        .join("unified")
+        .join(stripped)
+        .join("generations");
+    let mut gens: Vec<String> = std::fs::read_dir(&generations_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    gens.sort();
+    gens.reverse();
+    for gen in gens {
+        let raw = std::fs::read_to_string(generations_dir.join(&gen).join("runtime-state.json"))
+            .ok()?;
+        let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(meta) = state.get("session_metadata") else {
+            continue;
+        };
+        let model = meta
+            .get("active_model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let Some(model) = model else {
+            continue;
+        };
+        return Some(SessionLastConfig {
+            model: Some(model),
+            mode: meta
+                .get("agent_name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            thinking: meta
+                .get("reasoning_effort")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +803,44 @@ mod tests {
         assert_eq!(totals.cost, 0.42);
         assert_eq!(totals.prompt_tokens, 1000.5);
         assert_eq!(totals.tool_calls_failed, 1.0);
+    }
+
+    #[test]
+    fn preview_messages_from_raw_entries() {
+        let entries: Vec<serde_json::Value> = serde_json::json!([
+            { "type": "message", "role": "user", "content": [
+                { "type": "text", "text": "fix the bug" }
+            ] },
+            { "type": "reasoning", "id": "r1", "text": "thinking about it" },
+            { "type": "message", "role": "assistant", "content": [
+                { "type": "text", "text": "on it" }
+            ] },
+            { "type": "reasoning", "id": "r2", "text": "more thought" },
+            { "type": "effect", "detail": { "toolName": "bash", "display": {
+                "summary": "bash: ls", "success": true
+            } }, "state": { "decision": "execute" } },
+            { "type": "effect", "detail": { "toolName": "edit", "display": {
+                "summary": "edit: x.rs"
+            } }, "state": { "decision": "reject" } },
+            { "type": "message", "role": "assistant", "content": [
+                { "type": "text", "text": "done" }
+            ] }
+        ])
+        .as_array()
+        .unwrap()
+        .clone();
+        let msgs = build_preview_messages(&entries);
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].content, "fix the bug");
+        assert_eq!(msgs[1].role, "ai");
+        assert_eq!(msgs[1].content, "on it");
+        assert_eq!(msgs[1].thinking.len(), 2);
+        assert_eq!(msgs[1].thinking[1].content, "more thought");
+        assert_eq!(msgs[1].tool_calls.len(), 2);
+        assert_eq!(msgs[1].tool_calls[0].status, "done");
+        assert_eq!(msgs[1].tool_calls[1].status, "error");
+        assert_eq!(msgs[2].content, "done");
+        assert!(msgs[2].thinking.is_empty());
     }
 }

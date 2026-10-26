@@ -8,6 +8,7 @@ description = "VibeDeck headless engine - session state machine, event bus, auth
 [dependencies]
 vibedeck-core = { workspace = true }
 vibedeck-acp = { workspace = true }
+vibedeck-vibe = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }

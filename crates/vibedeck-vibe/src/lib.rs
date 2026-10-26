@@ -11,7 +11,10 @@ pub mod stats;
 
 pub use config::{estimate_cost, model_prices, McpServer, ModelConfig, ModelPrice, Provider, VibeConfigFile};
 pub use files::{AgentFile, PromptFile, SkillFile};
-pub use stats::{AggregateStats, VibeMessage, VibeSession, VibeSessionStats};
+pub use stats::{
+    load_session_last_config, load_session_preview, AggregateStats, SessionLastConfig, VibeMessage,
+    VibeSession, VibeSessionStats,
+};
 
 use std::path::PathBuf;
 
