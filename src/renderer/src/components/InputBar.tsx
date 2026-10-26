@@ -72,12 +72,20 @@ function ConfigChip({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
+  // v0.13.3: builtin modes/thinking localize; custom agents fall back to the
+  // option name (enriched with display_name upstream)
+  const choiceLabel = (o: ConfigOptionChoice): string => {
+    if (option?.id === 'mode') {
+      const t = translateModeName(o.value, lang ?? 'en')
+      return t !== o.value ? t : (o.name || o.value)
+    }
+    if (option?.id === 'thinking') return translateThinkingLevel(o.value, lang ?? 'en')
+    return o.name
+  }
   const displayName = (() => {
     const found = option?.options.find((o) => o.value === currentValue)
     if (!found) return currentValue ?? '—'
-    if (option?.id === 'mode') return translateModeName(found.value, lang ?? 'en')
-    if (option?.id === 'thinking') return translateThinkingLevel(found.value, lang ?? 'en')
-    return found.name
+    return choiceLabel(found)
   })()
 
   // Translated descriptions for mode/thinking; other options keep the
@@ -114,13 +122,7 @@ function ConfigChip({
             >
               <span className="ic-chip-item-check">{o.value === currentValue ? '✓' : ''}</span>
               <span className="ic-chip-item-body">
-                <span className="ic-chip-item-name">
-                  {option.id === 'mode'
-                    ? translateModeName(o.value, lang ?? 'en')
-                    : option.id === 'thinking'
-                      ? translateThinkingLevel(o.value, lang ?? 'en')
-                      : o.name}
-                </span>
+                <span className="ic-chip-item-name">{choiceLabel(o)}</span>
                 {describe(o.value, o.description) && (
                   <span className="ic-chip-item-desc">{describe(o.value, o.description)}</span>
                 )}
@@ -267,6 +269,32 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       cancelled = true
     }
   }, [projectCwd, projectRemoteId])
+
+  // v0.13.3: display names + descriptions for agents exposed globally (the CLI
+  // lists custom agents in configOptions under their file name only)
+  const [globalAgents, setGlobalAgents] = useState<Array<{ name: string; displayName: string; description?: string }>>([])
+  useEffect(() => {
+    let cancelled = false
+    const rid = useStore.getState().currentSession()?.remoteId ?? null
+    window.api.vibe
+      .getAgents(rid ? 'remote' : 'global', '', rid ?? undefined)
+      .then((list) => {
+        if (cancelled) return
+        const agents = (list as Array<Record<string, unknown>>)
+          .filter((a) => a && a.agent_type === 'agent')
+          .map((a) => ({
+            name: String(a.name ?? ''),
+            displayName: String(a.display_name ?? a.name ?? ''),
+            description: typeof a.description === 'string' ? a.description : undefined,
+          }))
+          .filter((a) => a.name.length > 0)
+        setGlobalAgents(agents)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [projectRemoteId])
 
   // Load skills and prompts when slash picker first opens
   useEffect(() => {
@@ -963,8 +991,25 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         ? tr.projectAgentBadge + ' — ' + a.description
         : tr.projectAgentBadge,
     }))
+  // v0.13.3: the CLI reports custom agents under their file name; enrich the
+  // mode options with the agents' display names and descriptions
+  const agentInfo = new Map<string, { displayName: string; description?: string }>()
+  for (const a of [...globalAgents, ...projectAgents]) {
+    if (!agentInfo.has(a.name)) agentInfo.set(a.name, a)
+  }
   const modeOptionMerged: ConfigOption | undefined = modeOption
-    ? { ...modeOption, options: [...modeOption.options, ...extraModeChoices] }
+    ? {
+        ...modeOption,
+        options: [
+          ...modeOption.options.map((o) => {
+            const info = agentInfo.get(o.value)
+            const name = info && info.displayName && info.displayName !== o.value ? info.displayName : o.name
+            const description = o.description || info?.description
+            return description ? { ...o, name, description } : { ...o, name }
+          }),
+          ...extraModeChoices,
+        ],
+      }
     : undefined
   const thinkingOption = configOptions.find((o) => o.id === 'thinking')
   const pickersReady = configOptions.length > 0

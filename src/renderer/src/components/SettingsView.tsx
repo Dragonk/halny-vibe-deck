@@ -244,6 +244,7 @@ export default function SettingsView(): React.JSX.Element {
   const [rawReadyFile, setRawReadyFile] = useState<string | null>(null)
   const [vibeCfgDir, setVibeCfgDir] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [vibeDataVersion, setVibeDataVersion] = useState(0)
   const [selectedAgentIdx, setSelectedAgentIdx] = useState<number | null>(null)
   const [selectedMcpIdx, setSelectedMcpIdx] = useState<number | null>(null)
   const [selectedPromptIdx, setSelectedPromptIdx] = useState<number | null>(null)
@@ -333,6 +334,7 @@ export default function SettingsView(): React.JSX.Element {
     } catch (err) {
       console.error('loadVibeData failed:', err)
     }
+    setVibeDataVersion((v) => v + 1)
     setLoaded(true)
   }, [scope, projectCwd, scopeAgent])
 
@@ -1399,7 +1401,7 @@ export default function SettingsView(): React.JSX.Element {
               ) : vibeAgents.length === 0 ? (
                 <p className="empty-text">{tr.noAgentsConfigured}</p>
               ) : (
-                <div className="master-detail">
+                <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                   <div className="master-list">
                     {vibeAgents.map((agent, idx) => (
                       <div
@@ -1407,7 +1409,7 @@ export default function SettingsView(): React.JSX.Element {
                         className={`master-item ${selectedAgentIdx === idx ? 'selected' : ''}`}
                         onClick={() => setSelectedAgentIdx(idx)}
                       >
-                        <span className="master-item-name">{agent.name}</span>
+                        <span className="master-item-name">{agent.display_name || agent.name}</span>
                         <span className="master-item-type">{agent.agent_type || 'agent'}</span>
                       </div>
                     ))}
@@ -1652,7 +1654,7 @@ export default function SettingsView(): React.JSX.Element {
             ) : (vibeConfig.mcp_servers || []).length === 0 ? (
               <p className="empty-text">{tr.noMcpConfigured}</p>
             ) : (
-              <div className="master-detail">
+              <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                 <div className="master-list">
                   {vibeConfig.mcp_servers?.map((server, idx) => (
                     <div
@@ -2044,7 +2046,7 @@ export default function SettingsView(): React.JSX.Element {
             ) : vibePrompts.length === 0 ? (
               <p className="empty-text">{tr.noPromptsConfigured}</p>
             ) : (
-              <div className="master-detail">
+              <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                 <div className="master-list">
                   {vibePrompts.map((prompt, idx) => (
                     <div
@@ -2140,7 +2142,7 @@ export default function SettingsView(): React.JSX.Element {
             ) : vibeSkills.length === 0 ? (
               <p className="empty-text">{tr.noVibeSkillsConfigured}</p>
             ) : (
-              <div className="master-detail">
+              <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                 <div className="master-list">
                   {vibeSkills.map((skill, sIdx) => (
                     <div
@@ -2248,7 +2250,7 @@ export default function SettingsView(): React.JSX.Element {
             ) : (vibeConfig.providers || []).length === 0 ? (
               <p className="empty-text">{tr.noProvidersConfigured}</p>
             ) : (
-              <div className="master-detail">
+              <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                 <div className="master-list">
                   {vibeConfig.providers?.map((provider, idx) => (
                     <div
@@ -2403,7 +2405,7 @@ export default function SettingsView(): React.JSX.Element {
             ) : (vibeConfig.models || []).length === 0 ? (
               <p className="empty-text">{tr.noModelsConfigured}</p>
             ) : (
-              <div className="master-detail">
+              <div className="master-detail" key={'md-' + scope + '-' + projectCwd + '-' + (vibeRemoteId ?? '') + '-v' + vibeDataVersion}>
                 <div className="master-list">
                   {vibeConfig.models?.map((model, idx) => (
                     <div
@@ -2411,7 +2413,7 @@ export default function SettingsView(): React.JSX.Element {
                       className={`master-item ${selectedModelIdx === idx ? 'selected' : ''}`}
                       onClick={() => setSelectedModelIdx(idx)}
                     >
-                      <span className="master-item-name">{model.name}</span>
+                      <span className="master-item-name">{model.display_name || model.name}</span>
                       <span className="master-item-type">{model.provider}</span>
                     </div>
                   ))}

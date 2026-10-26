@@ -35,6 +35,7 @@ interface HistAgentCfg {
   name: string;
   agent_type?: string;
   display_name?: string;
+  description?: string;
 }
 
 /** ACP history message (from SessionHistory event) */
@@ -686,7 +687,7 @@ export const useStore = create<AppStore>((set, get) => ({
       const agentNames = new Set<string>();
       const agentChoices = agents
         .filter((a) => (agentNames.has(a.name) ? false : (agentNames.add(a.name), true)))
-        .map((a) => ({ value: a.name, name: a.display_name || a.name }));
+        .map((a) => ({ value: a.name, name: a.display_name || a.name, description: a.description || undefined }));
       const options: ConfigOption[] = [
         {
           id: "mode",
