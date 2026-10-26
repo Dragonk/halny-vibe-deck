@@ -8139,6 +8139,7 @@ dependencies = [
  "calamine",
  "dioxus",
  "dioxus-fullstack",
+ "flate2",
  "image",
  "js-sys",
  "pdf-extract",

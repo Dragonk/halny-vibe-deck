@@ -18,6 +18,8 @@ pub mod fsgit;
 pub mod preview;
 #[cfg(feature = "server")]
 pub mod serve;
+#[cfg(feature = "server")]
+pub mod pwa;
 pub mod highlight;
 pub mod vibestats;
 pub mod vibeconfig;
@@ -184,12 +186,17 @@ fn main() {
             // snapshot request lands (Prime like Nexus does).
             engine.prime();
             let router = dioxus::server::router(app::App);
+            // PWA static routes (sw.js / manifest / icon) served from the
+            // binary itself, and the v0.13.4 gzip layer over both listeners.
+            let router = pwa::install_pwa_routes(router);
             // Local listener: localhost-only, no login.
             let local = tokio::net::TcpListener::bind(("127.0.0.1", port))
                 .await
                 .unwrap_or_else(|e| panic!("vibedeck: cannot bind 127.0.0.1:{port}: {e}"));
             println!("vibedeck: local UI at http://127.0.0.1:{port}");
-            let local_router = router.clone();
+            let local_router = router
+                .clone()
+                .layer(axum::middleware::from_fn(pwa::gzip_mw));
             tokio::spawn(async move {
                 if let Err(e) = axum::serve(local, local_router).await {
                     eprintln!("vibedeck: local server error: {e}");

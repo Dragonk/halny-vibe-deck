@@ -286,7 +286,14 @@ fn json_status(status: StatusCode, body: &'static str) -> Response {
 /// marked `x-vd-origin: remote` so local-only APIs can refuse them.
 async fn remote_auth(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
-    if path == "/login" || path.starts_with("/api/auth/") {
+    // PWA statics are reachable without a session (service-worker updates
+    // must not depend on cookie state; Nexus serves them pre-auth too).
+    if path == "/login"
+        || path.starts_with("/api/auth/")
+        || path == "/sw.js"
+        || path == "/manifest.webmanifest"
+        || path == "/icon-256.png"
+    {
         return next.run(req).await;
     }
     let token = cookie_token(req.headers());
@@ -551,6 +558,7 @@ pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
         .route("/api/auth/logout", post(logout_post));
     let remote = app_router
         .layer(middleware::from_fn(remote_auth))
+        .layer(middleware::from_fn(crate::pwa::gzip_mw))
         .merge(login);
 
     eprintln!(
