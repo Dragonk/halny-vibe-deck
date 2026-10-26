@@ -232,8 +232,19 @@ function createWindow(): BrowserWindow {
 
 // v0.6.0: CLI flags (--serve, --headless, --port, --user, --password, --cert, --key)
 const argv = process.argv;
-const hasArg = (name: string): boolean => argv.includes("--" + name);
+// v0.13.12: support both "--name value" and "--name=value". The "=" form is
+// required when the Electron binary would otherwise swallow a positional
+// value as its app-path argument (e.g. packaged AppImage, electron cli).
+const hasArg = (name: string): boolean =>
+  argv.includes("--" + name) || argv.some((a) => a.startsWith("--" + name + "="));
 const argVal = (name: string): string | null => {
+  const prefix = "--" + name + "=";
+  for (const a of argv) {
+    if (a.startsWith(prefix)) {
+      const v = a.slice(prefix.length);
+      return v.length > 0 ? v : null;
+    }
+  }
   const i = argv.indexOf("--" + name);
   if (i < 0 || i + 1 >= argv.length) return null;
   const v = argv[i + 1];
