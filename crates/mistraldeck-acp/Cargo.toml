@@ -1,0 +1,13 @@
+[package]
+name = "mistraldeck-acp"
+description = "ACP client for the vibe-acp CLI (JSON-RPC 2.0 over stdio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+mistraldeck-core = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

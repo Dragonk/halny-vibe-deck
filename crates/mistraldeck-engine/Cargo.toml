@@ -1,0 +1,17 @@
+[package]
+name = "mistraldeck-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mistral Deck headless engine - session state machine, event bus, auth"
+
+[dependencies]
+mistraldeck-core = { workspace = true }
+mistraldeck-acp = { workspace = true }
+mistraldeck-vibe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+tokio = { version = "1", features = ["sync"] }
+sha2 = "0.10"
+hex = "0.4"

@@ -91,8 +91,8 @@ jobs:
       - name: Test (workspace)
         run: cargo test --workspace --locked
 
-      - name: Test (vibedeck-web, server feature)
-        run: cargo test -p vibedeck-web --features server --locked
+      - name: Test (mistraldeck, server feature)
+        run: cargo test -p mistraldeck --features server --locked
 
   bundles:
     name: Bundles (linux x64 + windows x64)
@@ -101,8 +101,8 @@ jobs:
     env:
       CARGO_TARGET_DIR: /home/runner/vd-target
       # Embed the release tag in the binary so the in-app updater can tell
-      # releases apart (option_env!("VIBEDECK_BUILD_VERSION") in the engine).
-      VIBEDECK_BUILD_VERSION: ${{ needs.tag.outputs.tag }}
+      # releases apart (option_env!("MISTRALDECK_BUILD_VERSION") in the engine).
+      MISTRALDECK_BUILD_VERSION: ${{ needs.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -126,19 +126,27 @@ jobs:
         run: cargo install dioxus-cli --version 0.7.10 --locked
 
       - name: Build web bundle (wasm + public/)
-        working-directory: crates/vibedeck-web
+        working-directory: crates/mistraldeck
         run: dx build --fullstack --web --release
 
       - name: Build linux server binary (gui + headless)
         run: |
-          cargo build --profile server-release -p vibedeck-web --features server,gui --locked
-          strip --strip-all "$CARGO_TARGET_DIR/server-release/vibedeck-web"
+          cargo build --profile server-release -p mistraldeck --features server,gui --locked
+          strip --strip-all "$CARGO_TARGET_DIR/server-release/mistraldeck"
 
       - name: Build windows server binary (x86_64-pc-windows-gnu)
         run: |
-          cargo build --profile server-release -p vibedeck-web --features server,gui --target x86_64-pc-windows-gnu --locked
-          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe"
-          x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
+          cargo build --profile server-release -p mistraldeck --features server,gui --target x86_64-pc-windows-gnu --locked
+          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe"
+          x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
+
+
+      - name: Build appserver binaries (headless)
+        run: |
+          cargo build --profile server-release -p mistraldeck-appserver --locked
+          strip --strip-all "$CARGO_TARGET_DIR/server-release/mistraldeck-appserver"
+          cargo build --profile server-release -p mistraldeck-appserver --target x86_64-pc-windows-gnu --locked
+          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck-appserver.exe"
 
       - name: Fetch pdfium binaries
         run: |
@@ -148,30 +156,43 @@ jobs:
 
       - name: Assemble linux bundle
         run: |
-          mkdir -p dist/vibedeck-linux
-          cp "$CARGO_TARGET_DIR/server-release/vibedeck-web" dist/vibedeck-linux/vibedeck
-          cp pdfium/lib/libpdfium.so dist/vibedeck-linux/
-          cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-linux/public
-          tar -czf "vibedeck-${VERSION}-linux-x64.tar.gz" -C dist/vibedeck-linux .
+          mkdir -p dist/mistraldeck-linux
+          cp "$CARGO_TARGET_DIR/server-release/mistraldeck" dist/mistraldeck-linux/mistraldeck
+          cp pdfium/lib/libpdfium.so dist/mistraldeck-linux/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-linux/public
+          tar -czf "mistraldeck-${VERSION}-linux-x64.tar.gz" -C dist/mistraldeck-linux .
 
       - name: Assemble windows bundle
         run: |
-          mkdir -p dist/vibedeck-win
-          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/vibedeck-web.exe" dist/vibedeck-win/vibedeck.exe
+          mkdir -p dist/mistraldeck-win
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe" dist/mistraldeck-win/MistralDeck.exe
           WEBVIEW2_LOADER=$(find "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/build" -path '*webview2-com-sys*/out/x64/WebView2Loader.dll' -print -quit)
           test -n "$WEBVIEW2_LOADER" || { echo 'WebView2Loader.dll not found'; exit 1; }
-          cp "$WEBVIEW2_LOADER" dist/vibedeck-win/
-          cp pdfium/bin/pdfium.dll dist/vibedeck-win/
-          cp -r "$CARGO_TARGET_DIR/dx/vibedeck-web/release/web/public" dist/vibedeck-win/public
-          cd dist/vibedeck-win && zip -q -r "../../vibedeck-${VERSION}-windows-x64.zip" .
+          cp "$WEBVIEW2_LOADER" dist/mistraldeck-win/
+          cp pdfium/bin/pdfium.dll dist/mistraldeck-win/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-win/public
+          cd dist/mistraldeck-win && zip -q -r "../../mistraldeck-${VERSION}-windows-x64.zip" .
+
+      - name: Assemble appserver bundles
+        run: |
+          mkdir -p dist/mistraldeck-appserver-linux
+          cp "$CARGO_TARGET_DIR/server-release/mistraldeck-appserver" dist/mistraldeck-appserver-linux/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-appserver-linux/public
+          tar -czf "mistraldeck-appserver-${VERSION}-linux-x64.tar.gz" -C dist/mistraldeck-appserver-linux .
+          mkdir -p dist/mistraldeck-appserver-win
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck-appserver.exe" dist/mistraldeck-appserver-win/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-appserver-win/public
+          cd dist/mistraldeck-appserver-win && zip -q -r "../../mistraldeck-appserver-${VERSION}-windows-x64.zip" .
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
           name: bundles
           path: |
-            vibedeck-*-linux-x64.tar.gz
-            vibedeck-*-windows-x64.zip
+            mistraldeck-*-linux-x64.tar.gz
+            mistraldeck-*-windows-x64.zip
+            mistraldeck-appserver-*-linux-x64.tar.gz
+            mistraldeck-appserver-*-windows-x64.zip
           if-no-files-found: error
 
   release:
@@ -189,20 +210,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.tag.outputs.tag }}
-          name: VibeDeck ${{ needs.tag.outputs.tag }}
+          name: Mistral Deck ${{ needs.tag.outputs.tag }}
           prerelease: true
           files: dist/*
           body: |
-            **VibeDeck — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
+            **Mistral Deck — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
 
-            > ⚠️ VibeDeck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
+            > ⚠️ Mistral Deck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
 
             ## Binaries
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.8.3-linux-x64.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.8.3-windows-x64.zip` |
+            | Linux (x86_64, glibc) | `mistraldeck-0.8.3-linux-x64.tar.gz` |
+            | Windows (x86_64) | `mistraldeck-0.8.3-windows-x64.zip` |
+            | Linux headless server | `mistraldeck-appserver-0.8.3-linux-x64.tar.gz` |
+            | Windows headless server | `mistraldeck-appserver-0.8.3-windows-x64.zip` |
 
             ## What's new (M9.4 — Nexus 0.7.1 parity, v0.8.3-dioxus.6)
 
@@ -218,16 +241,16 @@ jobs:
 
             - Real file previews: PDF (rasterized pages via bundled pdfium), DOCX/ODT (styled document flow), PPTX/ODP (slide cards), XLSX/XLS/ODS (all sheets as clickable tabs), images, Markdown + Mermaid, code with syntax highlighting.
             - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
-            - First Windows build (`vibedeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
+            - First Windows build (`MistralDeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
             - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
-            - Bundled `WebView2Loader.dll` next to `vibedeck.exe` — required by the Windows webview (fixes the "WebView2Loader.dll not found" system error).
+            - Bundled `WebView2Loader.dll` next to `MistralDeck.exe` — required by the Windows webview (fixes the "WebView2Loader.dll not found" system error).
             - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
 
             ## M9 fixes (v0.8.3-dioxus.5)
 
             - Fixed: the Windows GUI window now actually opens — the tao event loop is created with `any_thread` (previously the gui thread panicked silently and double-clicking showed no window at all).
-            - `vibedeck.exe` now embeds the mistral-vibe-nexus application icon (Explorer, taskbar).
-            - Closing the desktop window quits the whole app; on Windows panics are written to `vibedeck.log` next to the exe for diagnosis.
+            - `MistralDeck.exe` now embeds the mistral-vibe-nexus application icon (Explorer, taskbar).
+            - Closing the desktop window quits the whole app; on Windows panics are written to `mistraldeck.log` next to the exe for diagnosis.
 
             ## Requirements
 
@@ -237,7 +260,8 @@ jobs:
 
             ## Usage
 
-            - `./vibedeck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
-            - `./vibedeck --mode gui` — force desktop window.
-            - `./vibedeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
-            - `./vibedeck --port 1234` / `--set-login user pass` — configure the remote server.
+            - `./mistraldeck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
+            - `./mistraldeck --mode gui` — force desktop window.
+            - `./mistraldeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
+- `./mistraldeck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
+            - `./mistraldeck --port 1234` / `--set-login user pass` — configure the remote server.

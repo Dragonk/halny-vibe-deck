@@ -41,7 +41,7 @@ jobs:
 
       - name: Package (linux)
         if: matrix.os == 'ubuntu-22.04'
-        run: tar -czf vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz -C target/release vibedeck libpdfium.so
+        run: tar -czf mistraldeck-app-${{ env.VERSION }}-x86_64-linux.tar.gz -C target/release mistraldeck-app libpdfium.so
 
       - name: Fetch pdfium (windows)
         if: matrix.os == 'windows-latest'
@@ -55,15 +55,15 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          Compress-Archive -Path target\release\vibedeck.exe,target\release\pdfium.dll -DestinationPath vibedeck-${{ env.VERSION }}-x86_64-windows.zip
+          Compress-Archive -Path target\release\mistraldeck-app.exe,target\release\pdfium.dll -DestinationPath mistraldeck-app-${{ env.VERSION }}-x86_64-windows.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os == 'ubuntu-22.04' && 'linux-x86_64' || 'windows-x86_64' }}
           path: |
-            vibedeck-${{ env.VERSION }}-x86_64-linux.tar.gz
-            vibedeck-${{ env.VERSION }}-x86_64-windows.zip
+            mistraldeck-app-${{ env.VERSION }}-x86_64-linux.tar.gz
+            mistraldeck-app-${{ env.VERSION }}-x86_64-windows.zip
           if-no-files-found: ignore
 
   release:
@@ -81,20 +81,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
-          name: VibeDeck v${{ env.VERSION }}
+          name: Mistral Deck v${{ env.VERSION }}
           prerelease: true
           files: dist/*
           body: |
-            **VibeDeck — fast, native desktop GUI (Rust · egui · wgpu) for the Mistral Vibe CLI.**
+            **Mistral Deck (legacy egui build) — fast, native desktop GUI (Rust · egui · wgpu) for the Mistral Vibe CLI.**
 
-            > ⚠️ VibeDeck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
+            > ⚠️ Mistral Deck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
 
             ## Binaries
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `vibedeck-0.8.3-x86_64-linux.tar.gz` |
-            | Windows (x86_64) | `vibedeck-0.8.3-x86_64-windows.zip` |
+            | Linux (x86_64, glibc) | `mistraldeck-app-0.8.3-x86_64-linux.tar.gz` |
+            | Windows (x86_64) | `mistraldeck-app-0.8.3-x86_64-windows.zip` |
 
             ## Requirements
 
@@ -109,15 +109,15 @@ jobs:
               pip install mistral-vibe
               ```
 
-              VibeDeck can also install/upgrade the CLI for you from the Setup screen.
+              Mistral Deck can also install/upgrade the CLI for you from the Setup screen.
 
             - Linux: X11 or Wayland session; on Wayland set `WINIT_UNIX_BACKEND=x11` if needed.
 
             ## Run
 
             ```sh
-            tar -xzf vibedeck-0.8.3-x86_64-linux.tar.gz
-            ./vibedeck
+            tar -xzf mistraldeck-app-0.8.3-x86_64-linux.tar.gz
+            ./mistraldeck-app
             ```
 
             The archive bundles the [pdfium](https://github.com/bblanchon/pdfium-binaries)
@@ -271,7 +271,7 @@ jobs:
             - 🌐 **Language is a dropdown** — System / English / Polski
               (System follows your OS locale).
             - 🌓 **Theme follows the OS** — a new *System* option beside
-              Dark/Light; VibeDeck switches automatically when your OS
+              Dark/Light; Mistral Deck switches automatically when your OS
               switches.
             - 🤖 **Active model, default agent & CLI theme as dropdowns** —
               model aliases come from your config, the agent list includes

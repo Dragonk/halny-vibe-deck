@@ -30,8 +30,11 @@ jobs:
       - name: Test (workspace)
         run: cargo test --workspace --locked
 
-      - name: Test (vibedeck-web, server feature)
-        run: cargo test -p vibedeck-web --features server --locked
+      - name: Test (mistraldeck, server feature)
+        run: cargo test -p mistraldeck --features server --locked
+
+      - name: Check appserver (headless)
+        run: cargo check -p mistraldeck-appserver --locked
 
   check-windows:
     name: Check windows-gnu (server,gui + icon build script)
@@ -52,4 +55,7 @@ jobs:
           sudo apt-get install -y mingw-w64
 
       - name: cargo check windows-gnu
-        run: cargo check -p vibedeck-web --features server,gui --target x86_64-pc-windows-gnu --locked
+        run: cargo check -p mistraldeck --features server,gui --target x86_64-pc-windows-gnu --locked
+
+      - name: cargo check appserver windows-gnu
+        run: cargo check -p mistraldeck-appserver --target x86_64-pc-windows-gnu --locked

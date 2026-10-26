@@ -4719,6 +4719,128 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistraldeck"
+version = "0.8.3"
+dependencies = [
+ "axum",
+ "calamine",
+ "dioxus",
+ "dioxus-fullstack",
+ "flate2",
+ "image",
+ "js-sys",
+ "mistraldeck-core",
+ "mistraldeck-engine",
+ "mistraldeck-vibe",
+ "pdf-extract",
+ "pdfium-render",
+ "quick-xml 0.42.0",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tao",
+ "tokio",
+ "tokio-rustls",
+ "toml 0.8.2",
+ "wasm-bindgen",
+ "web-sys",
+ "wry",
+ "zip",
+]
+
+[[package]]
+name = "mistraldeck-acp"
+version = "0.8.3"
+dependencies = [
+ "anyhow",
+ "log",
+ "mistraldeck-core",
+ "serde_json",
+]
+
+[[package]]
+name = "mistraldeck-app"
+version = "0.8.3"
+dependencies = [
+ "anyhow",
+ "calamine",
+ "dirs 5.0.1",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "image",
+ "mistraldeck-acp",
+ "mistraldeck-core",
+ "mistraldeck-setup",
+ "mistraldeck-vibe",
+ "pdf-extract",
+ "pdfium-render",
+ "png 0.17.16",
+ "quick-xml 0.42.0",
+ "raw-window-handle 0.6.2",
+ "serde",
+ "serde_json",
+ "sys-locale",
+ "toml 0.8.2",
+ "windows-sys 0.59.0",
+ "winresource",
+ "zip",
+]
+
+[[package]]
+name = "mistraldeck-appserver"
+version = "0.8.3"
+dependencies = [
+ "mistraldeck",
+]
+
+[[package]]
+name = "mistraldeck-core"
+version = "0.8.3"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "mistraldeck-engine"
+version = "0.8.3"
+dependencies = [
+ "dirs 5.0.1",
+ "hex",
+ "mistraldeck-acp",
+ "mistraldeck-core",
+ "mistraldeck-vibe",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "mistraldeck-setup"
+version = "0.8.3"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "serde",
+]
+
+[[package]]
+name = "mistraldeck-vibe"
+version = "0.8.3"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+ "toml 0.8.2",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8047,121 +8169,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vibedeck-acp"
-version = "0.8.3"
-dependencies = [
- "anyhow",
- "log",
- "serde_json",
- "vibedeck-core",
-]
-
-[[package]]
-name = "vibedeck-app"
-version = "0.8.3"
-dependencies = [
- "anyhow",
- "calamine",
- "dirs 5.0.1",
- "eframe",
- "egui",
- "egui_extras",
- "image",
- "pdf-extract",
- "pdfium-render",
- "png 0.17.16",
- "quick-xml 0.42.0",
- "raw-window-handle 0.6.2",
- "serde",
- "serde_json",
- "sys-locale",
- "toml 0.8.2",
- "vibedeck-acp",
- "vibedeck-core",
- "vibedeck-setup",
- "vibedeck-vibe",
- "windows-sys 0.59.0",
- "winresource",
- "zip",
-]
-
-[[package]]
-name = "vibedeck-core"
-version = "0.8.3"
-dependencies = [
- "js-sys",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "vibedeck-engine"
-version = "0.8.3"
-dependencies = [
- "dirs 5.0.1",
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "vibedeck-acp",
- "vibedeck-core",
- "vibedeck-vibe",
-]
-
-[[package]]
-name = "vibedeck-setup"
-version = "0.8.3"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "serde",
-]
-
-[[package]]
-name = "vibedeck-vibe"
-version = "0.8.3"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "serde",
- "serde_json",
- "toml 0.8.2",
-]
-
-[[package]]
-name = "vibedeck-web"
-version = "0.8.3"
-dependencies = [
- "axum",
- "calamine",
- "dioxus",
- "dioxus-fullstack",
- "flate2",
- "image",
- "js-sys",
- "pdf-extract",
- "pdfium-render",
- "quick-xml 0.42.0",
- "rcgen",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "tao",
- "tokio",
- "tokio-rustls",
- "toml 0.8.2",
- "vibedeck-core",
- "vibedeck-engine",
- "vibedeck-vibe",
- "wasm-bindgen",
- "web-sys",
- "wry",
- "zip",
-]
 
 [[package]]
 name = "walkdir"

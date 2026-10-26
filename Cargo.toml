@@ -1,13 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/vibedeck-core",
-    "crates/vibedeck-acp",
-    "crates/vibedeck-vibe",
-    "crates/vibedeck-setup",
-    "crates/vibedeck-app",
-    "crates/vibedeck-engine",
-    "crates/vibedeck-web",
+    "crates/mistraldeck-core",
+    "crates/mistraldeck-acp",
+    "crates/mistraldeck-vibe",
+    "crates/mistraldeck-setup",
+    "crates/mistraldeck-app",
+    "crates/mistraldeck-engine",
+    "crates/mistraldeck",
+    "crates/mistraldeck-appserver",
 ]
 
 [workspace.package]
@@ -15,15 +16,15 @@ version = "0.8.3"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-repository = "https://github.com/Dragonk/vibedeck"
-description = "VibeDeck — fast, native desktop GUI (nakładka) for the Mistral Vibe CLI"
+repository = "https://github.com/Dragonk/mistraldeck"
+description = "Mistral Deck — an unofficial desktop GUI for the Mistral Vibe CLI"
 
 [workspace.dependencies]
-vibedeck-core = { path = "crates/vibedeck-core" }
-vibedeck-acp = { path = "crates/vibedeck-acp" }
-vibedeck-vibe = { path = "crates/vibedeck-vibe" }
-vibedeck-setup = { path = "crates/vibedeck-setup" }
-vibedeck-engine = { path = "crates/vibedeck-engine" }
+mistraldeck-core = { path = "crates/mistraldeck-core" }
+mistraldeck-acp = { path = "crates/mistraldeck-acp" }
+mistraldeck-vibe = { path = "crates/mistraldeck-vibe" }
+mistraldeck-setup = { path = "crates/mistraldeck-setup" }
+mistraldeck-engine = { path = "crates/mistraldeck-engine" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

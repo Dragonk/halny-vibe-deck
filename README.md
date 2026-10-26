@@ -1,12 +1,12 @@
-# VibeDeck
+# Mistral Deck — an unofficial desktop GUI for Mistral Vibe CLI
 
-> **⚠️ Unofficial community project.** VibeDeck is **not** an official Mistral AI
+> **⚠️ Unofficial community project.** Mistral Deck is **not** an official Mistral AI
 > product and is **not** affiliated with, endorsed by, or supported by Mistral AI.
 > "Mistral" and "Vibe" are trademarks of their respective owners.
-> VibeDeck is an independent desktop GUI (nakładka) for the open-source
+> Mistral Deck is an independent desktop GUI (nakładka) for the open-source
 > **Mistral Vibe CLI** (`vibe-acp`).
 
-**VibeDeck — fast, native desktop GUI for the Mistral Vibe CLI.**
+**Mistral Deck — fast, native desktop GUI for the Mistral Vibe CLI.**
 
 A Rust rewrite of [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus)
 (Electron/TypeScript, Apache-2.0) with the same goal: chat with the Mistral Vibe
@@ -15,7 +15,7 @@ Built with [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs) for
 instant startup and a tiny memory footprint, in the spirit of the
 [ArtCraft](https://getartcraft.com/apps) native apps.
 
-| | mistral-vibe-nexus | VibeDeck |
+| | mistral-vibe-nexus | Mistral Deck |
 |---|---|---|
 | Runtime | Electron + Chromium | native Rust binary |
 | Renderer | React / DOM | egui / wgpu (GPU-first) |
@@ -83,7 +83,7 @@ instant startup and a tiny memory footprint, in the spirit of the
 ## Prerequisites
 
 - Rust 1.75+ (rustup recommended)
-- The Mistral Vibe CLI — VibeDeck's Setup pane can install it for you, or:
+- The Mistral Vibe CLI — Mistral Deck's Setup pane can install it for you, or:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # uv
@@ -94,7 +94,7 @@ uv tool install mistral-vibe                        # vibe + vibe-acp
 
 ```bash
 cargo run            # dev build
-cargo build --release # optimized (LTO, stripped) → target/release/vibedeck
+cargo build --release # optimized (LTO, stripped) → target/release/mistraldeck
 ```
 
 Linux: `libgtk-3-dev`/wayland/x11 system libs required by winit/wgpu
@@ -104,14 +104,14 @@ Linux: `libgtk-3-dev`/wayland/x11 system libs required by winit/wgpu
 
 ```
 crates/
-├── vibedeck-core    # shared domain types (messages, tool calls) + ACP protocol types
-├── vibedeck-acp     # JSON-RPC 2.0 client over stdio: worker thread owns the
+├── mistraldeck-core    # shared domain types (messages, tool calls) + ACP protocol types
+├── mistraldeck-acp     # JSON-RPC 2.0 client over stdio: worker thread owns the
 │                    # vibe-acp process; mpsc command/event channels to the UI
-├── vibedeck-vibe    # ~/.vibe layer: round-trip-safe config.toml, agents,
+├── mistraldeck-vibe    # ~/.vibe layer: round-trip-safe config.toml, agents,
 │                    # prompts, skills, session-log stats
-├── vibedeck-setup   # dependency detection (uv / mistral-vibe / vibe-acp)
+├── mistraldeck-setup   # dependency detection (uv / mistral-vibe / vibe-acp)
 │                    # and guided install
-└── vibedeck-app     # egui/eframe UI (wgpu renderer)
+└── mistraldeck-app     # egui/eframe UI (wgpu renderer)
 ```
 
 Mirrors the Electron main/renderer split of the original: the worker thread is
@@ -130,13 +130,13 @@ non-blocking each frame.
 
 - Original project: [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus) (Apache-2.0)
 - Window move/resize behaviour follows [storytold/photocraft](https://github.com/storytold/photocraft)'s approach to frameless egui windows.
-- Bundled [Noto Sans Symbols 2](https://fonts.google.com/noto/specimen/Noto+Sans+Symbols+2) for interface glyphs — SIL OFL 1.1, see `crates/vibedeck-app/assets/NotoSansSymbols2-OFL.txt`.
+- Bundled [Noto Sans Symbols 2](https://fonts.google.com/noto/specimen/Noto+Sans+Symbols+2) for interface glyphs — SIL OFL 1.1, see `crates/mistraldeck-app/assets/NotoSansSymbols2-OFL.txt`.
 - File previews use the open-source crates [calamine](https://crates.io/crates/calamine) (Excel), [quick-xml](https://crates.io/crates/quick-xml) (docx/pptx parsing), [zip](https://crates.io/crates/zip) (OOXML containers), [pdfium-render](https://crates.io/crates/pdfium-render) (PDF rendering) and [pdf-extract](https://crates.io/crates/pdf-extract) (text-only PDF fallback).
 - Bundled [pdfium](https://github.com/bblanchon/pdfium-binaries) binaries (Apache-2.0 / BSD) ship inside the release archives so PDF previews work out of the box; pdfium is loaded from the executable directory first.
-- VibeDeck is licensed under **Apache-2.0** — see [LICENSE](LICENSE).
+- Mistral Deck is licensed under **Apache-2.0** — see [LICENSE](LICENSE).
 
 ---
 
-*VibeDeck is an unofficial, community-made project. It is not an official
+*Mistral Deck is an unofficial, community-made project. It is not an official
 Mistral AI product and is not affiliated with, endorsed by, or supported by
 Mistral AI.*

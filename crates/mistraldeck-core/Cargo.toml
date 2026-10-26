@@ -1,0 +1,14 @@
+[package]
+name = "mistraldeck-core"
+description = "Domain types and protocol events for Mistral Deck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
