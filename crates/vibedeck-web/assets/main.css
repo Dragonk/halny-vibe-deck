@@ -4567,6 +4567,50 @@ code {
     display: block;
     margin: 0 auto;
 }
+/* Zip preview (Nexus ZipView) */
+.preview-zip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.zip-count {
+    font-size: 11px;
+    color: var(--text-dim);
+    padding-bottom: 6px;
+}
+.zip-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 3px 6px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.zip-entry:hover {
+    background: var(--panel-hover);
+    color: var(--text);
+}
+.zip-entry-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.zip-entry-dir {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+.zip-entry-size {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
+
 .preview-markdown {
     font-size: 13px;
     line-height: 1.6;

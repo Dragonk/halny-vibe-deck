@@ -816,6 +816,26 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
 }
 
 // ---------------------------------------------------------------------------
+// ZIP listing (Nexus FilePreview ZipView): entries sorted by name,
+// directory records skipped.
+pub fn zip_listing(path: &Path) -> Result<Vec<crate::fsgit::ZipEntry>, String> {
+    let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut z = zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for i in 0..z.len() {
+        let entry = z.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        out.push(crate::fsgit::ZipEntry {
+            name: entry.name().map(|n| n.to_string()).unwrap_or_default(),
+            size: entry.size(),
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
 // PDF (pdfium, bundled next to the executable)
 // ---------------------------------------------------------------------------
 
@@ -935,5 +955,28 @@ mod tests {
         let xml = "<w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body>";
         let html = docx_xml(xml);
         assert!(html.contains("<td>Name</td>") && html.contains("<td>Value</td>"), "{html}");
+    }
+
+    #[test]
+    fn zip_listing_skips_dirs_and_sorts() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("vd-zip-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.zip");
+        let f = std::fs::File::create(&path).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opt = zip::write::SimpleFileOptions::default();
+        w.add_directory("sub/", opt).unwrap();
+        w.start_file("b.txt", opt).unwrap();
+        w.write_all(b"hello world").unwrap();
+        w.start_file("sub/a.txt", opt).unwrap();
+        w.write_all(b"aaa").unwrap();
+        drop(w);
+        let out = zip_listing(&path).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name, "b.txt");
+        assert_eq!(out[0].size, 11);
+        assert_eq!(out[1].name, "sub/a.txt");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

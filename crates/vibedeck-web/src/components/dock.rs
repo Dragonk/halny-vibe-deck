@@ -734,6 +734,50 @@ fn FilePreviewTab(
                         }
                     },
                     "image" => rsx! { img { class: "preview-image", src: "{data.data_url}", alt: "{name}" } },
+                    "zip" => {
+                        if data.zip_entries.is_empty() {
+                            rsx! { div { class: "preview-loading", "…" } }
+                        } else {
+                            let zip_count = data.zip_entries.len();
+                            let zip_els: Vec<Element> = data
+                                .zip_entries
+                                .iter()
+                                .map(|e| {
+                                    let title = e.name.clone();
+                                    let base = e
+                                        .name
+                                        .rsplit('/')
+                                        .next()
+                                        .unwrap_or(&e.name)
+                                        .to_string();
+                                    let dir_part = match e.name.rfind('/') {
+                                        Some(pos) => e.name[..pos].to_string(),
+                                        None => String::new(),
+                                    };
+                                    let has_dir = !dir_part.is_empty();
+                                    let size_kb = format!("{:.1} KB", e.size as f64 / 1024.0);
+                                    rsx! {
+                                        div { class: "zip-entry", title: "{title}",
+                                            span { class: "zip-entry-name",
+                                                "{base}"
+                                                if has_dir {
+                                                    span { class: "zip-entry-dir", " — {dir_part}" }
+                                                }
+                                            }
+                                            span { class: "zip-entry-size", "{size_kb}" }
+                                        }
+                                    }
+                                })
+                                .collect();
+                            rsx! {
+                                div { class: "preview-zip",
+                                    div { class: "zip-count", "{zip_count} entries" }
+                                    {zip_els.iter().cloned()}
+                                }
+                            }
+                        }
+                    }
+
                     "markdown" => {
                         let html = crate::md::to_html(&data.text);
                         rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }

@@ -26,6 +26,13 @@ pub struct SheetData {
     pub rows: Vec<Vec<String>>,
 }
 
+/// One entry of a zip archive listing (Nexus FilePreview ZipView).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ZipEntry {
+    pub name: String,
+    pub size: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PreviewData {
     /// text | markdown | csv | image | xlsx | doc | slides | pdf | binary | error
@@ -40,6 +47,10 @@ pub struct PreviewData {
     pub html: String,
     /// xlsx: all sheets
     pub sheets: Vec<SheetData>,
+    /// zip: archive listing (Nexus ZipView)
+    #[serde(default)]
+    pub zip_entries: Vec<ZipEntry>,
+
     /// text-like kinds can switch to the editor
     pub editable: bool,
     pub file_name: String,
@@ -55,6 +66,8 @@ impl PreviewData {
             pages: Vec::new(),
             html: String::new(),
             sheets: Vec::new(),
+            zip_entries: Vec::new(),
+
             editable: false,
             file_name: String::new(),
             file_size: 0,
@@ -412,6 +425,21 @@ mod imp {
                     },
                 }
             }
+            "zip" => {
+                if size > DOC_CAP {
+                    return err("file too large".into());
+                }
+                match crate::preview::zip_listing(&full) {
+                    Ok(entries) => PreviewData {
+                        kind: "zip".into(),
+                        zip_entries: entries,
+                        file_name: name,
+                        file_size: size,
+                        ..base
+                    },
+                    Err(e) => err(e),
+                }
+            }
             "txt" | "log" | "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "json" | "toml"
             | "yaml" | "yml" | "html" | "css" | "sh" | "sql" | "go" | "c" | "h" | "cpp"
             | "java" | "kt" | "rb" | "php" | "xml" | "ini" | "conf" | "env" | "lock" | "" => {
@@ -458,7 +486,7 @@ mod imp {
     fn is_probably_binary(ext: &str) -> bool {
         matches!(
             ext,
-            "exe" | "dll" | "so" | "dylib" | "bin" | "zip" | "tar" | "gz" | "7z" | "rar"
+            "exe" | "dll" | "so" | "dylib" | "bin" | "tar" | "gz" | "7z" | "rar"
                 | "woff" | "woff2" | "ttf" | "otf" | "class" | "jar" | "wasm" | "mp3" | "mp4"
                 | "avi" | "mov" | "sqlite" | "db" | "pyc" | "o" | "a" | "lib" | "obj"
         )
