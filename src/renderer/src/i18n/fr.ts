@@ -233,6 +233,7 @@ export const fr = {
   mqCancel: 'Annuler',
   mqEdit: 'Modifier',
   mqRemove: 'Supprimer',
+  mqSendNow: 'Envoyer maintenant',
   toolReading: 'Lecture',
   toolPatching: 'Application du patch',
   toolRunning: 'Exécution',

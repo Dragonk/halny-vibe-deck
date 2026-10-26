@@ -231,6 +231,7 @@ interface AppStore {
   updateQueueMessage: (id: string, content: string) => void;
   clearMessageQueue: () => void;
   getNextQueuedMessage: () => { id: string; content: string } | undefined;
+  sendQueuedNow: (id: string) => void;
 
   currentSessionWorkingDirectory: () => string;
   currentSessionRemoteId: () => string | undefined;
@@ -1069,6 +1070,20 @@ export const useStore = create<AppStore>((set, get) => ({
   getNextQueuedMessage: () => {
     const { messageQueue } = get();
     return messageQueue[0];
+  },
+
+  // Jump the queue: move the picked message to the front and break off the
+  // running turn. The turn-end flush in App then sends it as the very next
+  // prompt. An idle session has no turn to cancel - the message just moves
+  // to the front and the next send (or flush) picks it up first.
+  sendQueuedNow: (id) => {
+    const { messageQueue } = get();
+    const msg = messageQueue.find((m) => m.id === id);
+    if (!msg) return;
+    set({ messageQueue: [msg, ...messageQueue.filter((m) => m.id !== id)] });
+    const session = get().sessions.find((s) => s.id === get().currentSessionId);
+    if (!session?.acpSessionId) return;
+    window.api.acp.cancelSession(session.acpSessionId, session.remoteId ?? undefined).catch(console.error);
   },
 
   currentSessionWorkingDirectory: () => {

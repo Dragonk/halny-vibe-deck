@@ -235,6 +235,7 @@ export const it = {
   mqCancel: 'Annulla',
   mqEdit: 'Modifica',
   mqRemove: 'Rimuovi',
+  mqSendNow: 'Invia ora',
   toolReading: 'Lettura',
   toolPatching: 'Applicazione patch',
   toolRunning: 'Esecuzione',

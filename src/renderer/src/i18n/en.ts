@@ -233,6 +233,7 @@ export const en = {
   mqCancel: 'Cancel',
   mqEdit: 'Edit',
   mqRemove: 'Remove',
+  mqSendNow: 'Send now',
   toolReading: 'Reading',
   toolPatching: 'Patching',
   toolRunning: 'Running',

@@ -111,7 +111,19 @@ export default function UsageBar(): React.JSX.Element | null {
     }
   }, [currentModel, sessWd, sessRid])
 
-  if (!u) return null
+  if (!u) {
+    // v0.13.14: keep the slot visible (the web client reloads often and the
+    // bar must not vanish before the first usage_update arrives).
+    return (
+      <div className="usage-bar">
+        <span className="usage-bar-item">
+          <svg className="usage-gauge" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <circle className="usage-gauge-track" cx="8" cy="8" r={GAUGE_R} />
+          </svg>
+        </span>
+      </div>
+    );
+  }
 
   // v0.13.5: the real max context (window) comes ONLY from the model config
   // (max_context_length). The runtime usage_update.size is the CLI-resolved

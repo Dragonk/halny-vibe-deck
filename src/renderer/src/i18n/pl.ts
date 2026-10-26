@@ -233,6 +233,7 @@ export const pl = {
   mqCancel: 'Anuluj',
   mqEdit: 'Edytuj',
   mqRemove: 'Usuń',
+  mqSendNow: 'Wyślij teraz',
   toolReading: 'Odczyt',
   toolPatching: 'Łatanie',
   toolRunning: 'Uruchomienie',
