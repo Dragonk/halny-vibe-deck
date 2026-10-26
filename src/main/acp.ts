@@ -3,6 +3,8 @@ import { BrowserWindow } from 'electron'
 import * as readline from 'readline'
 import { randomUUID } from 'crypto'
 import { broadcastToWeb } from './bus'
+import { loadConfig } from './config'
+import { loadAgentFiles } from './vibeConfig'
 
 export interface AcpConfigOptionChoice {
   value: string
@@ -139,6 +141,24 @@ export class AcpManager {
     }
     if (this.win && !this.win.isDestroyed()) {
       this.win.webContents.send('acp:event', ev)
+    }
+  }
+
+  /**
+   * v1.0.2: the safety mode of the agent currently driving this worker
+   * (the default agent, or the first enabled one). 'yolo' auto-approves
+   * tool permission requests without a UI round-trip - with any other
+   * mode the request is surfaced so the user can decide.
+   */
+  private activeAgentSafety(): string | null {
+    try {
+      const cfg = loadConfig()
+      const id = cfg.default_agent ?? cfg.agents.find((a) => a.enabled)?.id ?? null
+      if (!id) return null
+      const file = loadAgentFiles().find((a) => a.name === id)
+      return file?.safety ?? null
+    } catch {
+      return null
     }
   }
 
@@ -777,14 +797,22 @@ export class AcpManager {
 
     const needsApproval = method.includes('approv') || method.includes('permission') || method === 'tool/call'
     if (needsApproval) {
-      const p = params as Record<string, unknown>
+      const reqParams = params as Record<string, unknown>
+      // v1.0.2: 'yolo' (Autozatwierdzanie) approves permission requests
+      // without surfacing them - the GUI must not ask for every tool call.
+      if (this.activeAgentSafety() === 'yolo') {
+        const options = ((reqParams?.options ?? []) as Array<Record<string, unknown>>)
+        const allow = options.find((o) => String(o?.kind ?? '').startsWith('allow')) ?? options[0]
+        if (allow && allow.optionId) this.approveToolRequest(id, String(allow.optionId))
+        return
+      }
       const toolCallId = (
-        (p?.toolCall as Record<string, unknown> | undefined)?.toolCallId as string | undefined
+        (reqParams?.toolCall as Record<string, unknown> | undefined)?.toolCallId as string | undefined
       )
       const toolName = toolCallId ? this.toolCallNames.get(toolCallId) ?? undefined : undefined
       this.emit({
         type: 'ToolApprovalRequest',
-        data: { requestId: id, method, params: { ...(p ?? {}), resolvedToolName: toolName } }
+        data: { requestId: id, method, params: { ...(reqParams ?? {}), resolvedToolName: toolName } }
       })
       this.pendingApprovals.set(id, false)
     } else {

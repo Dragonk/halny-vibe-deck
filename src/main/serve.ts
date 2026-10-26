@@ -466,7 +466,11 @@ const WEB_BLOCKED = new Set([
   "serve:set-credentials",
   "serve:regen-cert",
   "remote:install-acp",
-  "updates:update-app",
+  // v1.0.3: updates:update-app is allowed for web clients (headless mode) -
+  // clicking "Zaktualizuj" in the browser must perform the update. The flow
+  // is safe here: the app quits, the detached helper swaps the files and
+  // relaunches, and serve comes back with the new version (the restart
+  // preserves serving when it was running before the update).
 ])
 
 /**
