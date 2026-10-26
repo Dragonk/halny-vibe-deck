@@ -550,10 +550,21 @@ app.whenReady().then(() => {
     if (!conn) throw new Error("Remote connection not found: " + remoteId);
     return checkRemoteCliUpdate(conn);
   });
+  // v1.0.5: updates must never kill a worker mid-turn - vibe-acp replaces
+  // binaries on disk, so the worker dies with the turn unfinished and the
+  // user sees an aborted session. Refuse the update instead until the
+  // running turn(s) finish.
+  const anyTurnInFlight = (): boolean =>
+    acpManager.isTurnInFlight() ||
+    [...remoteAcpManagers.values()].some((m) => m.isTurnInFlight());
+
   ipcMain.handle("updates:update-cli", async (_e, remoteId?: string | null) => {
     // The CLI binaries are being replaced on disk - every vibe-acp worker
     // (local + remote) must stop first. The renderer restores live sessions
     // once the upgrade finishes.
+    if (anyTurnInFlight()) {
+      throw new Error("A turn is in progress - wait for it to finish or stop it, then update");
+    }
     await stopAllAcp();
     if (remoteId) {
       const conn = loadConfig().remoteConnections.find((c) => c.id === remoteId);
@@ -563,6 +574,12 @@ app.whenReady().then(() => {
     return upgradeLocalCli();
   });
   ipcMain.handle("updates:update-app", () => {
+    // v1.0.5: same mid-turn guard as the CLI update - the update quits (or
+    // taskkills) this process, which takes every vibe-acp worker down with
+    // it. Refuse while a turn is running so the session is not aborted.
+    if (anyTurnInFlight()) {
+      throw new Error("A turn is in progress - wait for it to finish or stop it, then update");
+    }
     // Preserve serving across the restart: when the server is running even
     // though serving is disabled in config (started manually), flip it on so
     // it comes back automatically after the update relaunch.
