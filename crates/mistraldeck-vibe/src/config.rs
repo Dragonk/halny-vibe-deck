@@ -46,13 +46,22 @@ pub fn model_prices() -> Vec<ModelPrice> {
     let Ok(value) = content.parse::<Value>() else {
         return Vec::new();
     };
-    let Some(models) = value.get("models").and_then(Value::as_array) else {
+    let Some(models) = value.get("models") else {
         return Vec::new();
     };
-    models
+    // normalizeVibeConfig parity: also accept `[models.<name>]` tables.
+    let entries: Vec<(Option<String>, &Value)> = match models {
+        Value::Array(a) => a.iter().map(|v| (None, v)).collect(),
+        Value::Table(t) => t.iter().map(|(k, v)| (Some(k.clone()), v)).collect(),
+        _ => return Vec::new(),
+    };
+    entries
         .iter()
-        .filter_map(|m| {
-            let name = m.get("name").and_then(Value::as_str)?.to_string();
+        .filter_map(|(key, m)| {
+            let name = match m.get("name").and_then(Value::as_str) {
+                Some(n) => n.to_string(),
+                None => key.clone()?,
+            };
             let f = |k: &str| {
                 m.get(k)
                     .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
@@ -179,6 +188,16 @@ pub struct Provider {
     pub backend: Option<String>,
     pub api_style: Option<String>,
     pub extra_headers: Vec<(String, String)>,
+    /// Inline API key (`api_key`).
+    pub api_key: Option<String>,
+    /// Provider-specific reasoning field (`reasoning_field_name`).
+    pub reasoning_field_name: Option<String>,
+    /// Cloud project id (`project_id`).
+    pub project_id: Option<String>,
+    /// Cloud region (`region`).
+    pub region: Option<String>,
+    /// Toggle (`enabled`); None = enabled.
+    pub enabled: Option<bool>,
 }
 
 /// A model preset (`[[models]]`).
@@ -200,6 +219,20 @@ pub struct ModelConfig {
     /// Per-model auto-compact override (`auto_compact_threshold`);
     /// -1 disables the override, 0 = never compact.
     pub auto_compact_threshold: Option<i64>,
+    /// Sampling temperature (`temperature`).
+    pub temperature: Option<f64>,
+    /// Nucleus sampling probability (`top_p`).
+    pub top_p: Option<f64>,
+    /// Hard output cap (`max_output_tokens`), tokens.
+    pub max_output_tokens: Option<i64>,
+    /// `input_price` ($/M tokens).
+    pub input_price: Option<f64>,
+    /// `output_price` ($/M tokens).
+    pub output_price: Option<f64>,
+    /// `cached_input_price` ($/M); None = model without cache support.
+    pub cached_input_price: Option<f64>,
+    /// Whether the model accepts image input (`supports_images`).
+    pub supports_images: Option<bool>,
 }
 
 /// An MCP server (`[[mcp_servers]]`).
@@ -498,6 +531,19 @@ impl VibeConfigFile {
     // -- models ---------------------------------------------------------------
 
     pub fn models(&self) -> Vec<ModelConfig> {
+        // normalizeVibeConfig parity (Nexus vibeConfig.ts): tolerate
+        // `[models.<name>]` tables where the app expects `[[models]]` — a
+        // hand-edited or foreign-shaped config must not hide the models
+        // from the UI. Read-side guard only; the CLI schema is `[[models]]`.
+        if let Some(Value::Table(entries)) = self.table.get("models") {
+            let mut out = Vec::new();
+            for (key, v) in entries.iter() {
+                let mut entry = v.as_table().cloned().unwrap_or_default();
+                entry.insert("name".into(), Value::from(key.as_str()));
+                out.push(model_from_table(&entry));
+            }
+            return out;
+        }
         self.array_of_tables("models")
             .iter()
             .map(model_from_table)
@@ -752,6 +798,13 @@ fn pairs_value(pairs: &[(String, String)]) -> Option<Value> {
     Some(Value::Table(t))
 }
 
+fn table_float(t: &Table, key: &str) -> Option<f64> {
+    t.get(key).and_then(|v| {
+        v.as_float()
+            .or_else(|| v.as_integer().map(|i| i as f64))
+    })
+}
+
 fn provider_from_table(t: &Table) -> Provider {
     Provider {
         name: table_str(t, "name").unwrap_or_default(),
@@ -760,6 +813,11 @@ fn provider_from_table(t: &Table) -> Provider {
         backend: table_str(t, "backend"),
         api_style: table_str(t, "api_style"),
         extra_headers: table_pairs(t, "extra_headers"),
+        api_key: table_str(t, "api_key"),
+        reasoning_field_name: table_str(t, "reasoning_field_name"),
+        project_id: table_str(t, "project_id"),
+        region: table_str(t, "region"),
+        enabled: t.get("enabled").and_then(Value::as_bool),
     }
 }
 
@@ -780,6 +838,21 @@ fn provider_to_table(p: &Provider) -> Table {
     }
     if let Some(v) = pairs_value(&p.extra_headers) {
         t.insert("extra_headers".into(), v);
+    }
+    if let Some(v) = &p.api_key {
+        t.insert("api_key".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = &p.reasoning_field_name {
+        t.insert("reasoning_field_name".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = &p.project_id {
+        t.insert("project_id".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = &p.region {
+        t.insert("region".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = p.enabled {
+        t.insert("enabled".into(), Value::from(v));
     }
     t
 }
@@ -806,6 +879,13 @@ fn model_from_table(t: &Table) -> ModelConfig {
         auto_compact_threshold: t
             .get("auto_compact_threshold")
             .and_then(Value::as_integer),
+        temperature: table_float(t, "temperature"),
+        top_p: table_float(t, "top_p"),
+        max_output_tokens: t.get("max_output_tokens").and_then(Value::as_integer),
+        input_price: table_float(t, "input_price"),
+        output_price: table_float(t, "output_price"),
+        cached_input_price: table_float(t, "cached_input_price"),
+        supports_images: t.get("supports_images").and_then(Value::as_bool),
     }
 }
 
@@ -836,6 +916,27 @@ fn model_to_table(m: &ModelConfig) -> Table {
     }
     if let Some(v) = m.auto_compact_threshold {
         t.insert("auto_compact_threshold".into(), Value::from(v));
+    }
+    if let Some(v) = m.temperature {
+        t.insert("temperature".into(), Value::from(v));
+    }
+    if let Some(v) = m.top_p {
+        t.insert("top_p".into(), Value::from(v));
+    }
+    if let Some(v) = m.max_output_tokens {
+        t.insert("max_output_tokens".into(), Value::from(v));
+    }
+    if let Some(v) = m.input_price {
+        t.insert("input_price".into(), Value::from(v));
+    }
+    if let Some(v) = m.output_price {
+        t.insert("output_price".into(), Value::from(v));
+    }
+    if let Some(v) = m.cached_input_price {
+        t.insert("cached_input_price".into(), Value::from(v));
+    }
+    if let Some(v) = m.supports_images {
+        t.insert("supports_images".into(), Value::from(v));
     }
     t
 }
@@ -1063,6 +1164,101 @@ enabled = true
         assert_eq!(cfg.tool_permission("bash").as_deref(), Some("ask"));
         cfg.set_tool_permission("bash", "allow");
         assert_eq!(cfg.tool_permission("bash").as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn model_full_fields_roundtrip() {
+        let mut cfg = VibeConfigFile::load_at(std::path::Path::new("/tmp/nope3.toml")).unwrap();
+        cfg.upsert_model(&ModelConfig {
+            name: "x".into(),
+            provider: "p".into(),
+            alias: Some("ax".into()),
+            enabled: Some(false),
+            display_name: Some("X Model".into()),
+            thinking: Some("max".into()),
+            thinking_levels: Some(vec!["low".into(), "max".into()]),
+            max_context_length: Some(262144),
+            auto_compact_threshold: Some(209715),
+            temperature: Some(0.3),
+            top_p: Some(0.95),
+            max_output_tokens: Some(8192),
+            input_price: Some(0.5),
+            output_price: Some(1.5),
+            cached_input_price: Some(0.1),
+            supports_images: Some(true),
+        });
+        let out = cfg.models();
+        assert_eq!(out.len(), 1);
+        let m = &out[0];
+        assert_eq!(m.name, "x");
+        assert_eq!(m.provider, "p");
+        assert_eq!(m.alias.as_deref(), Some("ax"));
+        assert_eq!(m.enabled, Some(false));
+        assert_eq!(m.display_name.as_deref(), Some("X Model"));
+        assert_eq!(m.thinking.as_deref(), Some("max"));
+        assert_eq!(
+            m.thinking_levels.as_deref(),
+            Some(&["low".to_string(), "max".to_string()][..])
+        );
+        assert_eq!(m.max_context_length, Some(262144));
+        assert_eq!(m.auto_compact_threshold, Some(209715));
+        assert_eq!(m.temperature, Some(0.3));
+        assert_eq!(m.top_p, Some(0.95));
+        assert_eq!(m.max_output_tokens, Some(8192));
+        assert_eq!(m.input_price, Some(0.5));
+        assert_eq!(m.output_price, Some(1.5));
+        assert_eq!(m.cached_input_price, Some(0.1));
+        assert_eq!(m.supports_images, Some(true));
+    }
+
+    #[test]
+    fn provider_full_fields_roundtrip() {
+        let mut cfg = VibeConfigFile::load_at(std::path::Path::new("/tmp/nope4.toml")).unwrap();
+        cfg.upsert_provider(&Provider {
+            name: "gem".into(),
+            api_base: "https://example.com".into(),
+            api_key_env_var: Some("GEM_KEY".into()),
+            backend: Some("gemini".into()),
+            api_style: Some("google".into()),
+            extra_headers: Vec::new(),
+            api_key: Some("sk-x".into()),
+            reasoning_field_name: Some("thought".into()),
+            project_id: Some("proj-1".into()),
+            region: Some("eu".into()),
+            enabled: Some(false),
+        });
+        let out = cfg.providers();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].api_key.as_deref(), Some("sk-x"));
+        assert_eq!(out[0].reasoning_field_name.as_deref(), Some("thought"));
+        assert_eq!(out[0].project_id.as_deref(), Some("proj-1"));
+        assert_eq!(out[0].region.as_deref(), Some("eu"));
+        assert_eq!(out[0].enabled, Some(false));
+        assert_eq!(out[0].api_style.as_deref(), Some("google"));
+        assert_eq!(out[0].api_key_env_var.as_deref(), Some("GEM_KEY"));
+    }
+
+    #[test]
+    fn models_object_form_normalized() {
+        // normalizeVibeConfig parity: `[models.<name>]` tables must surface
+        // as models named after the key instead of vanishing.
+        let mut cfg = VibeConfigFile::load_at(std::path::Path::new("/tmp/nope5.toml")).unwrap();
+        cfg.table = r#"
+[models.foo]
+provider = "mistral"
+display_name = "Foo"
+temperature = 0.2
+"#
+        .parse::<Value>()
+        .unwrap()
+        .try_into()
+        .unwrap();
+        let models = cfg.models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "foo");
+        assert_eq!(models[0].provider, "mistral");
+        assert_eq!(models[0].display_name.as_deref(), Some("Foo"));
+        assert_eq!(models[0].temperature, Some(0.2));
     }
 
     #[test]

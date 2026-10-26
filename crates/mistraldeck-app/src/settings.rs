@@ -885,6 +885,13 @@ fn models(app: &mut MistraldeckApp, ui: &mut Ui, t: &Str) {
             thinking_levels: None,
             max_context_length: None,
             auto_compact_threshold: None,
+            temperature: None,
+            top_p: None,
+            max_output_tokens: None,
+            input_price: None,
+            output_price: None,
+            cached_input_price: None,
+            supports_images: None,
         });
     }
 }

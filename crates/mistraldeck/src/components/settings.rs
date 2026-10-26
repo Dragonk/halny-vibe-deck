@@ -132,29 +132,6 @@ async fn reload_files(
     }
 }
 
-/// A generic config row: title + meta + optional trailing element.
-fn cfg_row(key: String, title: String, meta: String, trail: Option<Element>) -> Element {
-    match trail {
-        Some(t) => rsx! {
-            div { key: "{key}", class: "session-row",
-                div { class: "session-row-main",
-                    div { class: "session-row-title", "{title}" }
-                    div { class: "session-row-meta", "{meta}" }
-                }
-                {t}
-            }
-        },
-        None => rsx! {
-            div { key: "{key}", class: "session-row",
-                div { class: "session-row-main",
-                    div { class: "session-row-title", "{title}" }
-                    div { class: "session-row-meta", "{meta}" }
-                }
-            }
-        },
-    }
-}
-
 fn del_btn(mut on_click: impl FnMut() + 'static) -> Element {
     rsx! {
         button {
@@ -425,14 +402,40 @@ pub fn SettingsView() -> Element {
     let scope_target = use_signal(|| "global".to_string());
     let scope_key = use_signal(String::new);
 
-    // add-form state
+    // provider + model detail state (element 7 stage 7C): the master-detail
+    // editors mirror Nexus SettingsView — pv_* for providers, md_* for models.
     let mut p_name = use_signal(String::new);
     let mut p_base = use_signal(String::new);
     let mut p_key = use_signal(String::new);
     let mut p_backend = use_signal(String::new);
+    let mut p_api_key = use_signal(String::new);
+    let mut p_style = use_signal(|| "openai".to_string());
+    let mut p_reasoning = use_signal(String::new);
+    let mut p_project = use_signal(String::new);
+    let mut p_region = use_signal(String::new);
+    let mut pv_sel = use_signal(String::new);
+    let mut pv_loaded = use_signal(String::new);
+    let mut pv_new = use_signal(|| false);
+    let mut pv_enabled = use_signal(|| true);
     let mut m_name = use_signal(String::new);
     let mut m_provider = use_signal(String::new);
     let mut m_alias = use_signal(String::new);
+    let mut m_display = use_signal(String::new);
+    let mut m_think = use_signal(|| "off".to_string());
+    let mut m_levels = use_signal(String::new);
+    let mut m_temp = use_signal(String::new);
+    let mut m_topp = use_signal(String::new);
+    let mut m_maxout = use_signal(String::new);
+    let mut m_inprice = use_signal(String::new);
+    let mut m_outprice = use_signal(String::new);
+    let mut m_cachedprice = use_signal(String::new);
+    let mut m_ctx = use_signal(String::new);
+    let mut m_compact = use_signal(String::new);
+    let mut m_enabled = use_signal(|| true);
+    let mut m_images = use_signal(|| false);
+    let mut md_sel = use_signal(String::new);
+    let mut md_loaded = use_signal(String::new);
+    let mut md_new = use_signal(|| false);
     let mut c_name = use_signal(String::new);
     let mut c_transport = use_signal(|| "stdio".to_string());
     let mut c_url = use_signal(String::new);
@@ -512,6 +515,26 @@ pub fn SettingsView() -> Element {
         let mut files_kind = files_kind.clone();
         files.set(Vec::new());
         files_kind.set(String::new());
+        // Same fix for the master-detail panels (providers/models/mcp):
+        // selections and loaded-field markers never survive a scope switch.
+        let mut pv_sel = pv_sel.clone();
+        let mut pv_loaded = pv_loaded.clone();
+        let mut pv_new = pv_new.clone();
+        let mut md_sel = md_sel.clone();
+        let mut md_loaded = md_loaded.clone();
+        let mut md_new = md_new.clone();
+        let mut mc_sel = mc_sel.clone();
+        let mut mc_loaded = mc_loaded.clone();
+        let mut mc_new = mc_new.clone();
+        pv_sel.set(String::new());
+        pv_loaded.set(String::new());
+        pv_new.set(false);
+        md_sel.set(String::new());
+        md_loaded.set(String::new());
+        md_new.set(false);
+        mc_sel.set(String::new());
+        mc_loaded.set(String::new());
+        mc_new.set(false);
         let st = state.clone();
         let sc2 = sc.clone();
         let mut tools_en = tools_en.clone();
@@ -796,188 +819,239 @@ pub fn SettingsView() -> Element {
             }
         },
         "providers" => {
-            let mut rows: Vec<Element> = cfgd
-                .providers
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let state2 = state;
-                    let cfg2 = cfg;
-                    let cfg_err2 = cfg_err;
-                    let sc2 = sc.clone();
-                    let name = p.name.clone();
-                    cfg_row(
-                        i.to_string(),
-                        p.name.clone(),
-                        format!("{} · {}", p.api_base, if p.backend.is_empty() { "—".into() } else { p.backend.clone() }),
-                        Some(del_btn(move || {
-                            let name = name.clone();
-                            let sc2 = sc2.clone();
-                            spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_provider(
-                                    token(&state2),
-                                    name,
-                                    sc2.scope.clone(),
-                                    sc2.cwd.clone(),
-                                    sc2.conn.clone(),
-                                )
-                                .await;
-                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
-                            });
-                        })),
-                    )
-                })
-                .collect();
-            rows.push(rsx! {
-                div { class: "field-row",
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"name\")}", value: "{p_name.read()}",
-                        oninput: move |e| p_name.set(e.value()) }
-                    input { class: "field-input", style: "flex:2;", r#type: "text",
-                        placeholder: "base URL", value: "{p_base.read()}",
-                        oninput: move |e| p_base.set(e.value()) }
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"apiKey\")} env", value: "{p_key.read()}",
-                        oninput: move |e| p_key.set(e.value()) }
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "backend", value: "{p_backend.read()}",
-                        oninput: move |e| p_backend.set(e.value()) }
-                    button { class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cfg = cfg.clone();
-                            let cfg_err = cfg_err.clone();
-                            let sc = sc.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let cfg = cfg.clone();
-                                let cfg_err = cfg_err.clone();
-                                let sc = sc.clone();
-                                async move {
-                                    let row = crate::vibeconfig::ProviderRow {
-                                        name: p_name.read().trim().to_string(),
-                                        api_base: p_base.read().trim().to_string(),
-                                        api_key_env_var: p_key.read().trim().to_string(),
-                                        backend: p_backend.read().trim().to_string(),
-                                        api_style: String::new(),
-                                    };
-                                    if row.name.is_empty() || row.api_base.is_empty() {
-                                        return;
-                                    }
-                                    let _ = crate::vibeconfig::api_upsert_provider(
-                                        token(&state),
-                                        row,
-                                        sc.scope.clone(),
-                                        sc.cwd.clone(),
-                                        sc.conn.clone(),
-                                    )
-                                    .await;
-                                    p_name.set(String::new());
-                                    p_base.set(String::new());
-                                    p_key.set(String::new());
-                                    p_backend.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
-                                }
-                            }
-                        },
-                        "{tr(&lang, \"add\")}" }
+            let sel_name = pv_sel.read().clone();
+            let sel_row = cfgd.providers.iter().find(|p| p.name == sel_name).cloned();
+            if let Some(s) = &sel_row {
+                if *pv_loaded.read() != s.name {
+                    pv_loaded.set(s.name.clone());
+                    pv_new.set(false);
+                    p_name.set(s.name.clone());
+                    p_base.set(s.api_base.clone());
+                    p_key.set(s.api_key_env_var.clone());
+                    p_backend.set(s.backend.clone());
+                    p_style.set(if s.api_style.is_empty() {
+                        "openai".to_string()
+                    } else {
+                        s.api_style.clone()
+                    });
+                    p_api_key.set(s.api_key.clone());
+                    p_reasoning.set(s.reasoning_field_name.clone());
+                    p_project.set(s.project_id.clone());
+                    p_region.set(s.region.clone());
+                    pv_enabled.set(s.enabled);
                 }
-            });
+            }
+            let mut master: Vec<Element> = Vec::new();
+            for p in cfgd.providers.iter() {
+                let nm = p.name.clone();
+                let disp = p.name.clone();
+                let tp = p.backend.clone();
+                let cls = if p.name == sel_name {
+                    "master-item selected"
+                } else {
+                    "master-item"
+                };
+                master.push(rsx! {
+                    div { class: "{cls}",
+                        onclick: move |_| {
+                            pv_sel.set(nm.clone());
+                            pv_new.set(false);
+                        },
+                        span { class: "master-item-name", "{disp}" }
+                        span { class: "master-item-type", "{tp}" }
+                    }
+                });
+            }
+            let show_detail = sel_row.is_some() || *pv_new.read();
+            let pv_enabled_cur = *pv_enabled.read();
+            let name_lbl = tr(&lang, "name");
+            let provider_name_ph = tr(&lang, "providerName");
+            let enabled_lbl = tr(&lang, "enabled");
+            let remove_lbl = tr(&lang, "remove");
+            let baseurl_lbl = tr(&lang, "baseUrl");
+            let apikeyenv_lbl = tr(&lang, "apiKeyEnv");
+            let apikey_lbl = tr(&lang, "apiKey");
+            let save_lbl = tr(&lang, "saveLabel");
+            let empty_lbl = tr(&lang, "noProvidersConfigured");
+            let detail: Element = if show_detail {
+                rsx! {
+                    div {
+                        div { class: "field",
+                            div { class: "field-label", "{name_lbl}" }
+                            div { class: "config-item-header-row",
+                                input { class: "field-input", r#type: "text",
+                                    placeholder: "{provider_name_ph}", value: "{p_name.read()}",
+                                    oninput: move |e| p_name.set(e.value()) }
+                                label { class: "checkbox-label",
+                                    input { r#type: "checkbox", checked: pv_enabled_cur,
+                                        onchange: move |e| pv_enabled.set(e.checked()) }
+                                    "{enabled_lbl}"
+                                }
+                                button { class: "field-btn danger",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        move |_| {
+                                            let state = state.clone();
+                                            let cfg = cfg.clone();
+                                            let cfg_err = cfg_err.clone();
+                                            let sc = sc.clone();
+                                            let name = p_name.read().trim().to_string();
+                                            pv_sel.set(String::new());
+                                            pv_loaded.set(String::new());
+                                            pv_new.set(false);
+                                            spawn(async move {
+                                                let _ = crate::vibeconfig::api_remove_provider(
+                                                    token(&state),
+                                                    name,
+                                                    sc.scope.clone(),
+                                                    sc.cwd.clone(),
+                                                    sc.conn.clone(),
+                                                )
+                                                .await;
+                                                reload_cfg(state, cfg, cfg_err, sc).await;
+                                            });
+                                        }
+                                    },
+                                    "{remove_lbl}" }
+                            }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{baseurl_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "https://api.mistral.ai/v1", value: "{p_base.read()}",
+                                oninput: move |e| p_base.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{apikeyenv_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "MISTRAL_API_KEY", value: "{p_key.read()}",
+                                oninput: move |e| p_key.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{apikey_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "sk-...", value: "{p_api_key.read()}",
+                                oninput: move |e| p_api_key.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "API Style" }
+                            select { class: "field-select", value: "{p_style.read()}",
+                                onchange: move |e| p_style.set(e.value()),
+                                option { value: "openai", "OpenAI" }
+                                option { value: "anthropic", "Anthropic" }
+                                option { value: "google", "Google" }
+                                option { value: "azure", "Azure" }
+                            }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "Backend" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "mistral", value: "{p_backend.read()}",
+                                oninput: move |e| p_backend.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "Reasoning Field Name" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "reasoning_content", value: "{p_reasoning.read()}",
+                                oninput: move |e| p_reasoning.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "Project ID" }
+                            input { class: "field-input", r#type: "text",
+                                value: "{p_project.read()}",
+                                oninput: move |e| p_project.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "Region" }
+                            input { class: "field-input", r#type: "text",
+                                value: "{p_region.read()}",
+                                oninput: move |e| p_region.set(e.value()) }
+                        }
+                        div { class: "field",
+                            button { class: "save-btn",
+                                onclick: {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
+                                    move |_| {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        async move {
+                                            let row = crate::vibeconfig::ProviderRow {
+                                                name: p_name.read().trim().to_string(),
+                                                api_base: p_base.read().trim().to_string(),
+                                                api_key_env_var: p_key.read().trim().to_string(),
+                                                backend: p_backend.read().trim().to_string(),
+                                                api_style: p_style.read().trim().to_string(),
+                                                api_key: p_api_key.read().trim().to_string(),
+                                                reasoning_field_name: p_reasoning.read().trim().to_string(),
+                                                project_id: p_project.read().trim().to_string(),
+                                                region: p_region.read().trim().to_string(),
+                                                enabled: *pv_enabled.read(),
+                                            };
+                                            if row.name.is_empty() || row.api_base.is_empty() {
+                                                return;
+                                            }
+                                            pv_sel.set(row.name.clone());
+                                            let _ = crate::vibeconfig::api_upsert_provider(
+                                                token(&state),
+                                                row,
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                            )
+                                            .await;
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        }
+                                    }
+                                },
+                                "{save_lbl}" }
+                        }
+                    }
+                }
+            } else {
+                rsx! { div { class: "master-detail-empty", "{empty_lbl}" } }
+            };
+            let providers_lbl = tr(&lang, "providers");
+            let add_provider_lbl = tr(&lang, "addProvider");
             rsx! {
                 div { class: "settings-section",
                     div { class: "settings-section-header",
-                        div { class: "settings-section-title", "{tr(&lang, \"providers\")}" }
+                        div { class: "settings-section-title", "{providers_lbl}" }
+                        button { class: "field-btn",
+                            onclick: move |_| {
+                                pv_new.set(true);
+                                pv_sel.set(String::new());
+                                pv_loaded.set(String::new());
+                                p_name.set(String::new());
+                                p_base.set(String::new());
+                                p_key.set(String::new());
+                                p_backend.set(String::new());
+                                p_style.set("openai".to_string());
+                                p_api_key.set(String::new());
+                                p_reasoning.set(String::new());
+                                p_project.set(String::new());
+                                p_region.set(String::new());
+                                pv_enabled.set(true);
+                            },
+                            "{add_provider_lbl}" }
                     }
-                    div { class: "session-rows", {rows.iter().cloned()} }
+                    div { class: "master-detail",
+                        div { class: "master-list", {master.iter().cloned()} }
+                        div { class: "master-detail-panel", {detail} }
+                    }
                     {err_el}
                 }
             }
         }
         "models" => {
             let active = cfgd.active_model.clone();
-            let mut rows: Vec<Element> = cfgd
-                .models
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let state2 = state;
-                    let cfg2 = cfg;
-                    let cfg_err2 = cfg_err;
-                    let sc2 = sc.clone();
-                    let name = m.name.clone();
-                    let _alias = if m.alias.is_empty() { m.name.clone() } else { m.alias.clone() };
-                    cfg_row(
-                        i.to_string(),
-                        m.name.clone(),
-                        format!("{} · alias: {} · {}", m.provider, m.alias, if m.enabled { tr(&lang, "enabled") } else { "—" }),
-                        Some(del_btn(move || {
-                            let name = name.clone();
-                            let sc2 = sc2.clone();
-                            spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_model(
-                                    token(&state2),
-                                    name,
-                                    sc2.scope.clone(),
-                                    sc2.cwd.clone(),
-                                    sc2.conn.clone(),
-                                )
-                                .await;
-                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
-                            });
-                        })),
-                    )
-                })
-                .collect();
-            rows.push(rsx! {
-                div { class: "field-row",
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"name\")}", value: "{m_name.read()}",
-                        oninput: move |e| m_name.set(e.value()) }
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"providers\")}", value: "{m_provider.read()}",
-                        oninput: move |e| m_provider.set(e.value()) }
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "alias", value: "{m_alias.read()}",
-                        oninput: move |e| m_alias.set(e.value()) }
-                    button { class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cfg = cfg.clone();
-                            let cfg_err = cfg_err.clone();
-                            let sc = sc.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let cfg = cfg.clone();
-                                let cfg_err = cfg_err.clone();
-                                let sc = sc.clone();
-                                async move {
-                                    let row = crate::vibeconfig::ModelRow {
-                                        name: m_name.read().trim().to_string(),
-                                        provider: m_provider.read().trim().to_string(),
-                                        alias: m_alias.read().trim().to_string(),
-                                        enabled: true,
-                                    };
-                                    if row.name.is_empty() || row.provider.is_empty() {
-                                        return;
-                                    }
-                                    let _ = crate::vibeconfig::api_upsert_model(
-                                        token(&state),
-                                        row,
-                                        sc.scope.clone(),
-                                        sc.cwd.clone(),
-                                        sc.conn.clone(),
-                                    )
-                                    .await;
-                                    m_name.set(String::new());
-                                    m_provider.set(String::new());
-                                    m_alias.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
-                                }
-                            }
-                        },
-                        "{tr(&lang, \"add\")}" }
-                }
-            });
             let opts: Vec<Element> = cfgd
                 .models
                 .iter()
@@ -988,13 +1062,339 @@ pub fn SettingsView() -> Element {
                     rsx! { option { value: "{a}", selected: sel, "{label}" } }
                 })
                 .collect();
+            let sel_name = md_sel.read().clone();
+            let sel_row = cfgd.models.iter().find(|m| m.name == sel_name).cloned();
+            if let Some(s) = &sel_row {
+                if *md_loaded.read() != s.name {
+                    md_loaded.set(s.name.clone());
+                    md_new.set(false);
+                    m_name.set(s.name.clone());
+                    m_provider.set(s.provider.clone());
+                    m_alias.set(s.alias.clone());
+                    m_display.set(s.display_name.clone());
+                    m_enabled.set(s.enabled);
+                    m_images.set(s.supports_images);
+                    m_think.set(if s.thinking.is_empty() {
+                        "off".to_string()
+                    } else {
+                        s.thinking.clone()
+                    });
+                    m_levels.set(s.thinking_levels.clone());
+                    m_temp.set(s.temperature.clone());
+                    m_topp.set(s.top_p.clone());
+                    m_maxout.set(s.max_output_tokens.clone());
+                    m_inprice.set(s.input_price.clone());
+                    m_outprice.set(s.output_price.clone());
+                    m_cachedprice.set(s.cached_input_price.clone());
+                    m_ctx.set(s.max_context_length.clone());
+                    m_compact.set(s.auto_compact_threshold.clone());
+                }
+            }
+            let mut master: Vec<Element> = Vec::new();
+            for m in cfgd.models.iter() {
+                let nm = m.name.clone();
+                let disp = if m.display_name.is_empty() {
+                    m.name.clone()
+                } else {
+                    m.display_name.clone()
+                };
+                let tp = m.provider.clone();
+                let cls = if m.name == sel_name {
+                    "master-item selected"
+                } else {
+                    "master-item"
+                };
+                master.push(rsx! {
+                    div { class: "{cls}",
+                        onclick: move |_| {
+                            md_sel.set(nm.clone());
+                            md_new.set(false);
+                        },
+                        span { class: "master-item-name", "{disp}" }
+                        span { class: "master-item-type", "{tp}" }
+                    }
+                });
+            }
+            let mut prov_names: Vec<String> =
+                cfgd.providers.iter().map(|p| p.name.clone()).collect();
+            let cur_prov = m_provider.read().trim().to_string();
+            if !cur_prov.is_empty() && !prov_names.iter().any(|n| n == &cur_prov) {
+                prov_names.push(cur_prov);
+            }
+            let prov_opts: Vec<Element> = prov_names
+                .into_iter()
+                .map(|n| {
+                    let lbl = n.clone();
+                    rsx! { option { value: "{n}", "{lbl}" } }
+                })
+                .collect();
+            let think_opts: Vec<Element> = ["off", "low", "medium", "high", "max"]
+                .iter()
+                .map(|k| {
+                    let lbl = tr(&lang, k);
+                    rsx! { option { value: "{k}", "{lbl}" } }
+                })
+                .collect();
+            let show_detail = sel_row.is_some() || *md_new.read();
+            let m_enabled_cur = *m_enabled.read();
+            let m_images_cur = *m_images.read();
+            let name_lbl = tr(&lang, "name");
+            let model_name_ph = tr(&lang, "modelName");
+            let enabled_lbl = tr(&lang, "enabled");
+            let supports_images_lbl = tr(&lang, "supportsImages");
+            let remove_lbl = tr(&lang, "remove");
+            let model_provider_lbl = tr(&lang, "modelProvider");
+            let display_name_lbl = tr(&lang, "displayName");
+            let display_name_hint = tr(&lang, "displayNameHint");
+            let temperature_lbl = tr(&lang, "temperature");
+            let temperature_hint = tr(&lang, "temperatureHint");
+            let thinking_lbl = tr(&lang, "thinking");
+            let input_price_lbl = tr(&lang, "inputPrice");
+            let output_price_lbl = tr(&lang, "outputPrice");
+            let cached_price_lbl = tr(&lang, "cachedInputPrice");
+            let cached_price_hint = tr(&lang, "cachedInputPriceHint");
+            let top_p_lbl = tr(&lang, "topP");
+            let max_out_lbl = tr(&lang, "maxOutputTokens");
+            let max_out_hint = tr(&lang, "maxOutputTokensHint");
+            let levels_lbl = tr(&lang, "thinkingLevels");
+            let levels_hint = tr(&lang, "thinkingLevelsHint");
+            let ctx_lbl = tr(&lang, "maxContextLength");
+            let ctx_hint = tr(&lang, "maxContextHint");
+            let compact_lbl = tr(&lang, "autoCompactThreshold");
+            let compact_hint = tr(&lang, "autoCompactHint");
+            let save_lbl = tr(&lang, "saveLabel");
+            let empty_lbl = tr(&lang, "noModelsConfigured");
+            let detail: Element = if show_detail {
+                rsx! {
+                    div {
+                        div { class: "field",
+                            div { class: "field-label", "{name_lbl}" }
+                            div { class: "config-item-header-row",
+                                input { class: "field-input", r#type: "text",
+                                    placeholder: "{model_name_ph}", value: "{m_name.read()}",
+                                    oninput: move |e| m_name.set(e.value()) }
+                                label { class: "checkbox-label",
+                                    input { r#type: "checkbox", checked: m_enabled_cur,
+                                        onchange: move |e| m_enabled.set(e.checked()) }
+                                    "{enabled_lbl}"
+                                }
+                                label { class: "checkbox-label",
+                                    input { r#type: "checkbox", checked: m_images_cur,
+                                        onchange: move |e| m_images.set(e.checked()) }
+                                    "{supports_images_lbl}"
+                                }
+                                button { class: "field-btn danger",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        move |_| {
+                                            let state = state.clone();
+                                            let cfg = cfg.clone();
+                                            let cfg_err = cfg_err.clone();
+                                            let sc = sc.clone();
+                                            let name = m_name.read().trim().to_string();
+                                            md_sel.set(String::new());
+                                            md_loaded.set(String::new());
+                                            md_new.set(false);
+                                            spawn(async move {
+                                                let _ = crate::vibeconfig::api_remove_model(
+                                                    token(&state),
+                                                    name,
+                                                    sc.scope.clone(),
+                                                    sc.cwd.clone(),
+                                                    sc.conn.clone(),
+                                                )
+                                                .await;
+                                                reload_cfg(state, cfg, cfg_err, sc).await;
+                                            });
+                                        }
+                                    },
+                                    "{remove_lbl}" }
+                            }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{model_provider_lbl}" }
+                            select { class: "field-select", value: "{m_provider.read()}",
+                                onchange: move |e| m_provider.set(e.value()),
+                                {prov_opts.iter().cloned()}
+                            }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "Alias" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "devstral-2", value: "{m_alias.read()}",
+                                oninput: move |e| m_alias.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{display_name_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "Devstral 2", value: "{m_display.read()}",
+                                oninput: move |e| m_display.set(e.value()) }
+                            div { class: "field-hint", "{display_name_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{temperature_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                value: "{m_temp.read()}",
+                                oninput: move |e| m_temp.set(e.value()) }
+                            div { class: "field-hint", "{temperature_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{thinking_lbl}" }
+                            select { class: "field-select", value: "{m_think.read()}",
+                                onchange: move |e| m_think.set(e.value()),
+                                {think_opts.iter().cloned()}
+                            }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{input_price_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "0.0", value: "{m_inprice.read()}",
+                                oninput: move |e| m_inprice.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{output_price_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "0.0", value: "{m_outprice.read()}",
+                                oninput: move |e| m_outprice.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{cached_price_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "—", value: "{m_cachedprice.read()}",
+                                oninput: move |e| m_cachedprice.set(e.value()) }
+                            div { class: "field-hint", "{cached_price_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{top_p_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "1", value: "{m_topp.read()}",
+                                oninput: move |e| m_topp.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{max_out_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "0", value: "{m_maxout.read()}",
+                                oninput: move |e| m_maxout.set(e.value()) }
+                            div { class: "field-hint", "{max_out_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{levels_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "off, low, medium, high", value: "{m_levels.read()}",
+                                oninput: move |e| m_levels.set(e.value()) }
+                            div { class: "field-hint", "{levels_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{ctx_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "0", value: "{m_ctx.read()}",
+                                oninput: move |e| m_ctx.set(e.value()) }
+                            div { class: "field-hint", "{ctx_hint}" }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{compact_lbl}" }
+                            input { class: "field-input", r#type: "number",
+                                placeholder: "200000", value: "{m_compact.read()}",
+                                oninput: move |e| m_compact.set(e.value()) }
+                            div { class: "field-hint", "{compact_hint}" }
+                        }
+                        div { class: "field",
+                            button { class: "save-btn",
+                                onclick: {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
+                                    move |_| {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        async move {
+                                            let row = crate::vibeconfig::ModelRow {
+                                                name: m_name.read().trim().to_string(),
+                                                provider: m_provider.read().trim().to_string(),
+                                                alias: m_alias.read().trim().to_string(),
+                                                enabled: *m_enabled.read(),
+                                                display_name: m_display.read().trim().to_string(),
+                                                supports_images: *m_images.read(),
+                                                temperature: m_temp.read().trim().to_string(),
+                                                top_p: m_topp.read().trim().to_string(),
+                                                max_output_tokens: m_maxout.read().trim().to_string(),
+                                                input_price: m_inprice.read().trim().to_string(),
+                                                output_price: m_outprice.read().trim().to_string(),
+                                                cached_input_price: m_cachedprice.read().trim().to_string(),
+                                                thinking: m_think.read().trim().to_string(),
+                                                thinking_levels: m_levels.read().trim().to_string(),
+                                                max_context_length: m_ctx.read().trim().to_string(),
+                                                auto_compact_threshold: m_compact.read().trim().to_string(),
+                                            };
+                                            if row.name.is_empty() || row.provider.is_empty() {
+                                                return;
+                                            }
+                                            md_sel.set(row.name.clone());
+                                            let _ = crate::vibeconfig::api_upsert_model(
+                                                token(&state),
+                                                row,
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                            )
+                                            .await;
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        }
+                                    }
+                                },
+                                "{save_lbl}" }
+                        }
+                    }
+                }
+            } else {
+                rsx! { div { class: "master-detail-empty", "{empty_lbl}" } }
+            };
+            let models_lbl = tr(&lang, "models");
+            let add_model_lbl = tr(&lang, "addModel");
+            let active_lbl = loc(&lang, "Model aktywny", "Active model");
+            let add_name = format!("model-{}", cfgd.models.len() + 1);
+            let first_prov = cfgd
+                .providers
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| "mistral".to_string());
+            let models_empty = cfgd.models.is_empty();
             rsx! {
                 div { class: "settings-section",
                     div { class: "settings-section-header",
-                        div { class: "settings-section-title", "{tr(&lang, \"models\")}" }
+                        div { class: "settings-section-title", "{models_lbl}" }
+                        button { class: "field-btn",
+                            onclick: move |_| {
+                                md_new.set(true);
+                                md_sel.set(String::new());
+                                md_loaded.set(String::new());
+                                m_name.set(add_name.clone());
+                                m_provider.set(first_prov.clone());
+                                m_alias.set(String::new());
+                                m_display.set(String::new());
+                                m_enabled.set(true);
+                                m_images.set(false);
+                                m_think.set("off".to_string());
+                                m_levels.set(String::new());
+                                m_temp.set(String::new());
+                                m_topp.set(String::new());
+                                m_maxout.set(String::new());
+                                m_inprice.set(String::new());
+                                m_outprice.set(String::new());
+                                m_cachedprice.set(String::new());
+                                m_ctx.set(String::new());
+                                m_compact.set(String::new());
+                            },
+                            "{add_model_lbl}" }
                     }
                     div { class: "field",
-                        div { class: "field-label", "{loc(&lang, \"Model aktywny\", \"Active model\")}" }
+                        div { class: "field-label", "{active_lbl}" }
                         select {
                             class: "field-select",
                             onchange: {
@@ -1020,13 +1420,16 @@ pub fn SettingsView() -> Element {
                                     }
                                 }
                             },
-                            if cfgd.models.is_empty() {
+                            if models_empty {
                                 option { value: "", selected: true, "—" }
                             }
                             {opts.iter().cloned()}
                         }
                     }
-                    div { class: "session-rows", {rows.iter().cloned()} }
+                    div { class: "master-detail",
+                        div { class: "master-list", {master.iter().cloned()} }
+                        div { class: "master-detail-panel", {detail} }
+                    }
                     {err_el}
                 }
             }

@@ -13,6 +13,11 @@ pub struct ProviderRow {
     pub api_key_env_var: String,
     pub backend: String,
     pub api_style: String,
+    pub api_key: String,
+    pub reasoning_field_name: String,
+    pub project_id: String,
+    pub region: String,
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -21,6 +26,21 @@ pub struct ModelRow {
     pub provider: String,
     pub alias: String,
     pub enabled: bool,
+    pub display_name: String,
+    pub supports_images: bool,
+    /// Optional number fields: "" = not set (Nexus writes only touched keys).
+    pub temperature: String,
+    pub top_p: String,
+    pub max_output_tokens: String,
+    pub input_price: String,
+    pub output_price: String,
+    pub cached_input_price: String,
+    /// thinking preset: "" = off.
+    pub thinking: String,
+    /// Comma-separated thinking levels.
+    pub thinking_levels: String,
+    pub max_context_length: String,
+    pub auto_compact_threshold: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -85,6 +105,45 @@ fn opt(s: &str) -> Option<String> {
         None
     } else {
         Some(s.trim().to_string())
+    }
+}
+
+#[cfg(feature = "server")]
+fn num_f64(s: &str) -> Option<f64> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse::<f64>().ok()
+    }
+}
+
+#[cfg(feature = "server")]
+fn num_i64(s: &str) -> Option<i64> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse::<i64>().ok()
+    }
+}
+
+/// VIBE_HOME is a process-global env var: the smoke tests that set it must
+/// not race each other inside the same test binary.
+#[cfg(all(test, feature = "server"))]
+static SMOKE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(feature = "server")]
+fn csv_list(s: &str) -> Option<Vec<String>> {
+    let v: Vec<String> = s
+        .split(',')
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
     }
 }
 
@@ -240,6 +299,11 @@ mod imp {
                     api_key_env_var: p.api_key_env_var.unwrap_or_default(),
                     backend: p.backend.unwrap_or_default(),
                     api_style: p.api_style.unwrap_or_default(),
+                    api_key: p.api_key.unwrap_or_default(),
+                    reasoning_field_name: p.reasoning_field_name.unwrap_or_default(),
+                    project_id: p.project_id.unwrap_or_default(),
+                    region: p.region.unwrap_or_default(),
+                    enabled: p.enabled.unwrap_or(true),
                 })
                 .collect(),
             models: cfg
@@ -250,6 +314,33 @@ mod imp {
                     provider: m.provider,
                     alias: m.alias.unwrap_or_default(),
                     enabled: m.enabled.unwrap_or(true),
+                    display_name: m.display_name.unwrap_or_default(),
+                    supports_images: m.supports_images.unwrap_or(false),
+                    temperature: m.temperature.map(|v| v.to_string()).unwrap_or_default(),
+                    top_p: m.top_p.map(|v| v.to_string()).unwrap_or_default(),
+                    max_output_tokens: m
+                        .max_output_tokens
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    input_price: m.input_price.map(|v| v.to_string()).unwrap_or_default(),
+                    output_price: m.output_price.map(|v| v.to_string()).unwrap_or_default(),
+                    cached_input_price: m
+                        .cached_input_price
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    thinking: m.thinking.unwrap_or_default(),
+                    thinking_levels: m
+                        .thinking_levels
+                        .map(|v| v.join(", "))
+                        .unwrap_or_default(),
+                    max_context_length: m
+                        .max_context_length
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    auto_compact_threshold: m
+                        .auto_compact_threshold
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
                 })
                 .collect(),
             mcp: cfg.mcp_servers().into_iter().map(mcp_row_from).collect(),
@@ -685,6 +776,11 @@ mod imp {
                 backend: opt(&row.backend),
                 api_style: opt(&row.api_style),
                 extra_headers: Vec::new(),
+                api_key: opt(&row.api_key),
+                reasoning_field_name: opt(&row.reasoning_field_name),
+                project_id: opt(&row.project_id),
+                region: opt(&row.region),
+                enabled: Some(row.enabled),
             });
         })
     }
@@ -703,45 +799,26 @@ mod imp {
         row: ModelRow,
     ) -> Result<(), ServerFnError> {
         let ctx = resolve_ctx(scope, cwd, conn)?;
-        // Preserve the per-model fields not edited by the settings row
-        // (display_name/thinking/thinking_levels and the usage-bar fields
-        // max_context_length/auto_compact_threshold) — `upsert_model`
-        // replaces the whole `[[models]]` entry.
-        let (display_name, thinking, thinking_levels, max_context_length, auto_compact_threshold) = {
-            let cfg = match &ctx {
-                Ctx::Local(dir) => VibeConfigFile::load_at(&dir.join("config.toml"))
-                    .map_err(|e| ServerFnError::new(format!("config load failed: {e}")))?,
-                Ctx::Remote { conn, dir } => {
-                    let raw = remote_vibe::get_remote_vibe_config_checked(conn, dir)
-                        .map_err(ServerFnError::new)?;
-                    VibeConfigFile::from_raw(&raw)
-                }
-            };
-            cfg.models()
-                .into_iter()
-                .find(|m| m.name == row.name.trim())
-                .map(|m| {
-                    (
-                        m.display_name,
-                        m.thinking,
-                        m.thinking_levels,
-                        m.max_context_length,
-                        m.auto_compact_threshold,
-                    )
-                })
-                .unwrap_or((None, None, None, None, None))
-        };
+        // The settings row carries the full model schema (stage 7C); keys
+        // outside the `[[models]]` entry survive the load-modify-save.
         with_cfg(&ctx, |cfg| {
             cfg.upsert_model(&ModelConfig {
                 name: row.name.trim().to_string(),
                 provider: row.provider.trim().to_string(),
                 alias: opt(&row.alias),
                 enabled: Some(row.enabled),
-                display_name,
-                thinking,
-                thinking_levels,
-                max_context_length,
-                auto_compact_threshold,
+                display_name: opt(&row.display_name),
+                thinking: opt(&row.thinking),
+                thinking_levels: csv_list(&row.thinking_levels),
+                max_context_length: num_i64(&row.max_context_length),
+                auto_compact_threshold: num_i64(&row.auto_compact_threshold),
+                temperature: num_f64(&row.temperature),
+                top_p: num_f64(&row.top_p),
+                max_output_tokens: num_i64(&row.max_output_tokens),
+                input_price: num_f64(&row.input_price),
+                output_price: num_f64(&row.output_price),
+                cached_input_price: num_f64(&row.cached_input_price),
+                supports_images: Some(row.supports_images),
             });
         })
     }
@@ -1091,6 +1168,7 @@ mod mcp_smoke {
 
     #[test]
     fn upsert_mcp_scenarios() {
+        let _guard = super::SMOKE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Isolated VIBE_HOME so the smoke test never touches the real ~/.vibe.
         let d = std::env::temp_dir().join(format!("md-smoke7b-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -1193,6 +1271,75 @@ mod mcp_smoke {
         assert!(s.auth.is_none(), "auth cleared on transport switch");
         assert!(s.url.is_none(), "url cleared on transport switch");
         assert_eq!(s.command.as_deref(), Some("sh"));
+
+        std::env::remove_var("VIBE_HOME");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod model_smoke {
+    use super::imp;
+    use super::ModelRow;
+
+    fn read_model(name: &str) -> mistraldeck_vibe::config::ModelConfig {
+        let path = mistraldeck_vibe::vibe_home().join("config.toml");
+        let toml = std::fs::read_to_string(&path).expect("config.toml readable");
+        let cfg = mistraldeck_vibe::config::VibeConfigFile::from_raw(&toml);
+        cfg.models()
+            .into_iter()
+            .find(|m| m.name == name)
+            .unwrap_or_else(|| panic!("model {name} not found"))
+    }
+
+    fn upsert(row: ModelRow) {
+        imp::upsert_model("global", "", None, row)
+            .unwrap_or_else(|e| panic!("upsert failed: {e}"));
+    }
+
+    #[test]
+    fn upsert_model_full_fields() {
+        let _guard = super::SMOKE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Isolated VIBE_HOME so the smoke test never touches the real ~/.vibe.
+        let d = std::env::temp_dir().join(format!("md-smoke7c-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("temp dir");
+        std::env::set_var("VIBE_HOME", &d);
+
+        upsert(ModelRow {
+            name: "test-model".into(),
+            provider: "mistral".into(),
+            alias: "tm".into(),
+            enabled: true,
+            display_name: "Test Model".into(),
+            supports_images: true,
+            temperature: "0.4".into(),
+            top_p: "0.9".into(),
+            max_output_tokens: "4096".into(),
+            input_price: "1.25".into(),
+            output_price: "3.5".into(),
+            cached_input_price: "0.25".into(),
+            thinking: "high".into(),
+            thinking_levels: "low, high, max".into(),
+            max_context_length: "131072".into(),
+            auto_compact_threshold: "104857".into(),
+        });
+        let m = read_model("test-model");
+        assert_eq!(m.display_name.as_deref(), Some("Test Model"));
+        assert_eq!(m.supports_images, Some(true));
+        assert_eq!(m.temperature, Some(0.4));
+        assert_eq!(m.top_p, Some(0.9));
+        assert_eq!(m.max_output_tokens, Some(4096));
+        assert_eq!(m.input_price, Some(1.25));
+        assert_eq!(m.output_price, Some(3.5));
+        assert_eq!(m.cached_input_price, Some(0.25));
+        assert_eq!(m.thinking.as_deref(), Some("high"));
+        assert_eq!(
+            m.thinking_levels.as_deref(),
+            Some(&["low".to_string(), "high".to_string(), "max".to_string()][..])
+        );
+        assert_eq!(m.max_context_length, Some(131072));
+        assert_eq!(m.auto_compact_threshold, Some(104857));
 
         std::env::remove_var("VIBE_HOME");
         let _ = std::fs::remove_dir_all(&d);
