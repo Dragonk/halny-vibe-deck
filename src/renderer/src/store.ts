@@ -31,6 +31,7 @@ interface HistModelCfg {
   thinking?: string;
   thinking_levels?: string[];
 }
+const keyOf = (m: HistModelCfg): string => m.alias || m.name;
 interface HistAgentCfg {
   name: string;
   agent_type?: string;
@@ -157,6 +158,10 @@ interface AppStore {
   syncSessionChips: (localSessionId: string) => Promise<void>;
   /** v0.11.1: restore chips AND the recorded option lists when switching to a session. */
   restoreSessionChips: (localSessionId: string) => Promise<void>;
+  /** v0.13.14: recompute the thinking level list for a freshly picked model
+   * (option lists are model specific and the CLI is not consulted for a
+   * session that is not live yet). */
+  refreshThinkingLevels: (modelValue: string) => Promise<void>;
   /** v0.11.1: last known configOptions per ACP session (option lists are model specific). */
   sessionConfigOptions: Record<string, ConfigOption[]>;
   setSessionConfigOptions: (acpSessionId: string, options: ConfigOption[]) => void;
@@ -655,7 +660,6 @@ export const useStore = create<AppStore>((set, get) => ({
       ]);
       const gmodels = (gcfgRaw && gcfgRaw.models) || [];
       const pmodels = (pcfgRaw && pcfgRaw.models) || [];
-      const keyOf = (m: HistModelCfg): string => m.alias || m.name;
       const merged: HistModelCfg[] = [...gmodels];
       for (const pm of pmodels) {
         const i = merged.findIndex((m) => keyOf(m) === keyOf(pm));
@@ -727,6 +731,59 @@ export const useStore = create<AppStore>((set, get) => ({
       // vibe config unavailable (e.g. remote host down) - keep current chips
     }
     await get().syncSessionChips(localSessionId);
+  },
+
+  // v0.13.14: the thinking option list is model specific - when the user
+  // picks a model before a session is live (no ACP confirmation round
+  // trip), rebuild the level list from the vibe config of the model that
+  // was just selected and clamp the current level to it.
+  refreshThinkingLevels: async (modelValue) => {
+    const session = get().currentSession();
+    const rid = session?.remoteId ?? null;
+    const cwd = session?.workingDirectory || get().workingDirectory || "";
+    try {
+      const [gcfgRaw, pcfgRaw] = await Promise.all([
+        window.api.vibe.getConfig(rid ? "remote" : "global", "", rid ?? undefined) as Promise<HistModelHolder | null>,
+        window.api.vibe.getConfig("project", cwd, rid ?? undefined) as Promise<HistModelHolder | null>,
+      ]);
+      const gmodels = (gcfgRaw && gcfgRaw.models) || [];
+      const pmodels = (pcfgRaw && pcfgRaw.models) || [];
+      const merged: HistModelCfg[] = [...gmodels];
+      for (const pm of pmodels) {
+        const i = merged.findIndex((m) => keyOf(m) === keyOf(pm));
+        if (i >= 0) merged[i] = pm;
+        else merged.push(pm);
+      }
+      const chosen = merged.find((m) => keyOf(m) === modelValue || m.name === modelValue);
+      if (!chosen) return;
+      const levels = chosen.thinking_levels ?? ["off", "low", "medium", "high", "max"];
+      if (levels.length === 0) return;
+      set((s) => ({
+        configOptions: s.configOptions.map((o) =>
+          o.id === "thinking"
+            ? {
+                ...o,
+                currentValue:
+                  typeof o.currentValue === "string" && levels.includes(o.currentValue)
+                    ? o.currentValue
+                    : levels[levels.length - 1],
+                options: levels.map((l) => ({ value: l, name: l.charAt(0).toUpperCase() + l.slice(1) })),
+              }
+            : o,
+        ),
+      }));
+      if (!levels.includes(get().currentThinking)) {
+        const clamped = levels[levels.length - 1];
+        get().setCurrentThinking(clamped);
+        get().patchConfigOption("thinking", clamped);
+        // Record the clamped level so the resume applies a value the new
+        // model actually accepts.
+        const cur = get().currentSession();
+        if (cur) get().updateSession(cur.id, { lastThinking: clamped });
+      }
+    } catch {
+      /* vibe config unavailable - keep the current level list */
+    }
   },
 
   sessionConfigOptions: {},
@@ -1401,6 +1458,26 @@ export const useStore = create<AppStore>((set, get) => ({
       if (sessAfter?.loading) settled.updateSession(localSessionId, { loading: false });
       // Per-session isolation: restore this session’s recorded model/mode/thinking.
       void get().syncSessionChips(localSessionId);
+      // v0.13.14: restore the todo plan snapshot on resume - the CLI does
+      // not replay plan updates during session/load, so without this the
+      // plan card stayed empty after an app restart or a resume.
+      const hasPlan = (get().sessionPlans[acpSessionId]?.length ?? 0) > 0;
+      if (!hasPlan) {
+        void (async () => {
+          try {
+            const preview = rid
+              ? await window.api.stats.remoteSessionPreview(rid, acpSessionId)
+              : await window.api.stats.sessionPreview(acpSessionId);
+            const plan = (preview as { plan?: PlanEntry[] | null } | null)?.plan;
+            // A live Plan event may have arrived while the preview was in
+            // flight - never overwrite a fresher plan with the snapshot.
+            if (plan && plan.length > 0 && (get().sessionPlans[acpSessionId]?.length ?? 0) === 0)
+              get().setSessionPlan(acpSessionId, plan);
+          } catch (err) {
+            console.error("[store] plan restore failed:", err);
+          }
+        })();
+      }
       window.setTimeout(() => {
         const st = useStore.getState();
         if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);

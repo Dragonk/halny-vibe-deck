@@ -921,6 +921,10 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     if (key === 'model') setCurrentModel(value)
     if (key === 'mode') setCurrentMode(value)
     if (key === 'thinking') setCurrentThinking(value)
+    // v0.13.14: the thinking level list is model specific - refresh it
+    // immediately so the picker matches the freshly chosen model even when
+    // the session is not live yet (no ACP confirmation will arrive).
+    if (key === 'model') void useStore.getState().refreshThinkingLevels(value)
     // Record the choice on the session so switching back restores it.
     const sess = currentSession()
     if (sess) {

@@ -545,6 +545,46 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       return
     }
 
+    // v0.13.14: file download for the web client ("Download" in the preview
+    // dock). Cookie-authenticated like every other route; streamed with
+    // Content-Disposition so the browser saves it instead of navigating.
+    if (req.method === "GET" && url === "/api/download") {
+      if (!tokenFromRequest(req)) {
+        sendJson(res, 401, { ok: false, error: "Unauthorized" })
+        return
+      }
+      const qs = new URL(req.url ?? "/", "https://localhost").searchParams
+      const filePath = qs.get("path") ?? ""
+      if (!filePath.startsWith("/") || filePath.split("/").includes("..")) {
+        sendJson(res, 400, { ok: false, error: "Invalid path" })
+        return
+      }
+      void (async () => {
+        try {
+          const st = await fs.promises.stat(filePath)
+          if (!st.isFile()) {
+            sendJson(res, 404, { ok: false, error: "Not found" })
+            return
+          }
+          const name = path.basename(filePath)
+          const asciiName = name.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, "'")
+          res.writeHead(200, {
+            "Content-Type": "application/octet-stream",
+            "Content-Length": st.size,
+            "Content-Disposition":
+              'attachment; filename="' + asciiName + '"; filename*=UTF-8\x5C\x27\x27' + encodeURIComponent(name),
+            "Cache-Control": "no-store",
+          })
+          const stream = fs.createReadStream(filePath)
+          stream.on("error", () => res.destroy())
+          stream.pipe(res)
+        } catch {
+          sendJson(res, 404, { ok: false, error: "Not found" })
+        }
+      })()
+      return
+    }
+
     if (url === "/login") {
       if (tokenFromRequest(req)) {
         res.writeHead(302, { Location: "/" })
