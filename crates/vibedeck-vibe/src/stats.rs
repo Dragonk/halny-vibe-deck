@@ -1075,9 +1075,183 @@ pub fn load_full_session_preview(session_id: &str) -> Option<SessionPreviewData>
     })
 }
 
+// ---------------------------------------------------------------------------
+// History content search (Nexus `searchSessionContent`)
+// ---------------------------------------------------------------------------
+
+/// One content-search hit: the session id plus a short snippet around the
+/// first match (+/-70 chars, whitespace collapsed, capped at 200 chars).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContentMatch {
+    pub session_id: String,
+    pub snippet: String,
+}
+
+/// First-match snippet for `q` inside `text` (case-insensitive): +/-70 chars
+/// around the first hit, whitespace collapsed, max 200 chars. Byte offsets
+/// refer to the lowercased text; when lowercasing changed the string's
+/// shape the original slice can miss char boundaries - fall back to the
+/// lowercased slice instead of panicking.
+fn content_snippet(text: &str, q: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let idx = lower.find(q)?;
+    let from = idx.saturating_sub(70);
+    let to = (idx + q.len() + 70).min(lower.len());
+    let raw = text.get(from..to).or_else(|| lower.get(from..to)).unwrap_or("");
+    let mut snippet = String::new();
+    for word in raw.split_whitespace() {
+        if !snippet.is_empty() {
+            snippet.push(' ');
+        }
+        snippet.push_str(word);
+    }
+    Some(snippet.chars().take(200).collect())
+}
+
+/// Search every session transcript for `query` (case-insensitive): unified
+/// chunk snapshots first, then legacy `messages.jsonl` logs - the first hit
+/// per session wins (Nexus `searchSessionContent`).
+pub fn search_session_content(query: &str) -> Vec<ContentMatch> {
+    search_session_content_in(&sessions_log_dir(), query)
+}
+
+fn search_session_content_in(base: &Path, query: &str) -> Vec<ContentMatch> {
+    let q = query.to_lowercase();
+    let mut out: Vec<ContentMatch> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if q.is_empty() {
+        return out;
+    }
+    // Defensive: chunk snapshots are small, but skip anything huge.
+    const MAX_FILE: u64 = 16 * 1024 * 1024;
+
+    // Unified store: <base>/unified/<id>/chunks/*
+    let unified = base.join("unified");
+    let mut unified_dirs: Vec<PathBuf> = std::fs::read_dir(&unified)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    unified_dirs.sort();
+    for dir in unified_dirs {
+        let session_id = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let chunks = dir.join("chunks");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&chunks)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        files.sort();
+        for f in files {
+            if f.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&f) else { continue };
+            if let Some(snippet) = content_snippet(&text, &q) {
+                if seen.insert(session_id.clone()) {
+                    out.push(ContentMatch {
+                        session_id: session_id.clone(),
+                        snippet,
+                    });
+                }
+                break;
+            }
+        }
+    }
+
+    // Legacy store: <base>/<entry>/messages.jsonl
+    let mut classic_dirs: Vec<PathBuf> = std::fs::read_dir(base)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && *p != unified)
+        .collect();
+    classic_dirs.sort();
+    for dir in classic_dirs {
+        let msg_path = dir.join("messages.jsonl");
+        if !msg_path.is_file() || msg_path.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE {
+            continue;
+        }
+        let session_id = std::fs::read_to_string(dir.join("meta.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| {
+                v.get("session_id")
+                    .and_then(|sid| sid.as_str())
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| {
+                dir.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+        if seen.contains(&session_id) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&msg_path) else { continue };
+        if let Some(snippet) = content_snippet(&text, &q) {
+            if seen.insert(session_id.clone()) {
+                out.push(ContentMatch { session_id, snippet });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_search_snippets_across_layouts() {
+        let base = std::env::temp_dir().join(format!("vd-content-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // Classic layout: session id comes from meta.json.
+        let classic = base.join("sess-a");
+        std::fs::create_dir_all(&classic).unwrap();
+        std::fs::write(classic.join("meta.json"), r#"{"session_id":"abc-123"}"#).unwrap();
+        std::fs::write(
+            classic.join("messages.jsonl"),
+            r#"{"message_id":"m1","role":"user","content":[{"type":"text","text":"fix the gearbox issue now"}]}"#,
+        )
+        .unwrap();
+        // Unified layout: chunk snapshot with messy whitespace.
+        let unified = base.join("unified").join("u-42");
+        std::fs::create_dir_all(unified.join("chunks")).unwrap();
+        std::fs::write(unified.join("meta.json"), r#"{"session_id":"u-42"}"#).unwrap();
+        std::fs::write(
+            unified.join("chunks").join("a.json"),
+            r#"[{"role":"user","content":[{"type":"text","text":"needle in   the   haystack"}]}]"#,
+        )
+        .unwrap();
+        // Junk without messages.jsonl must be skipped.
+        std::fs::create_dir_all(base.join("junk")).unwrap();
+
+        let matches = search_session_content_in(&base, "gearbox");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].session_id, "abc-123");
+        assert!(matches[0].snippet.contains("gearbox"));
+        assert!(matches[0].snippet.chars().count() <= 200);
+
+        let matches = search_session_content_in(&base, "needle");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].session_id, "u-42");
+        assert!(matches[0].snippet.contains("needle in the haystack"));
+
+        assert!(search_session_content_in(&base, "").is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
     #[test]
     fn unified_transcript_from_chunks() {
         let dir = std::env::temp_dir().join(format!("vd-chunks-{}", std::process::id()));

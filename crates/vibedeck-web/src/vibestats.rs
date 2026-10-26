@@ -47,6 +47,14 @@ pub struct SubagentSessionView {
     pub messages: Vec<SubagentMsg>,
 }
 
+/// One content-search hit: the session id plus a snippet around the first
+/// match (History view content search, Nexus `searchSessionContent`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ContentMatchView {
+    pub session_id: String,
+    pub snippet: String,
+}
+
 /// One thinking block of a session preview message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PreviewThinkingView {
@@ -164,6 +172,16 @@ mod imp {
                 .collect()
         })
     }
+
+    pub fn content_matches(query: &str) -> Vec<ContentMatchView> {
+        vibedeck_vibe::stats::search_session_content(query)
+            .into_iter()
+            .map(|m| ContentMatchView {
+                session_id: m.session_id,
+                snippet: m.snippet,
+            })
+            .collect()
+    }
 }
 
 #[server]
@@ -191,4 +209,14 @@ pub async fn api_session_preview(
 ) -> Result<Option<Vec<PreviewMessageView>>, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::session_preview(&session_id))
+}
+
+/// Content search across stored session transcripts (History view).
+#[server]
+pub async fn api_search_session_content(
+    token: String,
+    query: String,
+) -> Result<Vec<ContentMatchView>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::content_matches(&query))
 }
