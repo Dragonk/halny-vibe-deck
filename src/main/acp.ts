@@ -96,6 +96,8 @@ const REQUEST_TIMEOUT_MS = 180_000
 export class AcpManager {
   private process: ChildProcess | null = null
   private pending = new Map<string, PendingRequest>()
+  /** v0.13.12: number of session/prompt requests in flight (turns running). */
+  private turnsInFlight = 0
   private currentSessionId: string | null = null
   /** v0.10.7: boot session primed by the main process - kept so repeated
    * client boots (web/PWA F5, second window) reuse the worker instead of
@@ -999,14 +1001,20 @@ export class AcpManager {
     // regularly exceed the default 3-minute request timeout, which produced
     // a spurious 'ACP request timeout: session/prompt' error while the turn
     // was still streaming in the UI. Allow up to one hour instead.
-    const result = (await this.sendRequest(
-      'session/prompt',
-      {
-        sessionId: sid,
-        prompt: [{ type: 'text', text }]
-      },
-      3_600_000
-    )) as Record<string, unknown>
+    this.turnsInFlight++
+    let result: Record<string, unknown>
+    try {
+      result = (await this.sendRequest(
+        'session/prompt',
+        {
+          sessionId: sid,
+          prompt: [{ type: 'text', text }]
+        },
+        3_600_000
+      )) as Record<string, unknown>
+    } finally {
+      this.turnsInFlight--
+    }
 
     this.emit({
       type: 'PromptComplete',
@@ -1143,6 +1151,11 @@ export class AcpManager {
    *  isRunning() alone cannot tell a healthy worker from such a zombie. */
   async ping(timeoutMs = 8000): Promise<void> {
     await this.sendRequest('session/list', {}, timeoutMs)
+  }
+
+  /** v0.13.12: true while at least one turn (session/prompt) is running. */
+  isTurnInFlight(): boolean {
+    return this.turnsInFlight > 0
   }
 
   async stop(): Promise<void> {

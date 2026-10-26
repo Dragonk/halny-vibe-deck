@@ -954,6 +954,13 @@ export const useStore = create<AppStore>((set, get) => ({
         workingDirectory: vibe.environment?.workingDirectory || created.workingDirectory,
       });
     }
+    // v0.13.12: make the reactivated session current BEFORE the load, like
+    // loadRemoteSession already did. Without this the chat view kept showing
+    // the PREVIOUS session during the replay: no Resuming indicator, no
+    // send guard for the session the user clicked, and an Enter went to the
+    // old session instead (E2E: the prompt raced the load of another session).
+    set({ pendingNewSession: false });
+    get().setCurrentSessionId(localId);
     get().setCurrentView("chat");
     await get().loadAcpSession(localId);
   },
@@ -1378,15 +1385,28 @@ export const useStore = create<AppStore>((set, get) => ({
       await window.api.acp.loadSession(acpSessionId, cwd, rid ?? undefined, hasApplyCfg ? applyCfg : undefined);
       set({ activeAcpSessionId: acpSessionId });
       get().markSessionLive(localSessionId);
+      // v0.13.12: the load has SETTLED - clear the replay-guard flags here,
+      // deterministically. The old fixed safety net (2.5 s local / 15 s
+      // remote) fired while big sessions were still replaying: the Resuming
+      // indicator vanished, the chat looked empty and sending became
+      // possible again while session/load was still in flight, so the
+      // user's prompt raced the load and SessionHistory then replaced the
+      // whole message array, swallowing the just-sent message from the
+      // UI. Main always emits SessionHistory before this promise resolves
+      // and rejects within its 600 s timeout; the timer below only guards
+      // a lost IPC reply and sits beyond that timeout.
+      const settled = get();
+      if (settled.pendingLoadSessionId === acpSessionId) settled.setPendingLoadSessionId(null);
+      const sessAfter = settled.sessions.find((x) => x.id === localSessionId);
+      if (sessAfter?.loading) settled.updateSession(localSessionId, { loading: false });
       // Per-session isolation: restore this session’s recorded model/mode/thinking.
       void get().syncSessionChips(localSessionId);
-      // Safety net: clear flags if no history event arrives (empty session)
       window.setTimeout(() => {
         const st = useStore.getState();
         if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);
         const sess = st.sessions.find((x) => x.id === localSessionId);
         if (sess?.loading) st.updateSession(localSessionId, { loading: false });
-      }, rid ? 15000 : 2500);
+      }, 620_000);
     } catch (err) {
       console.error("[store] ACP session/load failed:", err);
       get().setPendingLoadSessionId(null);
@@ -1576,9 +1596,18 @@ export const useStore = create<AppStore>((set, get) => ({
   ensureAcpWorker: async (remoteId, cwd) => {
     const cfg = get().config;
     const rid = remoteId ?? undefined;
-    if (await window.api.acp.isRunning(rid)) return;
-    if (!rid && !cfg.acpPath) return;
-    get().setAcpStatus("connecting");
+    const running = await window.api.acp.isRunning(rid);
+    // v0.13.12: never short-circuit on a live process handle. A frozen or
+    // hung worker (SIGSTOP, stuck CLI, dead transport) "is running" too, and
+    // resuming against it used to hang until the 600 s session/load timeout
+    // with the Resuming spinner up and sending blocked. Hand EVERY resume
+    // to the main ensure-worker probe: it pings (skipped mid-turn) and
+    // restarts the worker when the probe fails. Only a real spawn flips
+    // the status to connecting.
+    if (!running) {
+      if (!rid && !cfg.acpPath) return;
+      get().setAcpStatus("connecting");
+    }
     await window.api.acp.ensureWorker(cfg.acpPath || "vibe-acp", cwd || cfg.workingDirectory || ".", rid);
   },
 

@@ -166,6 +166,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     setSessionStarting,
     addRecentFolder,
     streamingSessions,
+    pendingLoadSessionId,
     busySessions,
     stoppingSessions,
     addToMessageQueue,
@@ -489,6 +490,18 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
     // v0.13.1: a new send attempt clears the stale error banner
     setAcpError(null)
+    // v0.13.12: Enter bypasses the disabled send button - guard here too.
+    // Sending while session/load is still replaying this session races the
+    // load; SessionHistory then replaces the messages and the just-sent
+    // message disappears from the UI.
+    const earlySess = currentSession()
+    if (
+      earlySess?.acpSessionId &&
+      (earlySess.loading ||
+        useStore.getState().pendingLoadSessionId === earlySess.acpSessionId)
+    ) {
+      return
+    }
 
     // Extract @path markers and fetch file/folder contents for ACP
     const atPathRegex = /@([^\s]+)/g
@@ -937,8 +950,18 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   const isCurrentSessionBusy = currentSessionId != null && busySessions.includes(currentSessionId)
   // v0.10.5: stop request in flight - show explicit stopping feedback.
   const isStoppingSession = currentSessionId != null && stoppingSessions.includes(currentSessionId)
+  // v0.13.12: a resume in flight is not sendable - a prompt racing the
+  // session/load replay gets swallowed when SessionHistory replaces the
+  // whole message array.
+  const sendGuardSess = currentSession()
+  const isCurrentSessionResuming =
+    !!sendGuardSess?.acpSessionId &&
+    (sendGuardSess.loading || pendingLoadSessionId === sendGuardSess.acpSessionId)
   const canSend =
-    (inputText.trim().length > 0 || pastedImages.length > 0) && !isSending && !isCurrentSessionBusy
+    (inputText.trim().length > 0 || pastedImages.length > 0) &&
+    !isSending &&
+    !isCurrentSessionBusy &&
+    !isCurrentSessionResuming
 
   const handleStop = useCallback(() => {
     const sess = currentSession()

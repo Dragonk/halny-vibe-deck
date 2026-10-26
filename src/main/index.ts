@@ -392,6 +392,12 @@ app.whenReady().then(() => {
     // so replaying a session does not litter the remote with empty sessions.
     const mgr = remoteId ? getRemoteManager(remoteId) : acpManager
     if (mgr.isRunning()) {
+      // v0.13.12: never probe (and possibly restart) a worker while a
+      // turn is running - the CLI may not answer session/list within the
+      // 8 s ping window mid-turn, and a restart would kill a healthy long
+      // turn. The prompt request timeout and the stop button own the
+      // dead-turn detection.
+      if (mgr.isTurnInFlight()) return
       // v0.8.0: a live process handle is not proof the transport works - a
       // stale ssh worker never emits exit and used to hang resume for the
       // full 180 s request timeout. Probe it; restart on failure.
