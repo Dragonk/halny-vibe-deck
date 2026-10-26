@@ -410,6 +410,11 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
   const dlProgress = (received: number, total: number | null): void =>
     emit({ phase: "download", received, total, percent: total ? Math.floor((received / total) * 100) : null })
   const q = (s: string): string => "'" + s + "'"
+  // v0.13.2: never depend on PATH when spawning the helper - use the
+  // absolute powershell.exe location when it exists (it always does on Windows).
+  const sysRoot = process.env.SystemRoot ?? "C:\\Windows"
+  const psExeAbs = path.join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  const psExe = process.platform === "win32" && fs.existsSync(psExeAbs) ? psExeAbs : "powershell.exe"
   const tmp = path.join(os.tmpdir(), "nexus-update-" + Date.now())
   fs.mkdirSync(tmp, { recursive: true })
   try {
@@ -460,20 +465,40 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
         "Log ('nexus update start, pid " + process.pid + ", installer ' + " + q(installer) + ")",
         "try { Wait-Process -Id " + process.pid + " -Timeout 90 -ErrorAction Stop } catch { Log 'app still running after 90s, forcing stop'; Stop-Process -Id " + process.pid + " -Force -ErrorAction SilentlyContinue }",
         "Start-Sleep -Milliseconds 1500",
+        "function Fail($m) {",
+        "  Log $m",
+        "  try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Log ('relaunch failed: ' + $_.Exception.Message) }",
+        "  exit 1",
+        "}",
         "Log 'launching installer'",
-        "$p = Start-Process -FilePath " + q(installer) + " -ArgumentList '/S' -Wait -PassThru",
+        "$p = $null",
+        "try { $p = Start-Process -FilePath " + q(installer) + " -ArgumentList '/S' -Wait -PassThru -ErrorAction Stop } catch { Fail ('installer failed: ' + $_.Exception.Message) }",
         "Log ('installer exit code ' + $p.ExitCode)",
         "Log 'relaunching app'",
-        "Start-Process -FilePath " + q(exe),
+        "try { Start-Process -FilePath " + q(exe) + " -ErrorAction Stop } catch { Fail ('relaunch failed: ' + $_.Exception.Message) }",
         "Log 'done'",
       ].join("\n")
-      fs.writeFileSync(scriptPath, ps, "utf8")
+      // v0.13.2: the BOM is CRITICAL. Windows PowerShell 5.1 reads BOM-less
+      // files as ANSI, so every non-ASCII character in the embedded paths
+      // (e.g. diacritics in the user profile folder) turns into mojibake and
+      // the helper fails silently: app closed, files not replaced, no relaunch.
+      fs.writeFileSync(scriptPath, "\uFEFF" + ps, "utf8")
       emit({ phase: "install", received: fs.statSync(installer).size, total: fs.statSync(installer).size, percent: 100 })
-      spawn(
-        "powershell.exe",
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-        { detached: true, stdio: "ignore", windowsHide: true }
-      ).unref()
+      spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      })
+        .on("error", (e) => {
+          // If powershell cannot even start, leave a trace in the log -
+          // otherwise the app quits with no update and no explanation.
+          try {
+            fs.appendFileSync(logPath, new Date().toISOString() + " powershell spawn failed: " + String(e) + "\n")
+          } catch {
+            /* nothing else to do - we are quitting */
+          }
+        })
+        .unref()
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
       return { ok: true, error: null }
@@ -552,12 +577,26 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
         "try { Remove-Item -LiteralPath " + q(tmp) + " -Recurse -Force -ErrorAction SilentlyContinue } catch {}",
         "Log 'done'",
       ].join("\n")
-      fs.writeFileSync(scriptPath, ps, "utf8")
-      spawn(
-        "powershell.exe",
-        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-        { detached: true, stdio: "ignore", windowsHide: true }
-      ).unref()
+      // v0.13.2: the BOM is CRITICAL. Windows PowerShell 5.1 reads BOM-less
+      // files as ANSI, so every non-ASCII character in the embedded paths
+      // (e.g. diacritics in the user profile folder) turns into mojibake and
+      // the helper fails silently: app closed, files not replaced, no relaunch.
+      fs.writeFileSync(scriptPath, "\uFEFF" + ps, "utf8")
+      spawn(psExe, ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      })
+        .on("error", (e) => {
+          // If powershell cannot even start, leave a trace in the log -
+          // otherwise the app quits with no update and no explanation.
+          try {
+            fs.appendFileSync(logPath, new Date().toISOString() + " powershell spawn failed: " + String(e) + "\n")
+          } catch {
+            /* nothing else to do - we are quitting */
+          }
+        })
+        .unref()
       emit({ phase: "relaunch", received: 0, total: null, percent: null })
       app.quit()
       return { ok: true, error: null }
