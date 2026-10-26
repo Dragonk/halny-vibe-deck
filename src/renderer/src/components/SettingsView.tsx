@@ -1302,7 +1302,9 @@ export default function SettingsView(): React.JSX.Element {
                 </button>
                 <button
                   className="action-btn"
-                  disabled={web || updatesBusy || !(updateInfo.app?.updateAvailable ?? false)}
+                  // v0.13.15: web (headless) clients may update the app too -
+                  // the self-update runs in the main process, no window needed.
+                  disabled={updatesBusy || !(updateInfo.app?.updateAvailable ?? false)}
                   onClick={() => void handleUpdateAppNow()}
                 >
                   {tr.updatesUpdateButton}

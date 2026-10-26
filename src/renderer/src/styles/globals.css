@@ -5887,7 +5887,10 @@ code {
 .header-menu-btn { display: none; }
 .session-item { -webkit-touch-callout: none; }
 
-@media (max-width: 768px) {
+/* v0.13.15: mobile layout applies only to real touch devices (phones).
+   A narrow desktop browser window keeps the Electron-like layout: inline
+   sidebar/dock at their configured width, no fixed full-screen overlays. */
+@media (max-width: 768px) and (pointer: coarse) {
     /* ===== v0.7.2: mobile refinements (PWA / serve mode) ===== */
     /* dvh: the URL bar must not eat the input card on mobile browsers.
        --vv-h (visual viewport height, kept in sync from App.tsx) also keeps
@@ -6032,6 +6035,12 @@ code {
 .pgh-plus:hover { opacity: 1; background: var(--panel-hover); }
 .nsd-folder-pick { display: block; width: calc(100% - 22px); margin: 6px 2px 2px 20px; padding: 6px 10px; background: none; border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); font-size: 12px; text-align: left; cursor: pointer; }
 .nsd-folder-pick:hover { color: var(--text); border-color: var(--text-muted); background: var(--panel-hover); }
+/* v0.13.15: new-project button pinned to the sidebar top - visible in the
+   browser client without scrolling a long session list. */
+.sidebar-sessions-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.sidebar-sessions-header .sidebar-sessions-label { padding: 0; }
+.sidebar-np-btn { display: block; padding: 2px 6px; background: none; border: 1px dashed var(--border); border-radius: 8px; color: var(--text-muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.sidebar-np-btn:hover { color: var(--text); border-color: var(--text-muted); background: var(--panel-hover); }
 
 .history-load-more { padding: 10px 0 4px; text-align: center; font-size: 12px; opacity: 0.65; }
 .history-remote-marker { opacity: 0.85; }

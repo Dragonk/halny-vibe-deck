@@ -376,7 +376,18 @@ export default function Sidebar(): React.JSX.Element {
         ✕
       </button>
 
-      <div className="sidebar-sessions-label">{tr.sessions}</div>
+      <div className="sidebar-sessions-header">
+        <span className="sidebar-sessions-label">{tr.sessions}</span>
+        {/* v0.13.15: the new-project button must be visible without
+            scrolling the session list (reported missing in the browser). */}
+        <button
+          className="sidebar-np-btn"
+          onClick={openNewProjectPicker}
+          title={tr.newProjectLabel}
+        >
+          🆕 {tr.newProjectLabel}
+        </button>
+      </div>
 
       <nav className="session-list session-list-projects">
         {displayedSessions.length === 0 && (

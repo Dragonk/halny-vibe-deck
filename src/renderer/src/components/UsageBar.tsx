@@ -130,7 +130,10 @@ export default function UsageBar(): React.JSX.Element | null {
   // AUTO-COMPACT THRESHOLD, not the window - using it as the denominator
   // would conflate the compact limit with the real context size. A model
   // that declares no window simply has no gauge (tokens still show).
-  const ctxWindow = modelInfo?.window ?? null
+  // v0.13.15: headless fallback - when the model config is unreachable or
+  // declares no window (common in web/serve mode), use u.contextSize from
+  // usage_update as the reference so the gauge stays visible.
+  const ctxWindow = modelInfo?.window ?? (u.contextSize > 0 ? u.contextSize : null)
   const hasContext = ctxWindow !== null && ctxWindow > 0
   const ctxPct = hasContext ? Math.min(100, (u.contextUsed / (ctxWindow as number)) * 100) : 0
   const threshold = modelInfo?.threshold ?? null

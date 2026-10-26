@@ -200,6 +200,15 @@ export default function App(): React.JSX.Element {
               linkAcpSession(localSess.id, acpSessId)
               if (sessionTitle) store.updateSession(localSess.id, { name: sessionTitle })
             } else if (!rid) {
+              // v0.13.15: create a local session ONLY when this client has
+              // no current session at all (first priming draft after boot).
+              // When the user is viewing a resumed/busy session, an unknown
+              // SessionInitialized (a priming replay, another client starting
+              // a chat, a re-broadcast after worker restart) must never spawn
+              // an extra sidebar entry - that is the duplicate-session bug.
+              // The unknown ACP session is imported through SessionsList
+              // instead, which dedupes by acpSessionId.
+              if (!localSess || store.pendingLoadSessionId) break
               const newSess = store.addSession()
               linkAcpSession(newSess.id, acpSessId)
               if (sessionTitle) store.updateSession(newSess.id, { name: sessionTitle })

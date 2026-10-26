@@ -740,6 +740,12 @@ export const useStore = create<AppStore>((set, get) => ({
   // was just selected and clamp the current level to it.
   refreshThinkingLevels: async (modelValue) => {
     const session = get().currentSession();
+    // v0.13.15: for a LIVE session the CLI itself confirms the new model's
+    // option set (set_config_option response -> ConfigOptionsUpdate). The
+    // local rebuild below raced that confirmation and clobbered the correct
+    // thinking levels with config-file defaults, so the picker showed levels
+    // the freshly chosen model does not have.
+    if (session && get().liveSessions.includes(session.id)) return;
     const rid = session?.remoteId ?? null;
     const cwd = session?.workingDirectory || get().workingDirectory || "";
     try {
@@ -755,10 +761,20 @@ export const useStore = create<AppStore>((set, get) => ({
         if (i >= 0) merged[i] = pm;
         else merged.push(pm);
       }
-      const chosen = merged.find((m) => keyOf(m) === modelValue || m.name === modelValue);
+      const chosen = merged.find(
+        (m) =>
+          keyOf(m) === modelValue ||
+          m.name === modelValue ||
+          m.alias === modelValue ||
+          m.display_name === modelValue,
+      );
       if (!chosen) return;
-      const levels = chosen.thinking_levels ?? ["off", "low", "medium", "high", "max"];
-      if (levels.length === 0) return;
+      // Only an explicitly declared level list may override the dropdown.
+      // Without the declaration the CLI decides at resume time (the list
+      // arrives with SessionInitialized) - guessing defaults here produced
+      // levels the freshly picked model does not offer.
+      const levels = chosen.thinking_levels;
+      if (!levels || levels.length === 0) return;
       set((s) => ({
         configOptions: s.configOptions.map((o) =>
           o.id === "thinking"
@@ -1072,17 +1088,38 @@ export const useStore = create<AppStore>((set, get) => ({
     return messageQueue[0];
   },
 
-  // Jump the queue: move the picked message to the front and break off the
-  // running turn. The turn-end flush in App then sends it as the very next
-  // prompt. An idle session has no turn to cancel - the message just moves
-  // to the front and the next send (or flush) picks it up first.
+  // Jump the queue. When a turn is really running, move the picked message
+  // to the front and break the turn - the turn-end flush in App then sends
+  // it as the very next prompt. When nothing is actually running (idle
+  // session, or a busy flag left over from an interrupted resume) there is
+  // no turn-end flush that would ever pick the message up - it would sit in
+  // the queue forever, so it is sent right away instead.
   sendQueuedNow: (id) => {
     const { messageQueue } = get();
     const msg = messageQueue.find((m) => m.id === id);
     if (!msg) return;
+    const sessionId = get().currentSessionId;
+    const session = sessionId ? get().sessions.find((s) => s.id === sessionId) : undefined;
+    if (!session || !session.acpSessionId) return;
+    const isBusy = sessionId != null && get().busySessions.includes(sessionId);
+    if (!isBusy) {
+      // Force send: no turn to break, so deliver the message immediately.
+      set({ messageQueue: messageQueue.filter((m) => m.id !== id) });
+      const acpSessionId = useStore.getState().activeAcpSessionId ?? session.acpSessionId;
+      const promptText = session.contextSummary
+        ? `${session.contextSummary}\n\nUser: ${msg.content}`
+        : msg.content;
+      get().addUserMessage(msg.content);
+      get().markSessionBusy(session.id);
+      window.api.acp
+        .sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined)
+        .catch((err: Error) => {
+          get().markSessionIdle(session.id);
+          set({ acpError: err.message });
+        });
+      return;
+    }
     set({ messageQueue: [msg, ...messageQueue.filter((m) => m.id !== id)] });
-    const session = get().sessions.find((s) => s.id === get().currentSessionId);
-    if (!session?.acpSessionId) return;
     window.api.acp.cancelSession(session.acpSessionId, session.remoteId ?? undefined).catch(console.error);
   },
 

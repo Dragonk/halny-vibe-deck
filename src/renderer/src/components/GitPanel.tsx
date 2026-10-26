@@ -122,9 +122,35 @@ export default function GitPanel({ cwd, remoteId }: Props): React.JSX.Element {
     }
   }
 
+  // v0.13.15: binary files (images, pdf, archives...) have no line diff -
+  // git only reports "Binary files differ". Open the file preview instead,
+  // which renders images, pdf, sheets and archives properly.
+  const BINARY_EXTS = new Set([
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff',
+    'pdf', 'zip', 'docx', 'xlsx', 'xls',
+    'mp3', 'wav', 'ogg', 'mp4', 'webm', 'mov', 'avi', 'mkv',
+    'woff', 'woff2', 'ttf', 'otf', 'eot', '7z', 'rar', 'gz', 'tgz', 'bz2',
+  ])
+
   const openDiff = async (filePath: string): Promise<void> => {
-    const diff = await window.api.git.diffFile(cwd, filePath, rid ?? undefined)
-    openDiffPreview(filePath.split(/[/\\]/).pop() ?? filePath, filePath, diff ?? '', rid)
+    let diff = ''
+    try {
+      diff = (await window.api.git.diffFile(cwd, filePath, rid ?? undefined)) ?? ''
+    } catch {
+      diff = ''
+    }
+    const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+    const isBinary =
+      BINARY_EXTS.has(ext) ||
+      diff.startsWith('Binary files') ||
+      diff.startsWith('GIT binary patch')
+    if (isBinary) {
+      // The file preview renders images, pdf, sheets and archives - far more
+      // useful than git's "Binary files differ" one-liner.
+      useStore.getState().openFilePreviewTab(filePath, filePath.split(/[/\\]/).pop() ?? filePath, rid)
+      return
+    }
+    openDiffPreview(filePath.split(/[/\\]/).pop() ?? filePath, filePath, diff, rid)
   }
 
   return (

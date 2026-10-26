@@ -562,7 +562,10 @@ app.whenReady().then(() => {
     const win = mainWinRef;
     return updateApp((p) => {
       try {
-        win?.webContents.send("updates:progress", p);
+        if (win) win.webContents.send("updates:progress", p);
+        // v0.13.15: headless mode has no window - progress must still reach
+        // the web clients (the window mirror does not exist without one).
+        else broadcastToWeb("updates:progress", [p]);
       } catch {
         /* window may already be tearing down */
       }

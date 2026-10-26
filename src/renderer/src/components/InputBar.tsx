@@ -718,11 +718,28 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           const hasRetryCfg = !!(retryCfg.mode || retryCfg.model || retryCfg.thinking)
           try {
             // Real resume: session/load replays the full history
+            // v0.13.15: raise the replay guard so streaming/replay events
+            // from this load cannot leak into other sessions mid-resume.
+            useStore.getState().setPendingLoadSessionId(acpSessId)
             await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
+            useStore.getState().setPendingLoadSessionId(null)
             useStore.getState().markSessionLive(currentSess.id)
+            // v0.13.15: the replay replaced the whole message array, so the
+            // user message added before the resume vanished from the chat.
+            // The prompt was never delivered (that is why this path runs),
+            // so the replay cannot contain it - re-add it.
+            const stAfter = useStore.getState()
+            if (stAfter.currentSessionId === currentSess.id) {
+              const sessNow = stAfter.currentSession()
+              const alreadyThere = !!sessNow && sessNow.messages.some(
+                (m) => m.sender === 'user' && m.content === textToSend,
+              )
+              if (!alreadyThere) stAfter.addUserMessage(textToSend, attachments)
+            }
             useStore.getState().markSessionBusy(currentSess.id)
             await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined)
           } catch (loadErr) {
+            useStore.getState().setPendingLoadSessionId(null)
             // v0.13.11: never fall back to a new session here. The old
             // fallback silently created a fresh ACP session and sent the
             // prompt into it, splitting the chat into a duplicate sidebar
@@ -847,11 +864,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     if (filePath) insertTextAtCursor('@' + filePath + ' ')
   }
 
-  const handleAttachDirectory = async (): Promise<void> => {
-    setShowAttachMenu(false)
-    const folder = await window.api.dialog.openFolder()
-    if (folder) insertTextAtCursor('@' + folder + '/ ')
-  }
+  // v0.13.15: the attach menu adds ONLY files and images - the directory
+  // attach option is gone (explicit user requirement, all modes).
 
   const handleAttachImage = async (): Promise<void> => {
     setShowAttachMenu(false)
@@ -1206,11 +1220,8 @@ export default function InputBar({ config }: Props): React.JSX.Element {
                   <button className="folder-picker-item" onClick={handleAttachFile}>
                     <span>📄 {tr.attachFile}</span>
                   </button>
-                  {!isWebMode() && (
-                    <button className="folder-picker-item" onClick={handleAttachDirectory}>
-                      <span>📁 {tr.attachDirectory}</span>
-                    </button>
-                  )}
+                  {/* v0.13.15: the + menu attaches ONLY files and images -
+                      no folder option (explicit user requirement, all modes). */}
                   <button className="folder-picker-item" onClick={handleAttachImage}>
                     <span>🖼️ {tr.attachImage}</span>
                   </button>
