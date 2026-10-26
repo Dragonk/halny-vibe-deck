@@ -1,9 +1,9 @@
 {
-  "name": "mistral-vibe-nexus",
-  "version": "0.13.15",
-  "description": "Mistral Vibe Nexus - AI Agent Desktop App",
+  "name": "halny-vibe-deck",
+  "version": "0.14.0",
+  "description": "Halny Vibe Deck — unofficial desktop client for the Mistral Vibe coding agent",
   "main": "out/main/index.js",
-  "author": "Mistral Vibe Nexus",
+  "author": "Dragonk",
   "scripts": {
     "dev": "concurrently -k \"npm run dev:main\" \"npm run dev:renderer\" \"npm run dev:electron\"",
     "dev:renderer": "vite",
@@ -22,11 +22,11 @@
     "create-portable": "node scripts/create-portable.js",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
     "start": "electron .",
-    "dist:linux": "npm run build && electron-builder --linux dir && cd dist/linux-unpacked && zip -r ../vibe-nexus-linux-x64.zip ."
+    "dist:linux": "npm run build && electron-builder --linux dir && cd dist/linux-unpacked && zip -r ../halny-vibe-deck-linux-x64.zip ."
   },
   "build": {
-    "appId": "com.mistral.vibe-nexus",
-    "productName": "Mistral Vibe Nexus",
+    "appId": "com.dragonk.halny-vibe-deck",
+    "productName": "Halny Vibe Deck",
     "directories": {
       "output": "dist",
       "buildResources": "resources"
@@ -56,7 +56,7 @@
       ],
       "icon": "resources/icon.ico",
       "signAndEditExecutable": false,
-      "artifactName": "Mistral-Vibe-Nexus-Setup-${version}.exe"
+      "artifactName": "Halny-Vibe-Deck-Setup-${version}.exe"
     },
     "nsis": {
       "oneClick": false,
@@ -88,7 +88,7 @@
       ],
       "icon": "resources/icon.png",
       "category": "Development",
-      "artifactName": "vibe-nexus-${version}-x64.AppImage"
+      "artifactName": "halny-vibe-deck-${version}-x64.AppImage"
     }
   },
   "dependencies": {

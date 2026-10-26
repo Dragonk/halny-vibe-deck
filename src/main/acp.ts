@@ -877,7 +877,7 @@ export class AcpManager {
     // Initialize handshake (no clientCapabilities — vibe-acp rejects unexpected fields)
     const result = (await this.sendRequest('initialize', {
       protocolVersion: 1,
-      clientInfo: { name: 'Mistral Vibe Nexus', version: '0.3.0' }
+      clientInfo: { name: 'Halny Vibe Deck', version: '0.14.0' }
     })) as Record<string, unknown>
 
     this.emit({

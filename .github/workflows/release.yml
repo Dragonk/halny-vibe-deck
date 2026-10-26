@@ -84,7 +84,7 @@ jobs:
           USE_HARD_LINKS: 'false'
 
       - name: Zip user-dir bundle
-        run: cd dist/linux-unpacked && zip -r ../vibe-nexus-linux-x64.zip .
+        run: cd dist/linux-unpacked && zip -r ../halny-vibe-deck-linux-x64.zip .
 
       - name: Package AppImage
         run: npx electron-builder --linux AppImage
@@ -97,7 +97,7 @@ jobs:
         with:
           name: linux-build
           path: |
-            dist/vibe-nexus-linux-x64.zip
+            dist/halny-vibe-deck-linux-x64.zip
             dist/*.AppImage
           if-no-files-found: error
 
@@ -106,7 +106,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/vibe-nexus-linux-x64.zip
+            dist/halny-vibe-deck-linux-x64.zip
             dist/*.AppImage
             dist/*.yml
           generate_release_notes: true

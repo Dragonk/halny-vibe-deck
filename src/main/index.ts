@@ -281,6 +281,20 @@ function showFailedUpdateNotice(): void {
 const cliKey = argVal("key");
 
 app.whenReady().then(() => {
+  // v0.14.0 rebrand: one-time migration of user data from the legacy
+  // "mistral-vibe-nexus" directory so settings survive the rename.
+  try {
+    const userDataDir = app.getPath("userData");
+    if (!fs.existsSync(userDataDir)) {
+      const legacyDir = join(app.getPath("appData"), "mistral-vibe-nexus");
+      if (fs.existsSync(legacyDir)) {
+        console.log("[rebrand] migrating user data from", legacyDir);
+        fs.cpSync(legacyDir, userDataDir, { recursive: true });
+      }
+    }
+  } catch (err) {
+    console.error("[rebrand] user data migration failed", err);
+  }
   // v0.13.10: headless self-update apply mode. The OLD app spawns the NEW
   // executable with --apply-update right before it exits (updates.ts);
   // this instance swaps the files and relaunches - no window is created.

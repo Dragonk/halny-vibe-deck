@@ -5,7 +5,7 @@ const archiver = require('archiver');
 
 const distPath = path.join(__dirname, '..', 'dist');
 const pkg = require(path.join(__dirname, '..', 'package.json'));
-const zipPath = path.join(distPath, 'Mistral-Vibe-Nexus-' + pkg.version + '-portable.zip');
+const zipPath = path.join(distPath, 'Halny-Vibe-Deck-' + pkg.version + '-portable.zip');
 const unpackedPath = path.join(distPath, 'win-unpacked');
 
 console.log('Creating portable zip...');

@@ -14,7 +14,7 @@ import { buildInstalledUpdateCmd, extractZip, locatePayloadExe } from "./updateC
 // mistral-vibe CLI (PyPI). The renderer orchestrates session restore after a
 // CLI upgrade; this module only reports versions and performs the upgrades.
 
-const GITHUB_REPO = "Dragonk/mistral-vibe-nexus"
+const GITHUB_REPO = "Dragonk/halny-vibe-deck"
 const PYPI_PACKAGE = "mistral-vibe"
 
 export type AppFlavor = "dev" | "installed" | "portable" | "appimage"
@@ -47,7 +47,7 @@ function fetchJson(url: string, timeoutMs = 15000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
-      { headers: { "User-Agent": "mistral-vibe-nexus-updater", Accept: "application/json" }, timeout: timeoutMs },
+      { headers: { "User-Agent": "halny-vibe-deck-updater", Accept: "application/json" }, timeout: timeoutMs },
       (res) => {
         if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
           res.resume()
@@ -108,7 +108,7 @@ export function appFlavor(): AppFlavor {
     }
     return "portable"
   }
-  // Linux dir layout (vibe-nexus-linux-x64.zip via install-linux.sh).
+  // Linux dir layout (halny-vibe-deck-linux-x64.zip via install-linux.sh).
   return "portable"
 }
 
@@ -339,7 +339,7 @@ function downloadTo(
       reject(new Error("Too many redirects while downloading"))
       return
     }
-    const req = https.get(url, { headers: { "User-Agent": "mistral-vibe-nexus-updater" }, timeout: 120000 }, (res) => {
+    const req = https.get(url, { headers: { "User-Agent": "halny-vibe-deck-updater" }, timeout: 120000 }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume()
         const next = new URL(res.headers.location, url).toString()

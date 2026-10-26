@@ -126,7 +126,7 @@ export async function ensureCertificate(serve: ServeConfig): Promise<{ certPem: 
       /* regenerate below */
     }
   }
-    const pems = await selfsigned.generate([{ name: "commonName", value: "Mistral Vibe Nexus" }], {
+    const pems = await selfsigned.generate([{ name: "commonName", value: "Halny Vibe Deck" }], {
       notAfterDate: new Date(Date.now() + 825 * 24 * 60 * 60 * 1000),
       keySize: 2048,
       algorithm: "sha256",
@@ -150,7 +150,7 @@ export async function regenerateCertificate(serve: ServeConfig): Promise<{ certP
     throw new Error("Custom certificate in use - remove cert/key paths first")
   }
   const dir = userDataServeDir()
-    const pems = await selfsigned.generate([{ name: "commonName", value: "Mistral Vibe Nexus" }], {
+    const pems = await selfsigned.generate([{ name: "commonName", value: "Halny Vibe Deck" }], {
       notAfterDate: new Date(Date.now() + 825 * 24 * 60 * 60 * 1000),
       keySize: 2048,
       algorithm: "sha256",
@@ -244,7 +244,7 @@ function loginPageHtml(acceptLanguage: string | undefined): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mistral Vibe Nexus</title>
+<title>Halny Vibe Deck</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -270,7 +270,7 @@ function loginPageHtml(acceptLanguage: string | undefined): string {
 <body>
 <div class="card">
   <div class="lock">&#128274;</div>
-  <h1>Mistral Vibe Nexus</h1>
+  <h1>Halny Vibe Deck</h1>
   <div class="sub">${L.sub}</div>
   <form id="f" autocomplete="off">
     <label for="u">${L.user}</label>

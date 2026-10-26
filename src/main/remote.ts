@@ -218,7 +218,7 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
         jsonrpc: "2.0",
         id: initId,
         method: "initialize",
-        params: { protocolVersion: 1, clientInfo: { name: "Mistral Vibe Nexus", version: "0.6.0" } },
+        params: { protocolVersion: 1, clientInfo: { name: "Halny Vibe Deck", version: "0.14.0" } },
       }) + "\n",
     )
     setTimeout(() => {

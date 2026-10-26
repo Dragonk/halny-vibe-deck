@@ -1,7 +1,7 @@
 {
-  "name": "Mistral Vibe Nexus",
-  "short_name": "Nexus",
-  "description": "Mistral Vibe Nexus — client for the Mistral Vibe agent",
+  "name": "Halny Vibe Deck",
+  "short_name": "Halny",
+  "description": "Halny Vibe Deck — unofficial client for the Mistral Vibe coding agent",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
