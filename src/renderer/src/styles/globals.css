@@ -267,6 +267,16 @@ code {
     height: 100%;
     cursor: col-resize;
     z-index: 10;
+    touch-action: none;
+}
+/* v1.0.2: wider invisible hit area so the handle is grabbable by touch */
+.sidebar-resize-handle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -8px;
+    right: -8px;
 }
 
 .sidebar-resize-handle:hover {
@@ -4306,6 +4316,16 @@ code {
     width: 5px;
     cursor: col-resize;
     z-index: 10;
+    touch-action: none;
+}
+/* v1.0.2: wider invisible hit area so the handle is grabbable by touch */
+.dock-resize-handle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -8px;
+    right: -8px;
 }
 .dock-resize-handle:hover {
     background: var(--accent-dim);

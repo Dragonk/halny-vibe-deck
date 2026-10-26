@@ -129,29 +129,38 @@ export default function Sidebar(): React.JSX.Element {
     setCtxMenu(null)
   }, [hideSession, hideProject])
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  // v1.0.2: pointer events (same fix as the dock handle) so sidebar resizing
+  // also works on touchscreens and can never get stuck without a mouseup.
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      /* capture is best-effort */
+    }
     setIsResizing(true)
   }, [])
 
   useEffect(() => {
     if (!isResizing) return
 
-    const handleMouseMove = (e: MouseEvent): void => {
+    const handlePointerMove = (e: PointerEvent): void => {
       const newWidth = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, e.clientX))
       setSidebarWidth(newWidth)
     }
 
-    const handleMouseUp = (): void => {
+    const handlePointerUp = (): void => {
       setIsResizing(false)
     }
 
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp)
+    document.addEventListener('pointercancel', handlePointerUp)
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+      document.removeEventListener('pointercancel', handlePointerUp)
     }
   }, [isResizing])
 
@@ -584,7 +593,7 @@ export default function Sidebar(): React.JSX.Element {
         </button>
       </nav>
 
-      <div className="sidebar-resize-handle" onMouseDown={handleMouseDown} />
+      <div className="sidebar-resize-handle" onPointerDown={handlePointerDown} />
 
       {ctxMenu && (
         <div className="ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }}>

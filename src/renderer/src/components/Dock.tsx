@@ -6,6 +6,10 @@ import GitPanel from './GitPanel'
 import FilePreview from './FilePreview'
 
 const MIN_DOCK_WIDTH = 260
+// v1.0.2: sane default when no width was ever persisted (fresh installs used
+// to render the dock squeezed to its content width, ~200px, with no way to
+// see it was resizable).
+const DEFAULT_DOCK_WIDTH = 420
 // v0.13.8: minimum space kept for the chat column when the dock is dragged
 // wide - the dock can now span almost the whole window (the old hard cap
 // of 720px wasted most of the screen on ultrawide monitors).
@@ -55,12 +59,24 @@ export default function Dock(): React.JSX.Element | null {
   const activePreview = previewTabs.find((t) => t.id === activePreviewId) ?? null
   const activeTabKind: 'files' | 'git' | 'preview' = activePreview ? 'preview' : dockTab
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  // v1.0.2: pointer events instead of mouse events. The mouse-only drag was
+  // broken in three real-world cases: touchscreens and the install-from-browser
+  // PWA (mouse events never fire at all), a missed mouseup when the drag ended
+  // outside the window (which left the dock stuck in resizing mode forever),
+  // and move events swallowed while the cursor crossed an iframe or another
+  // capture target mid-drag. Pointer capture delivers every move to us until
+  // pointerup/pointercancel, for mouse, touch and pen alike.
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault()
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        /* capture is best-effort */
+      }
       setIsResizing(true)
       startXRef.current = e.clientX
-      startWRef.current = dockWidth
+      startWRef.current = dockWidth ?? DEFAULT_DOCK_WIDTH
     },
     [dockWidth],
   )
@@ -68,24 +84,26 @@ export default function Dock(): React.JSX.Element | null {
   useEffect(() => {
     if (!isResizing) return
 
-    const handleMouseMove = (e: MouseEvent): void => {
+    const handlePointerMove = (e: PointerEvent): void => {
       const delta = startXRef.current - e.clientX
       const newWidth = Math.min(currentMaxDockWidth(), Math.max(MIN_DOCK_WIDTH, startWRef.current + delta))
       setDockWidth(newWidth)
     }
 
-    const handleMouseUp = (): void => {
+    const handlePointerUp = (): void => {
       setIsResizing(false)
       // Persist width once the drag ends
       const store = useStore.getState()
       window.api.config.save({ ...store.config, dockWidth: store.dockWidth }).catch(console.error)
     }
 
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+    document.addEventListener('pointermove', handlePointerMove)
+    document.addEventListener('pointerup', handlePointerUp)
+    document.addEventListener('pointercancel', handlePointerUp)
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
+      document.removeEventListener('pointermove', handlePointerMove)
+      document.removeEventListener('pointerup', handlePointerUp)
+      document.removeEventListener('pointercancel', handlePointerUp)
     }
   }, [isResizing, setDockWidth])
 
@@ -93,7 +111,7 @@ export default function Dock(): React.JSX.Element | null {
   // (or a width persisted on a bigger monitor is restored).
   useEffect(() => {
     const clampDockWidth = (): void => {
-      const w = useStore.getState().dockWidth
+      const w = useStore.getState().dockWidth ?? DEFAULT_DOCK_WIDTH
       const max = currentMaxDockWidth()
       if (w > max) setDockWidth(max)
     }
@@ -109,9 +127,12 @@ export default function Dock(): React.JSX.Element | null {
   return (
     <aside
       className={`dock ${isResizing ? 'dock-resizing' : ''}`}
-      style={{ width: dockWidth }}
+      style={{ width: dockWidth ?? DEFAULT_DOCK_WIDTH }}
     >
-      <div className="dock-resize-handle" onMouseDown={handleMouseDown} />
+      <div
+        className="dock-resize-handle"
+        onPointerDown={handlePointerDown}
+      />
       <button
         className="mobile-panel-close"
         title={tr.closePanelLabel}
