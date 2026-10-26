@@ -33,6 +33,14 @@ struct RemotePane {
     loaded: bool,
 }
 
+/// One entry of a unified remote folder: a locally mirrored session, or a
+/// CLI session discovered on the remote host (Nexus v0.13.1).
+#[derive(Clone)]
+enum RemoteItem {
+    Mirror(usize, SessionMeta),
+    Cli(RemoteSessionInfo),
+}
+
 /// Open context menu (right click): fixed position + the hide target.
 #[derive(Clone)]
 struct CtxMenu {
@@ -660,9 +668,9 @@ fn backend_el(
 }
 
 /// One SSH remote connection group in the sidebar (Nexus
-/// remote-project-group): header with the live dot, quick-start
-/// locations, remote CLI sessions and the connection's open mirrors
-/// grouped per remote working directory.
+/// remote-project-group): header with the live dot and the unified
+/// folder list — configured locations plus per-cwd session groups,
+/// deduplicated (Nexus v0.13.1).
 #[allow(clippy::too_many_arguments)]
 fn remote_conn_el(
     state: Signal<ClientState>,
@@ -699,79 +707,84 @@ fn remote_conn_el(
         ),
     };
 
-    // quick-start locations
-    let loc_els: Vec<Element> = conn
-        .locations
-        .iter()
-        .map(|l| {
-            let name = short_dir(l);
-            let title = l.clone();
-            rsx! {
-                button {
-                    class: "session-item remote-location-item",
-                    title: "{title}",
-                    onclick: {
-                        let state = state.clone();
-                        let conn_id = conn_id.clone();
-                        let l = l.clone();
-                        move |_| {
-                            let state = state.clone();
-                            let conn_id = conn_id.clone();
-                            let l = l.clone();
-                            spawn(async move {
-                                let _ = crate::api::api_start_remote_session(token(&state), conn_id, l).await;
-                                crate::state::refresh(state.clone()).await;
-                                crate::app::set_view(state, View::Chat);
-                            });
-                        }
-                    },
-                    div { class: "session-item-content",
-                        div { class: "session-item-row",
-                            span { class: "remote-loc-icon", "📁" }
-                            span { class: "session-name", "{name}" }
-                        }
-                    }
-                }
-            }
-        })
-        .collect();
-
-    // mirrors grouped per remote working directory
-    let mut wd_groups: Vec<(String, Vec<(usize, SessionMeta)>)> = Vec::new();
-    for (idx, m) in &mirrors {
-        let wd = m.working_directory.clone();
-        match wd_groups.iter_mut().find(|(w, _)| w == &wd) {
-            Some((_, list)) => list.push((*idx, m.clone())),
-            None => wd_groups.push((wd, vec![(*idx, m.clone())])),
-        }
-    }
-    let wd_els: Vec<Element> = wd_groups
-        .iter()
-        .map(|(wd, list)| {
-            remote_wd_el(
-                state.clone(),
-                lang.clone(),
-                &conn_id,
-                wd,
-                list,
-                collapsed.clone(),
-                current,
-                confirm.clone(),
-                ctx.clone(),
-            )
-        })
-        .collect();
-
-    // remote CLI sessions not yet mirrored locally
+    // v0.13.1: unified per-remote folder list — configured locations
+    // plus session cwd groups, deduplicated. A folder with sessions
+    // renders as a collapsible group (chevron + count), a folder without
+    // sessions renders as a location item that starts a new remote
+    // session on click; the ＋ button always starts a session.
     let mirrored: Vec<String> = mirrors
         .iter()
         .filter_map(|(_, m)| m.acp_session_id.clone())
         .collect();
-    let cli_els: Vec<Element> = pane
-        .sessions
+    let norm_wd = |p: &str| -> String {
+        if p.len() > 1 && p.ends_with('/') {
+            p[..p.len() - 1].to_string()
+        } else {
+            p.to_string()
+        }
+    };
+    // group the connection's sessions (open mirrors + unmirrored remote
+    // CLI sessions) per working directory
+    let mut wd_groups: Vec<(String, Vec<RemoteItem>)> = Vec::new();
+    for (idx, m) in &mirrors {
+        let wd = m.working_directory.clone();
+        match wd_groups.iter_mut().find(|(w, _)| w == &wd) {
+            Some((_, list)) => list.push(RemoteItem::Mirror(*idx, m.clone())),
+            None => wd_groups.push((wd, vec![RemoteItem::Mirror(*idx, m.clone())])),
+        }
+    }
+    for s in pane.sessions.iter().filter(|s| !mirrored.contains(&s.session_id)) {
+        let wd = s.cwd.clone();
+        match wd_groups.iter_mut().find(|(w, _)| w == &wd) {
+            Some((_, list)) => list.push(RemoteItem::Cli(s.clone())),
+            None => wd_groups.push((wd, vec![RemoteItem::Cli(s.clone())])),
+        }
+    }
+    let group_for = |nt: &str| -> Vec<RemoteItem> {
+        wd_groups
+            .iter()
+            .find(|(w, _)| norm_wd(w) == nt)
+            .map(|(_, l)| l.clone())
+            .unwrap_or_default()
+    };
+    // configured locations first (config order), then unseen cwd groups
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut folders: Vec<(String, Vec<RemoteItem>)> = Vec::new();
+    for l in &conn.locations {
+        let nt = norm_wd(l);
+        if seen.contains(&nt) {
+            continue;
+        }
+        seen.insert(nt.clone());
+        folders.push((l.clone(), group_for(&nt)));
+    }
+    for (gwd, glist) in &wd_groups {
+        let nt = norm_wd(gwd);
+        if seen.contains(&nt) {
+            continue;
+        }
+        seen.insert(nt);
+        folders.push((gwd.clone(), glist.clone()));
+    }
+    let folder_els: Vec<Element> = folders
         .iter()
-        .filter(|s| !mirrored.contains(&s.session_id))
-        .map(|s| remote_cli_el(state.clone(), lang.clone(), &conn_id, s))
+        .map(|(wd, list)| {
+            if list.is_empty() {
+                remote_loc_item_el(state.clone(), &conn_id, wd)
+            } else {
+                remote_folder_el(
+                    state.clone(),
+                    lang.clone(),
+                    &conn_id,
+                    wd,
+                    list,
+                    collapsed.clone(),
+                    current,
+                    confirm.clone(),
+                    ctx.clone(),
+                )
+            }
+        })
         .collect();
 
     rsx! {
@@ -824,24 +837,24 @@ fn remote_conn_el(
                 span { class: "{dot_cls}", title: "{dot_title}" }
             }
             if !is_collapsed {
-                {loc_els.iter().cloned()}
-                {wd_els.iter().cloned()}
-                {cli_els.iter().cloned()}
+                {folder_els.iter().cloned()}
             }
         }
     }
 }
 
-/// One remote working-directory sub-group (Nexus remote-cwd-group):
-/// header + the mirrored sessions + a "+" that starts a new remote
-/// session in that directory.
+/// One unified remote folder that has sessions (Nexus remote-cwd-group,
+/// v0.13.1): collapsible header (chevron + count) with a ＋ that always
+/// starts a new remote session in that directory; rows are the
+/// connection's mirrored sessions and its unmirrored remote CLI
+/// sessions.
 #[allow(clippy::too_many_arguments)]
-fn remote_wd_el(
+fn remote_folder_el(
     state: Signal<ClientState>,
     lang: String,
     conn_id: &str,
     wd: &str,
-    list: &[(usize, SessionMeta)],
+    items: &[RemoteItem],
     collapsed: Signal<Vec<String>>,
     current: Option<usize>,
     confirm: Signal<Option<ConfirmTarget>>,
@@ -859,11 +872,20 @@ fn remote_wd_el(
     } else {
         short_dir(wd)
     };
-    let count = list.len().to_string();
-    let rows: Vec<Element> = list
+    let count = items.len().to_string();
+    let rows: Vec<Element> = items
         .iter()
-        .map(|(idx, m)| {
-            session_row(state.clone(), lang.clone(), *idx, m, current, confirm.clone(), ctx.clone())
+        .map(|it| match it {
+            RemoteItem::Mirror(idx, m) => session_row(
+                state.clone(),
+                lang.clone(),
+                *idx,
+                m,
+                current,
+                confirm.clone(),
+                ctx.clone(),
+            ),
+            RemoteItem::Cli(s) => remote_cli_el(state.clone(), lang.clone(), conn_id, s),
         })
         .collect();
     let wd2 = wd.to_string();
@@ -913,6 +935,43 @@ fn remote_wd_el(
             }
             if !is_collapsed {
                 {rows.iter().cloned()}
+            }
+        }
+    }
+}
+
+/// A configured folder without sessions (Nexus v0.13.1): a location
+/// item — clicking it starts a new remote session there.
+fn remote_loc_item_el(state: Signal<ClientState>, conn_id: &str, loc: &str) -> Element {
+    let name = short_dir(loc);
+    let title = loc.to_string();
+    let conn_id = conn_id.to_string();
+    let loc = loc.to_string();
+
+    rsx! {
+        button {
+            class: "session-item remote-location-item",
+            title: "{title}",
+            onclick: {
+                let state = state.clone();
+                let conn_id = conn_id.clone();
+                let loc = loc.clone();
+                move |_| {
+                    let state = state.clone();
+                    let conn_id = conn_id.clone();
+                    let loc = loc.clone();
+                    spawn(async move {
+                        let _ = crate::api::api_start_remote_session(token(&state), conn_id, loc).await;
+                        crate::state::refresh(state.clone()).await;
+                        crate::app::set_view(state, View::Chat);
+                    });
+                }
+            },
+            div { class: "session-item-content",
+                div { class: "session-item-row",
+                    span { class: "remote-loc-icon", "📁" }
+                    span { class: "session-name", "{name}" }
+                }
             }
         }
     }
