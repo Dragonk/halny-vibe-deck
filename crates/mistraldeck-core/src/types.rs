@@ -284,6 +284,12 @@ pub struct ChatSession {
     /// `setUsage` in `previewSession`).
     #[serde(default)]
     pub usage: crate::snapshot::UsageStats,
+    /// v0.13.7 (Nexus App.tsx `streamingState.acpMsgId`): messageId of the
+    /// text currently streaming into the last AI message. A NEW messageId
+    /// finalizes the segment and opens the next bubble, so the intermediate
+    /// texts of one turn no longer merge into a single giant message.
+    #[serde(default)]
+    pub stream_msg_id: Option<String>,
 }
 
 impl ChatSession {
@@ -304,6 +310,46 @@ impl ChatSession {
             last_mode: None,
             last_thinking: None,
             usage: crate::snapshot::UsageStats::default(),
+            stream_msg_id: None,
+        }
+    }
+
+    /// v0.13.7: a new agent messageId starts a new agent message (Nexus
+    /// `MessageChunk` split). The "current" fallback (CLI without
+    /// messageIds) never splits, keeping the merged shape of old turns.
+    pub fn split_on_message(&mut self, message_id: &str) {
+        if message_id == "current" {
+            return;
+        }
+        if self.stream_msg_id.is_some() && self.stream_msg_id.as_deref() != Some(message_id) {
+            self.finalize_streaming_segment();
+        }
+        self.stream_msg_id = Some(message_id.to_string());
+    }
+
+    /// v0.13.7: reasoning that arrives after a streamed text segment opens
+    /// the NEXT agent message - the thought block lands above its own text,
+    /// not glued under the previous segment (Nexus `ThinkingChunk` split).
+    pub fn split_on_thought(&mut self) {
+        if self.stream_msg_id.take().is_some() {
+            self.finalize_streaming_segment();
+        }
+    }
+
+    /// Close the streaming segment: the AI message completes and its
+    /// thinking blocks are marked done (Nexus `finalizeAiMessage`).
+    fn finalize_streaming_segment(&mut self) {
+        if let Some(msg) = self.messages.last_mut() {
+            if msg.sender == MessageSender::Ai {
+                msg.is_complete = true;
+                let now = now_ms();
+                for block in &mut msg.thinking {
+                    block.is_complete = true;
+                    if block.completed_at == 0 {
+                        block.completed_at = now;
+                    }
+                }
+            }
         }
     }
 }

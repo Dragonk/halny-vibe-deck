@@ -283,6 +283,7 @@ impl Engine {
                 .or_else(|| st.current_session().map(|s| s.usage.clone()))
                 .unwrap_or_default(),
             session_load_progress: current_slot.and_then(|s| s.load_progress.clone()),
+            ai_stream_msg_id: st.current_session().and_then(|s| s.stream_msg_id.clone()),
             approval: current_slot.and_then(|s| s.approval.clone()),
             question: current_slot.and_then(|s| s.question.clone()),
             working_directory: cfg.working_directory.clone(),
@@ -662,6 +663,9 @@ impl Engine {
             let mut st = self.state.lock().unwrap();
             let Some(session) = st.current_session_mut() else { return };
             session.messages.push(Message::new_user(&text));
+            // v0.13.7: a new user turn resets the segment split state
+            // (Nexus clears `streamingState` per turn).
+            session.stream_msg_id = None;
             if let Some(m) = session.messages.last_mut() {
                 m.attachments = attachments;
             }
@@ -1359,6 +1363,7 @@ impl Engine {
                                 session.messages = messages;
                                 session.plan = plan;
                                 session.last_active_ms = now_ms();
+                                session.stream_msg_id = None;
                             }
                         }
                         slot.busy = false;
@@ -1428,6 +1433,7 @@ impl Engine {
                     message_id,
                     text,
                 } => {
+                    let mid = message_id.clone();
                     // v0.10.2 dedup guard (Nexus `dedupChunk`): a delta chunk
                     // followed by the full accumulated text must not
                     // duplicate content. Clients receive the deduped text;
@@ -1447,6 +1453,11 @@ impl Engine {
                             .iter_mut()
                             .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
                         {
+                            // v0.13.7: a new agent messageId starts a new
+                            // agent message (Nexus `streamingState.acpMsgId`
+                            // split) - intermediate texts of one turn no
+                            // longer merge into a single giant bubble.
+                            session.split_on_message(&mid);
                             {
                                 let msg = ensure_ai_message(session);
                                 msg.content.push_str(&out_text);
@@ -1464,6 +1475,7 @@ impl Engine {
                     block_id,
                     text,
                 } => {
+                    let bid = block_id.clone();
                     // Same dedup guard for reasoning streams (kind "t", per
                     // thought block — Nexus keys thoughts by messageId).
                     let out_text =
@@ -1481,13 +1493,18 @@ impl Engine {
                             .iter_mut()
                             .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
                         {
+                            // v0.13.7: reasoning that arrives after a
+                            // streamed text opens the NEXT agent message -
+                            // the thought lands above its own text, not
+                            // glued under the previous segment.
+                            session.split_on_thought();
                             let msg = ensure_ai_message(session);
                             match msg.thinking.last_mut() {
-                                Some(block) if !block.is_complete => {
+                                Some(block) if !block.is_complete && block.id == bid => {
                                     block.content.push_str(&out_text)
                                 }
                                 _ => msg.thinking.push(mistraldeck_core::types::ThinkingBlock {
-                                    id: "thinking".into(),
+                                    id: bid,
                                     content: out_text,
                                     is_complete: false,
                                     started_at: mistraldeck_core::types::now_ms(),
@@ -2213,6 +2230,54 @@ mod zombie_tests {
     }
 }
 
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+    use mistraldeck_core::types::MessageSender;
+
+    #[test]
+    fn split_on_message_opens_new_bubble() {
+        let mut session = ChatSession::new("s", "/tmp");
+        session.split_on_message("m1");
+        ensure_ai_message(&mut session).content = "one".into();
+        // Same id: the chunk stays in the current bubble.
+        session.split_on_message("m1");
+        assert_eq!(session.messages.len(), 1);
+        // A different id finalizes the segment; the next chunk opens a
+        // new bubble (ensure_ai_message sees a completed last message).
+        session.split_on_message("m2");
+        assert_eq!(session.messages.len(), 1);
+        assert!(session.messages[0].is_complete);
+        ensure_ai_message(&mut session);
+        assert_eq!(session.messages.len(), 2);
+        assert!(!session.messages[1].is_complete);
+        assert_eq!(session.messages[1].sender, MessageSender::Ai);
+        assert_eq!(session.stream_msg_id.as_deref(), Some("m2"));
+        // The "current" fallback (CLI without messageIds) never splits.
+        session.split_on_message("current");
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(session.stream_msg_id.as_deref(), Some("m2"));
+    }
+
+    #[test]
+    fn thought_after_text_opens_next_segment() {
+        let mut session = ChatSession::new("s", "/tmp");
+        session.split_on_message("m1");
+        ensure_ai_message(&mut session).content = "one".into();
+        // Reasoning after streamed text closes the current segment.
+        session.split_on_thought();
+        assert_eq!(session.messages.len(), 1);
+        assert!(session.messages[0].is_complete);
+        assert!(session.stream_msg_id.is_none());
+        // A thought BEFORE any streamed text (a tool call opened the
+        // bubble) stays in the same message - no split.
+        ensure_ai_message(&mut session);
+        session.split_on_thought();
+        assert_eq!(session.messages.len(), 2);
+        assert!(!session.messages[1].is_complete);
+    }
+}
 
 #[cfg(test)]
 mod dedupe_tests {

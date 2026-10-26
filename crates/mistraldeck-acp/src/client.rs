@@ -976,21 +976,53 @@ fn parse_new_session(
 fn replay_to_messages(updates: &[Value]) -> (Vec<Message>, Vec<PlanEntry>) {
     let mut messages: Vec<Message> = Vec::new();
     let mut plan: Vec<PlanEntry> = Vec::new();
+    // v0.13.7 (Nexus `assembleHistory` currentAiMid): messageId of the
+    // text inside the current AI message. Replay splits agent segments
+    // on a messageId change exactly like the live stream; the "current"
+    // fallback (CLI without messageIds) never changes, so old replays
+    // keep the merged single-message shape.
+    let mut current_ai_mid: Option<String> = None;
     for params in updates {
         for ev in crate::convert::convert_update(params) {
             match ev {
                 AcpEvent::UserMessageChunk { text, .. } => {
                     messages.push(Message::new_user(&text));
+                    current_ai_mid = None;
                 }
-                AcpEvent::MessageChunk { text, .. } => {
+                AcpEvent::MessageChunk {
+                    text,
+                    message_id,
+                    ..
+                } => {
+                    // v0.13.7: a new messageId starts a new agent message,
+                    // matching the live stream split.
+                    if current_ai_mid.is_some()
+                        && current_ai_mid.as_deref() != Some(message_id.as_str())
+                    {
+                        if let Some(last) = messages.last_mut() {
+                            last.is_complete = true;
+                        }
+                    }
+                    current_ai_mid = Some(message_id.clone());
                     ensure_replay_ai_message(&mut messages).content.push_str(&text);
                 }
-                AcpEvent::ThinkingChunk { text, .. } => {
+                AcpEvent::ThinkingChunk { text, block_id, .. } => {
+                    // v0.13.7: reasoning that arrives after a streamed text
+                    // belongs to the next segment - close the current one
+                    // before attaching it (Nexus resets currentAiMid).
+                    if current_ai_mid.is_some() {
+                        if let Some(last) = messages.last_mut() {
+                            last.is_complete = true;
+                        }
+                        current_ai_mid = None;
+                    }
                     let msg = ensure_replay_ai_message(&mut messages);
                     match msg.thinking.last_mut() {
-                        Some(block) if !block.is_complete => block.content.push_str(&text),
+                        Some(block) if !block.is_complete && block.id == block_id => {
+                            block.content.push_str(&text)
+                        }
                         _ => msg.thinking.push(ThinkingBlock {
-                            id: "thinking".into(),
+                            id: block_id,
                             content: text,
                             is_complete: false,
                             started_at: mistraldeck_core::types::now_ms(),
@@ -1096,6 +1128,65 @@ mod tests {
         assert_eq!(sid, "abc");
         assert_eq!(modes.len(), 2);
         assert_eq!(current_mode_id.as_deref(), Some("smart-approve"));
+    }
+
+    #[test]
+    fn replay_splits_agent_segments_on_message_id() {
+        // v0.13.7: agent_message_chunk entries with different messageIds
+        // become separate AI messages (Nexus `currentAiMid` split).
+        let updates = vec![
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "hello" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "text", "text": "seg one" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": { "type": "text", "text": "seg two" } }
+            }),
+        ];
+        let (messages, _) = replay_to_messages(&updates);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].sender, MessageSender::User);
+        assert_eq!(messages[1].sender, MessageSender::Ai);
+        assert_eq!(messages[1].content, "seg one");
+        assert_eq!(messages[2].sender, MessageSender::Ai);
+        assert_eq!(messages[2].content, "seg two");
+    }
+
+    #[test]
+    fn replay_thought_after_text_opens_next_segment() {
+        // v0.13.7: reasoning streamed after a text segment belongs to the
+        // NEXT message - the thought lands above its own text.
+        let updates = vec![
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "hello" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "text", "text": "seg one" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_thought_chunk", "messageId": "b1", "content": { "type": "text", "text": "hmm" } }
+            }),
+            serde_json::json!({
+                "sessionId": "s1",
+                "update": { "sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": { "type": "text", "text": "seg two" } }
+            }),
+        ];
+        let (messages, _) = replay_to_messages(&updates);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].content, "seg one");
+        assert!(messages[1].thinking.is_empty());
+        assert_eq!(messages[2].content, "seg two");
+        assert_eq!(messages[2].thinking.len(), 1);
+        assert_eq!(messages[2].thinking[0].id, "b1");
+        assert_eq!(messages[2].thinking[0].content, "hmm");
     }
 
     #[test]

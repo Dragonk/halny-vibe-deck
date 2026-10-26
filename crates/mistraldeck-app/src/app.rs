@@ -397,6 +397,8 @@ impl MistraldeckApp {
         if let Some(session) = self.current_session_mut() {
             session.messages.push(Message::new_user(&text));
             session.last_active_ms = mistraldeck_core::types::now_ms();
+            // v0.13.7: a new user turn resets the segment split state.
+            session.stream_msg_id = None;
         }
         let Some(session) = self.current_session() else {
             return;
@@ -548,6 +550,7 @@ impl MistraldeckApp {
                         session.messages = messages;
                         session.plan = plan;
                         session.last_active_ms = mistraldeck_core::types::now_ms();
+                        session.stream_msg_id = None;
                     }
                 }
             }
@@ -567,19 +570,35 @@ impl MistraldeckApp {
                 self.finalize_open_messages();
                 self.push_system_message(&format!("⚠ {context}: {message}"));
             }
-            AcpEvent::MessageChunk { session_id, text, .. } => {
+            AcpEvent::MessageChunk {
+                session_id,
+                text,
+                message_id,
+            } => {
                 if let Some(session) = self.session_by_acp_id_mut(&session_id) {
+                    // v0.13.7: a new agent messageId starts a new agent
+                    // message (Nexus `streamingState.acpMsgId` split).
+                    session.split_on_message(&message_id);
                     let msg = ensure_ai_message(session);
                     msg.content.push_str(&text);
                 }
             }
-            AcpEvent::ThinkingChunk { session_id, text, .. } => {
+            AcpEvent::ThinkingChunk {
+                session_id,
+                text,
+                block_id,
+            } => {
                 if let Some(session) = self.session_by_acp_id_mut(&session_id) {
+                    // v0.13.7: reasoning after streamed text opens the
+                    // NEXT agent message (Nexus `ThinkingChunk` split).
+                    session.split_on_thought();
                     let msg = ensure_ai_message(session);
                     match msg.thinking.last_mut() {
-                        Some(block) if !block.is_complete => block.content.push_str(&text),
+                        Some(block) if !block.is_complete && block.id == block_id => {
+                            block.content.push_str(&text)
+                        }
                         _ => msg.thinking.push(ThinkingBlock {
-                            id: "thinking".into(),
+                            id: block_id,
                             content: text,
                             is_complete: false,
                             started_at: 0,

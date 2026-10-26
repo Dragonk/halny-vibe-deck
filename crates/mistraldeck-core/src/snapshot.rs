@@ -452,6 +452,11 @@ pub struct Snapshot {
     /// (None when nothing is resuming) — lazy-resume overlay.
     #[serde(default)]
     pub session_load_progress: Option<SessionLoadProgress>,
+    /// v0.13.7: messageId of the text streaming into the current session
+    /// (client-side mirror of `ChatSession.stream_msg_id` - the segment
+    /// split state, kept in sync by the engine snapshot).
+    #[serde(default)]
+    pub ai_stream_msg_id: Option<String>,
     pub approval: Option<PendingApproval>,
     pub question: Option<PendingQuestion>,
     pub working_directory: String,
@@ -475,6 +480,7 @@ impl Default for Snapshot {
             backend_sessions: Vec::new(),
             usage: UsageStats::default(),
             session_load_progress: None,
+            ai_stream_msg_id: None,
             approval: None,
             question: None,
             working_directory: String::new(),

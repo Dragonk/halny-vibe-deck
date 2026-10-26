@@ -157,22 +157,50 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         return false;
     }
     match e {
-        AcpEvent::MessageChunk { session_id, text, .. } => {
+        AcpEvent::MessageChunk {
+            session_id,
+            text,
+            message_id,
+        } => {
             if is_current(&session_id) {
                 let mut s = state.write();
+                // v0.13.7: a new agent messageId starts a new agent
+                // message (Nexus `streamingState.acpMsgId` split) -
+                // mirror the engine so a snapshot refetch finds the
+                // same shape. The "current" fallback never splits.
+                if message_id != "current" {
+                    if s.snapshot.ai_stream_msg_id.is_some()
+                        && s.snapshot.ai_stream_msg_id.as_deref() != Some(message_id.as_str())
+                    {
+                        finalize_segment_pub(&mut s.snapshot.current_messages);
+                    }
+                    s.snapshot.ai_stream_msg_id = Some(message_id.clone());
+                }
                 let msg = ensure_ai_message_pub(&mut s.snapshot.current_messages);
                 msg.content.push_str(&text);
             }
             false
         }
-        AcpEvent::ThinkingChunk { session_id, text, .. } => {
+        AcpEvent::ThinkingChunk {
+            session_id,
+            text,
+            block_id,
+        } => {
             if is_current(&session_id) {
                 let mut s = state.write();
+                // v0.13.7: reasoning after streamed text opens the NEXT
+                // agent message - the thought lands above its own text,
+                // not glued under the previous segment.
+                if s.snapshot.ai_stream_msg_id.take().is_some() {
+                    finalize_segment_pub(&mut s.snapshot.current_messages);
+                }
                 let msg = ensure_ai_message_pub(&mut s.snapshot.current_messages);
                 match msg.thinking.last_mut() {
-                    Some(block) if !block.is_complete => block.content.push_str(&text),
+                    Some(block) if !block.is_complete && block.id == block_id => {
+                        block.content.push_str(&text)
+                    }
                     _ => msg.thinking.push(mistraldeck_core::types::ThinkingBlock {
-                        id: "thinking".into(),
+                        id: block_id,
                         content: text,
                         is_complete: false,
                         started_at: mistraldeck_core::types::now_ms(),
@@ -268,6 +296,24 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         // Everything else (SessionReady, SessionHistory, SessionsList,
         // errors, PromptCompleted...) is structural -> refetch snapshot.
         _ => true,
+    }
+}
+
+/// v0.13.7: close the streaming AI segment before the next one opens -
+/// the message completes and its thinking blocks are marked done (Nexus
+/// `finalizeAiMessage`, mirrored engine-side).
+fn finalize_segment_pub(messages: &mut Vec<Message>) {
+    if let Some(msg) = messages.last_mut() {
+        if msg.sender == MessageSender::Ai {
+            msg.is_complete = true;
+            let now = mistraldeck_core::types::now_ms();
+            for block in &mut msg.thinking {
+                block.is_complete = true;
+                if block.completed_at == 0 {
+                    block.completed_at = now;
+                }
+            }
+        }
     }
 }
 
@@ -445,6 +491,8 @@ pub async fn submit(mut state: Signal<ClientState>, text: String) {
     // v0.13.1: a new send attempt clears the stale error banner
     // (Nexus InputBar handleSend).
     state.write().snapshot.acp_error.clear();
+    // v0.13.7: a new user turn resets the segment split mirror.
+    state.write().snapshot.ai_stream_msg_id = None;
     let tok = token(&state);
     let _ = crate::api::api_send_message(tok, text).await;
 }
