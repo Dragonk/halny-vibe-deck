@@ -1,5 +1,6 @@
 import https from "https"
 import os from "os"
+import zlib from "zlib"
 import fs from "fs"
 import path from "path"
 import crypto from "crypto"
@@ -346,9 +347,16 @@ const MIME: Record<string, string> = {
   pdf: "application/pdf",
 }
 
-function sendFile(res: ServerResponse, filePath: string): void {
+const COMPRESSIBLE_EXT = new Set(["html", "js", "mjs", "css", "json", "webmanifest", "svg", "txt", "md"])
+// v0.13.4: compressing on every request is wasteful - cache the gzipped
+// body per file and invalidate by mtime (index.html changes in place).
+const gzipCache = new Map<string, { mtimeMs: number; buf: Buffer }>()
+
+function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, immutable: boolean): void {
   let data: Buffer
+  let mtimeMs = 0
   try {
+    mtimeMs = fs.statSync(filePath).mtimeMs
     data = fs.readFileSync(filePath)
   } catch {
     res.writeHead(404, { "Content-Type": "text/plain" })
@@ -357,13 +365,35 @@ function sendFile(res: ServerResponse, filePath: string): void {
   }
   const ext = filePath.split(".").pop()?.toLowerCase() ?? ""
   const mime = MIME[ext] ?? "application/octet-stream"
-  res.writeHead(200, {
+  const headers: Record<string, string> = {
     "Content-Type": mime,
-    "Cache-Control": "no-cache",
+    // v0.13.4: content-hashed bundles never change - a browser may keep
+    // them for a year; the app shell and root files revalidate per load.
+    "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Strict-Transport-Security": "max-age=31536000",
-  })
+    "Vary": "Accept-Encoding",
+  }
+  const acceptGzip = String(req.headers["accept-encoding"] ?? "").includes("gzip")
+  if (acceptGzip && COMPRESSIBLE_EXT.has(ext) && data.length > 1024) {
+    const hit = gzipCache.get(filePath)
+    let gz: Buffer
+    if (hit && hit.mtimeMs === mtimeMs) {
+      gz = hit.buf
+    } else {
+      gz = zlib.gzipSync(data, { level: 6 })
+      if (gzipCache.size > 128) gzipCache.clear()
+      gzipCache.set(filePath, { mtimeMs, buf: gz })
+    }
+    headers["Content-Encoding"] = "gzip"
+    headers["Content-Length"] = String(gz.length)
+    res.writeHead(200, headers)
+    res.end(gz)
+    return
+  }
+  headers["Content-Length"] = String(data.length)
+  res.writeHead(200, headers)
   res.end(data)
 }
 
@@ -537,7 +567,7 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
     }
 
     if (url === "/") {
-      sendFile(res, path.join(rendererDir, "index.html"))
+      sendFile(req, res, path.join(rendererDir, "index.html"), false)
       return
     }
     if (url === "/sw.js") {
@@ -560,7 +590,7 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       sendJson(res, 403, { ok: false, error: "Forbidden" })
       return
     }
-    sendFile(res, filePath)
+    sendFile(req, res, filePath, norm.startsWith("/assets/"))
   }
 
   server = https.createServer({ key: keyPem, cert: certPem }, reqHandler)
