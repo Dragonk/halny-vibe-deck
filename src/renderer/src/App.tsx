@@ -208,7 +208,16 @@ export default function App(): React.JSX.Element {
               // an extra sidebar entry - that is the duplicate-session bug.
               // The unknown ACP session is imported through SessionsList
               // instead, which dedupes by acpSessionId.
-              if (!localSess || store.pendingLoadSessionId) break
+              // v1.0.1: the v0.13.15 guard inverted its own comment:
+              // it broke exactly when this client had NO current session
+              // (fresh install, or the pending new-session draft), so the
+              // boot prime was never linked and the first prompt went to
+              // an invisible session while the user message was dropped.
+              // Create the local session when there is no current session;
+              // only a session currently being viewed (localSess) or a
+              // pending load is left alone (v0.13.15 duplicate-session
+              // fix stays intact).
+              if (localSess || store.pendingLoadSessionId) break
               const newSess = store.addSession()
               linkAcpSession(newSess.id, acpSessId)
               if (sessionTitle) store.updateSession(newSess.id, { name: sessionTitle })
