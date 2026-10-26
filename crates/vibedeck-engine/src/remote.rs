@@ -542,11 +542,11 @@ pub fn load_remote_session_preview(
 // ---------------------------------------------------------------------------
 
 /// PyPI package the CLI is published under (Nexus PYPI_PACKAGE).
-const PYPI_PACKAGE: &str = "mistral-vibe";
+pub(crate) const PYPI_PACKAGE: &str = "mistral-vibe";
 
 /// HTTP GET returning the response body via `curl` (the engine has no HTTP
 /// client; curl ships on all supported targets).
-fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
+pub(crate) fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
     let out = std::process::Command::new("curl")
         .args(["-fsSL", "--max-time", &timeout_s.to_string(), url])
         .output()
@@ -562,7 +562,7 @@ static PYPI_CACHE: std::sync::Mutex<Option<(String, std::time::Instant)>> =
     std::sync::Mutex::new(None);
 
 /// Latest CLI version from PyPI with a 5-minute cache (Nexus `pypiLatest`).
-fn pypi_latest() -> Result<String, String> {
+pub(crate) fn pypi_latest() -> Result<String, String> {
     if let Ok(guard) = PYPI_CACHE.lock() {
         if let Some((v, at)) = guard.as_ref() {
             if at.elapsed().as_secs() < 300 {
@@ -608,9 +608,15 @@ pub fn extract_version(s: &str) -> Option<String> {
 /// Numeric segment comparison (Nexus `isNewerVersion`): true when `latest`
 /// is strictly newer than `current` (3.1.0 > 3.0.2, 4.0 > 3.9.9).
 pub fn is_newer_version(latest: &str, current: &str) -> bool {
+    // JS parseInt semantics: per dot-segment take the leading digits, so
+    // release tags like "0.8.3-dioxus.7" compare as [0, 8, 3, 7].
     let parse = |v: &str| -> Vec<i64> {
         v.split('.')
-            .map(|p| p.trim().parse::<i64>().unwrap_or(0))
+            .map(|p| {
+                let digits: String =
+                    p.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+                digits.parse::<i64>().unwrap_or(0)
+            })
             .collect()
     };
     let l = parse(latest);
@@ -737,5 +743,13 @@ mod tests {
         assert!(is_newer_version("3.1.0", "3.0.2"));
         assert!(!is_newer_version("3.0.2", "3.0.2"));
         assert!(is_newer_version("4.0", "3.9.9"));
+    }
+
+    #[test]
+    fn newer_version_release_tags() {
+        assert!(is_newer_version("0.8.3-dioxus.7", "0.8.3-dioxus.6"));
+        assert!(!is_newer_version("0.8.3-dioxus.7", "0.8.3-dioxus.7"));
+        assert!(is_newer_version("0.8.3-dioxus.10", "0.8.3-dioxus.7"));
+        assert!(is_newer_version("0.8.3-dioxus.7", "0.8.3"));
     }
 }

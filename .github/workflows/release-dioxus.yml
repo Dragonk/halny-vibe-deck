@@ -97,9 +97,12 @@ jobs:
   bundles:
     name: Bundles (linux x64 + windows x64)
     runs-on: ubuntu-22.04
-    needs: test
+    needs: [tag, test]
     env:
       CARGO_TARGET_DIR: /home/runner/vd-target
+      # Embed the release tag in the binary so the in-app updater can tell
+      # releases apart (option_env!("VIBEDECK_BUILD_VERSION") in the engine).
+      VIBEDECK_BUILD_VERSION: ${{ needs.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 

@@ -9,6 +9,7 @@
 pub mod config;
 pub mod remote;
 pub mod remote_vibe;
+pub mod updates;
 mod types;
 
 pub use config::{random_hex, AuthEntry, EngineConfig};

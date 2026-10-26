@@ -271,6 +271,49 @@ pub struct CliUpgradeResult {
     pub error: Option<String>,
 }
 
+/// App self-update check (Nexus `AppUpdateInfo`): current flavor/version,
+/// latest GitHub release and the matching platform asset.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AppUpdateInfo {
+    #[serde(default)]
+    pub current_version: String,
+    #[serde(default)]
+    pub flavor: String,
+    #[serde(default)]
+    pub latest_version: Option<String>,
+    #[serde(default)]
+    pub update_available: bool,
+    #[serde(default)]
+    pub release_url: Option<String>,
+    #[serde(default)]
+    pub download_url: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Result of an app self-update attempt (Nexus `AppUpdateResult`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AppUpdateResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// App self-update download/install progress (Nexus `UpdateProgress`):
+/// phase download/install/relaunch, bytes received/total, percent.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct UpdateProgress {
+    #[serde(default)]
+    pub phase: String,
+    #[serde(default)]
+    pub received: u64,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub percent: Option<i64>,
+}
+
 /// A `(tool, permission)` pair from a `[tools.<name>]` block of a remote
 /// agent profile (Nexus `VibeAgentFileConfig.tools`).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

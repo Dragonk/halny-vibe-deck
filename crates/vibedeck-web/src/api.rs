@@ -366,6 +366,41 @@ pub async fn api_upgrade_remote_cli(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
+/// App self-update check (GitHub releases/latest, flavor-aware).
+#[server]
+pub async fn api_check_app_update(
+    token: String,
+) -> Result<vibedeck_core::snapshot::AppUpdateInfo, ServerFnError> {
+    check(&token)?;
+    tokio::task::spawn_blocking(vibedeck_engine::updates::check_app_update)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Local mistral-vibe CLI update check (PyPI latest with cache).
+#[server]
+pub async fn api_check_local_cli_update(
+    token: String,
+) -> Result<vibedeck_core::snapshot::CliUpdateInfo, ServerFnError> {
+    check(&token)?;
+    let acp_path = vibedeck_engine::Engine::global().config().acp_path;
+    tokio::task::spawn_blocking(move || vibedeck_engine::updates::check_local_cli_update(&acp_path))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Upgrade the local mistral-vibe CLI with uv (up to 5 minutes).
+#[server]
+pub async fn api_upgrade_local_cli(
+    token: String,
+) -> Result<vibedeck_core::snapshot::CliUpgradeResult, ServerFnError> {
+    check(&token)?;
+    let acp_path = vibedeck_engine::Engine::global().config().acp_path;
+    tokio::task::spawn_blocking(move || vibedeck_engine::updates::upgrade_local_cli(&acp_path))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
 /// Raw remote config.toml content ("" when missing), global or project scope.
 #[server]
 pub async fn api_get_remote_vibe_config(
