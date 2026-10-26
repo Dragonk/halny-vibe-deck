@@ -140,6 +140,8 @@ const api = {
       ipcRenderer.invoke('acp:answer-question', requestId, answer, remoteId ?? undefined),
     stop: (): Promise<void> => ipcRenderer.invoke('acp:stop'),
     isRunning: (remoteId?: string): Promise<boolean> => ipcRenderer.invoke('acp:is-running', remoteId ?? undefined),
+    busySessions: (): Promise<Array<{ acpSessionId: string; remoteId: string | null }>> =>
+      ipcRenderer.invoke('acp:busy-sessions'),
     getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
       ipcRenderer.invoke('acp:get-context-summary', messages, remoteId ?? undefined),
     onEvent: (cb: (event: AcpEvent) => void): (() => void) => {

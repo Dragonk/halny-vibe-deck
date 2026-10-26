@@ -515,6 +515,18 @@ app.whenReady().then(() => {
     await getManager(remoteId).sendPrompt(text, acpSessionId, images)
   })
 
+  // v1.0.13: which ACP sessions currently run a turn - a freshly booted
+  // client (phone PWA reopened) marks them busy/live instead of showing
+  // them as idle ("stalled") while the turn keeps running server-side.
+  ipcMain.handle("acp:busy-sessions", () => {
+    const out: Array<{ acpSessionId: string; remoteId: string | null }> = []
+    for (const sid of acpManager.busySessionIds()) out.push({ acpSessionId: sid, remoteId: null })
+    for (const [id, m] of remoteAcpManagers) {
+      for (const sid of m.busySessionIds()) out.push({ acpSessionId: sid, remoteId: id })
+    }
+    return out
+  })
+
   ipcMain.handle("acp:cancel-session", (_e, acpSessionId: string, remoteId?: string) => {
     getManager(remoteId).cancelSession(acpSessionId)
   })

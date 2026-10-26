@@ -323,6 +323,7 @@ export const it = {
   deleteLabel: 'Elimina',
   editLabel: 'Modifica',
   saveLabel: 'Salva',
+  backExitToast: 'Premi di nuovo indietro per uscire',
   // v1.0.9: file-list context menu
   menuPreview: 'Anteprima',
   menuEdit: 'Modifica',

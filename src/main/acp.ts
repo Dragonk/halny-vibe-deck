@@ -99,6 +99,8 @@ export class AcpManager {
   private pending = new Map<string, PendingRequest>()
   /** v0.13.12: number of session/prompt requests in flight (turns running). */
   private turnsInFlight = 0
+  /** v1.0.13: ACP session ids with a turn in flight (for client boot sync). */
+  private busyTurns = new Set<string>()
   private currentSessionId: string | null = null
   /** v0.10.7: in-flight cold start - concurrent boots must not stop the
    * worker another boot just spawned. */
@@ -1058,6 +1060,7 @@ export class AcpManager {
     // a spurious 'ACP request timeout: session/prompt' error while the turn
     // was still streaming in the UI. Allow up to one hour instead.
     this.turnsInFlight++
+    this.busyTurns.add(sid)
     let result: Record<string, unknown>
     try {
       // v1.0.8: images travel as ACP ImageContentBlocks (base64 data +
@@ -1082,6 +1085,7 @@ export class AcpManager {
       )) as Record<string, unknown>
     } finally {
       this.turnsInFlight--
+      this.busyTurns.delete(sid)
     }
 
     this.emit({
@@ -1227,6 +1231,11 @@ export class AcpManager {
   /** v0.13.12: true while at least one turn (session/prompt) is running. */
   isTurnInFlight(): boolean {
     return this.turnsInFlight > 0
+  }
+
+  /** v1.0.13: ACP session ids currently running a turn. */
+  busySessionIds(): string[] {
+    return Array.from(this.busyTurns)
   }
 
   async stop(): Promise<void> {

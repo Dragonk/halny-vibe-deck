@@ -68,6 +68,10 @@ function connectOnce(): Promise<void> {
       ws = sock
       wsReady = true
       settled = true
+      // v1.0.13: a RE-connect (network blip, server restart) means this
+      // client's view may be stale - let the app re-sync the live/busy
+      // session state.
+      try { window.dispatchEvent(new Event('nexus-ws-open')) } catch {}
       resolve()
     }
     sock.onerror = (): void => {
@@ -160,6 +164,8 @@ function buildApi(): AppAPI {
       stop: (): Promise<void> => invoke('acp:stop', []).then(() => undefined),
       isRunning: (remoteId?: string): Promise<boolean> =>
         invoke('acp:is-running', [remoteId ?? undefined]) as Promise<boolean>,
+      // v1.0.13: sessions running a turn right now (boot/reconnect sync)
+      busySessions: (): Promise<unknown> => invoke('acp:busy-sessions', []),
       getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
         invoke('acp:get-context-summary', [messages, remoteId ?? undefined]) as Promise<string>,
       onEvent: (cb: (event: unknown) => void): (() => void) => {

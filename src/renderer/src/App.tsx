@@ -110,6 +110,8 @@ export default function App(): React.JSX.Element {
   // Per-session streaming state: localSessionId → streaming info
   const streamingState = useRef<Map<string, StreamingState>>(new Map())
   const [setupRequired, setSetupRequired] = useState(false)
+  // v1.0.13: "press back again to exit" toast (PWA back guard)
+  const [backToast, setBackToast] = useState(false)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
   const [pendingToolApprovals, setPendingToolApprovals] = useState<
@@ -690,6 +692,11 @@ export default function App(): React.JSX.Element {
         .init(acpPath)
         .then(() => {
           setSessionStarting(false)
+          // v1.0.13: after the worker is up, learn which sessions run a
+          // turn RIGHT NOW (a reopened PWA must see running turns as
+          // busy, not idle/"stalled") and load the current session's
+          // history from disk.
+          void useStore.getState().syncBusySessions()
         })
         .catch((err: Error) => {
           setAcpStatus('error')
@@ -746,11 +753,15 @@ export default function App(): React.JSX.Element {
 
   // v1.0.9: the system back gesture/button (Android phone) pops ONE view
   // layer at a time: an open panel, then edit mode / preview tabs /
-  // settings - exactly like a native app. When nothing is open, the back
-  // gesture is left to the browser (it may leave the page).
+  // settings - exactly like a native app.
+  // v1.0.13: the back gesture can never CLOSE the app on a single press:
+  // with nothing left to pop a toast asks for a second press within 2 s
+  // (the native-app pattern); only that confirmed double-back lets the
+  // browser history leave the app.
   useEffect(() => {
     if (!isWebMode()) return
     window.history.replaceState({ nav: 'app' }, '')
+    let lastBareBack = 0
     const onPop = (): void => {
       const st = useStore.getState()
       const handled =
@@ -759,11 +770,32 @@ export default function App(): React.JSX.Element {
           window.matchMedia('(max-width: 768px)').matches &&
           (st.setDockOpen(false), true)) ||
         (st.backStack.length > 0 && (st.popBack(), true))
-      if (handled) window.history.pushState({ nav: 'app' }, '')
+      if (handled) {
+        window.history.pushState({ nav: 'app' }, '')
+        return
+      }
+      const now = Date.now()
+      if (now - lastBareBack < 2000) {
+        // Confirmed double-back: let the default happen (PWA closes).
+        return
+      }
+      lastBareBack = now
+      setBackToast(true)
+      window.setTimeout(() => setBackToast(false), 2000)
+      window.history.pushState({ nav: 'app' }, '')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // v1.0.13: after a WS reconnect (server restart, network blip) re-sync
+  // the busy/live session state so the view is never stale.
+  useEffect(() => {
+    if (!isWebMode()) return
+    const onOpen = (): void => void useStore.getState().syncBusySessions()
+    window.addEventListener('nexus-ws-open', onOpen)
+    return () => window.removeEventListener('nexus-ws-open', onOpen)
+  }, [])
 
   // v0.9.0: auto-close idle live sessions (config.autoCloseIdleMinutes,
   // default 60; 0 disables). Sending a message to a closed session revives
@@ -961,6 +993,8 @@ export default function App(): React.JSX.Element {
           : theme
       }`}
     >
+      {/* v1.0.13: native-style "press back again to exit" toast */}
+      {backToast && <div className="back-toast">{tr.backExitToast}</div>}
       <Header />
       {!updateInfo.dismissed &&
         ((updateInfo.app?.updateAvailable ?? false) || (updateInfo.cli?.updateAvailable ?? false)) && (

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.13 — 2026-10-26
+
+### Fixed
+- **The PWA back gesture closed the whole app.** With nothing left to pop
+  the gesture now shows a "Press back again to exit" toast; only a
+  confirmed double-back within 2 s lets the app close - the native-app
+  pattern. Popping view layers (panels, edit mode, previews, Settings)
+  works as before.
+- **A reopened PWA saw running turns as idle/"stalled".** The main
+  process now tracks which ACP sessions have a turn in flight
+  (`busyTurns`) and every freshly booted / reconnected client marks them
+  busy + live (`acp:busy-sessions` + `syncBusySessions`), including a
+  disk-history load for the current one - a turn started on the computer
+  keeps reporting into the phone correctly after the PWA is closed and
+  reopened.
+
 ## 1.0.12 — 2026-10-26
 
 ### Fixed

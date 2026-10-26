@@ -321,6 +321,7 @@ export const es = {
   deleteLabel: 'Eliminar',
   editLabel: 'Editar',
   saveLabel: 'Guardar',
+  backExitToast: 'Pulsa atrás de nuevo para salir',
   // v1.0.9: file-list context menu
   menuPreview: 'Vista previa',
   menuEdit: 'Editar',

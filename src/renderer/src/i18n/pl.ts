@@ -321,6 +321,7 @@ export const pl = {
   deleteLabel: 'Usuń',
   editLabel: 'Edytuj',
   saveLabel: 'Zapisz',
+  backExitToast: 'Naciśnij wstecz ponownie, aby wyjść',
   // v1.0.9: file-list context menu
   menuPreview: 'Podgląd',
   menuEdit: 'Edytuj',

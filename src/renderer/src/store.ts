@@ -165,6 +165,8 @@ interface AppStore {
   refreshThinkingLevels: (modelValue: string) => Promise<void>;
   /** v1.0.7: chips from the vibe config BEFORE any ACP connection. */
   loadDefaultChips: () => Promise<void>;
+  /** v1.0.13: mark sessions that run a turn right now as busy + live. */
+  syncBusySessions: () => Promise<void>;
   /** v0.11.1: last known configOptions per ACP session (option lists are model specific). */
   sessionConfigOptions: Record<string, ConfigOption[]>;
   setSessionConfigOptions: (acpSessionId: string, options: ConfigOption[]) => void;
@@ -829,6 +831,40 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     } catch {
       /* vibe config unavailable - keep the current level list */
+    }
+  },
+
+  // v1.0.13: a freshly booted client (phone PWA reopened, browser F5)
+  // learns from the main process which sessions run a turn RIGHT NOW and
+  // marks them busy + live - without this the session looked idle
+  // ("stalled") on the new client while the turn kept running server-side.
+  syncBusySessions: async () => {
+    try {
+      const busy = (await window.api.acp.busySessions()) as Array<{
+        acpSessionId: string;
+        remoteId: string | null;
+      }>;
+      for (const b of busy) {
+        const local = get().sessions.find(
+          (s) => s.acpSessionId === b.acpSessionId && (s.remoteId ?? null) === (b.remoteId ?? null),
+        );
+        if (!local) continue;
+        get().markSessionLive(local.id);
+        get().markSessionBusy(local.id);
+      }
+      // A busy turn also means the worker knows the session - loading the
+      // history from disk for it is safe and completes the client state.
+      const current = get().currentSession();
+      if (
+        current?.acpSessionId &&
+        busy.some((b) => b.acpSessionId === current.acpSessionId) &&
+        !get().historyLoadedSessions.includes(current.id) &&
+        !current.loading
+      ) {
+        await get().previewSession(current.id);
+      }
+    } catch (err) {
+      console.error("[store] busy sessions sync failed:", err);
     }
   },
 
