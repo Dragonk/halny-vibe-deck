@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
+import { isWebMode, downloadFile } from '../webBridge'
 import type { PreviewTab } from '../types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -734,15 +735,24 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
               </button>
             )
           )}
-          {!(tab.remoteId ?? null) && (
-            <button
-              className="file-preview-btn"
-              title={tr.previewOpenExternally}
-              onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
-            >
-              ↗
-            </button>
-          )}
+          {!(tab.remoteId ?? null) &&
+            (isWebMode() ? (
+              <button
+                className="file-preview-btn"
+                title={tr.downloadLabel}
+                onClick={() => void downloadFile(tab.path)}
+              >
+                ⬇
+              </button>
+            ) : (
+              <button
+                className="file-preview-btn"
+                title={tr.previewOpenExternally}
+                onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
+              >
+                ↗
+              </button>
+            ))}
         </div>
       </div>
 

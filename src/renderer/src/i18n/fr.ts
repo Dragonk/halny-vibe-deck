@@ -484,5 +484,11 @@ export const fr = {
   usageCostTooltip: 'Coût de la session : ${{cost}}',
   newSessionHere: "Nouvelle session dans ce projet",
   newSessionChooseFolder: 'Choisir un dossier…',
+  newProjectLabel: 'Nouveau projet…',
+  newProjectPlaceholder: 'ex. /home/user/projets/mon-projet',
+  newProjectCreate: 'Créer le projet',
+  newProjectErrorEmpty: 'Indiquez un chemin de projet',
+  newProjectErrorAbsolute: 'Le chemin doit être absolu (commencer par /)',
+  downloadLabel: 'Télécharger',
   serveLanUrls: 'Disponible sur votre réseau :',
 }

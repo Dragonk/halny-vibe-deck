@@ -161,3 +161,16 @@ export async function remoteSearchFiles(
   }
   return results;
 }
+
+// v0.13.14: remote mkdir -p for the web "New project…" flow
+export async function remoteMkdir(
+  conn: RemoteConnection,
+  dir: string,
+): Promise<{ error: string | null }> {
+  try {
+    await sshRun(conn, "mkdir -p " + shq(dir), 20000);
+    return { error: null };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}

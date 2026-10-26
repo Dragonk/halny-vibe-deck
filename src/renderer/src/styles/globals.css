@@ -6670,3 +6670,18 @@ code {
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* v0.13.14: web "New project…" dialog */
+.nsd-new-project-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.nsd-new-project-error { color: #e06c75; font-size: 12px; margin-top: 6px; }
+.nsd-new-project-create { background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important; }

@@ -486,5 +486,11 @@ export const it = {
   usageCostTooltip: 'Costo della sessione: ${{cost}}',
   newSessionHere: "Nuova sessione in questo progetto",
   newSessionChooseFolder: 'Scegli cartella…',
+  newProjectLabel: 'Nuovo progetto…',
+  newProjectPlaceholder: 'es. /home/user/progetti/mio-progetto',
+  newProjectCreate: 'Crea progetto',
+  newProjectErrorEmpty: 'Inserisci un percorso di progetto',
+  newProjectErrorAbsolute: 'Il percorso deve essere assoluto (iniziare con /)',
+  downloadLabel: 'Scarica',
   serveLanUrls: 'Disponibile nella tua rete:',
 }

@@ -93,6 +93,7 @@ import {
   remoteReadText,
   remoteReadBinary,
   remoteWriteText,
+  remoteMkdir,
   remoteReadFile,
   remoteSearchFiles,
 } from "./remoteFs";
@@ -613,6 +614,17 @@ app.whenReady().then(() => {
     if (remoteId) return remoteWriteText(remoteConnOrThrow(remoteId), filePath, content);
     try {
       await fs.promises.writeFile(filePath, content, "utf-8");
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // v0.13.14: create a project directory (web mode "New project…" dialog)
+  ipcMain.handle("fs:mkdir", async (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) return remoteMkdir(remoteConnOrThrow(remoteId), filePath);
+    try {
+      await fs.promises.mkdir(filePath, { recursive: true });
       return { error: null };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };

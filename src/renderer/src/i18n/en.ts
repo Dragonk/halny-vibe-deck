@@ -484,5 +484,11 @@ export const en = {
   usageCostTooltip: 'Session cost: ${{cost}}',
   newSessionHere: "New session in this project",
   newSessionChooseFolder: 'Choose folder…',
+  newProjectLabel: 'New project…',
+  newProjectPlaceholder: 'e.g. /home/user/projects/my-project',
+  newProjectCreate: 'Create project',
+  newProjectErrorEmpty: 'Enter a project path',
+  newProjectErrorAbsolute: 'Path must be absolute (start with /)',
+  downloadLabel: 'Download',
   serveLanUrls: 'Available on your network:',
 }

@@ -484,5 +484,11 @@ export const de = {
   usageCostTooltip: 'Sitzungskosten: ${{cost}}',
   newSessionHere: "Neue Sitzung in diesem Projekt",
   newSessionChooseFolder: 'Ordner wählen…',
+  newProjectLabel: 'Neues Projekt…',
+  newProjectPlaceholder: 'z. B. /home/user/projekte/mein-projekt',
+  newProjectCreate: 'Projekt erstellen',
+  newProjectErrorEmpty: 'Projektpfad angeben',
+  newProjectErrorAbsolute: 'Der Pfad muss absolut sein (mit / beginnen)',
+  downloadLabel: 'Herunterladen',
   serveLanUrls: 'In deinem Netzwerk verfügbar:',
 }

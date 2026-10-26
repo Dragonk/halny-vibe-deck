@@ -206,7 +206,9 @@ function buildApi(): AppAPI {
       readBinary: (filePath: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:read-binary', [filePath, remoteId ?? undefined]),
       writeText: (filePath: string, content: string, remoteId?: string): Promise<unknown> =>
-        invoke('fs:write-text', [filePath, content, remoteId ?? undefined])
+        invoke('fs:write-text', [filePath, content, remoteId ?? undefined]),
+      mkdir: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:mkdir', [filePath, remoteId ?? undefined])
     },
     git: {
       status: (cwd: string, remoteId?: string): Promise<unknown> => invoke('git:status', [cwd, remoteId ?? undefined]),
@@ -288,4 +290,21 @@ function buildApi(): AppAPI {
         subscribeWebEvent('updates:progress', cb as (...args: unknown[]) => void)
     }
   } as unknown as AppAPI
+}
+
+// v0.13.14: download a file from the serve host through the authenticated
+// /api/download endpoint (web client "Download" action in the preview dock).
+export async function downloadFile(filePath: string): Promise<void> {
+  const res = await fetch('/api/download?path=' + encodeURIComponent(filePath), { credentials: 'include' })
+  if (!res.ok) throw new Error('Download failed: HTTP ' + res.status)
+  const blob = await res.blob()
+  const name = filePath.split('/').filter(Boolean).pop() || 'file'
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }

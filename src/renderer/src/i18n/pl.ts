@@ -484,5 +484,11 @@ export const pl = {
   usageCostTooltip: 'Koszt sesji: ${{cost}}',
   newSessionHere: "Nowa sesja w tym projekcie",
   newSessionChooseFolder: 'Wybierz folder…',
+  newProjectLabel: 'Nowy projekt…',
+  newProjectPlaceholder: 'np. /home/dragonk/projekty/moj-projekt',
+  newProjectCreate: 'Utwórz projekt',
+  newProjectErrorEmpty: 'Podaj ścieżkę projektu',
+  newProjectErrorAbsolute: 'Ścieżka musi być bezwzględna (zaczynać od /)',
+  downloadLabel: 'Pobierz',
   serveLanUrls: 'Dostępne w sieci lokalnej:',
 }

@@ -204,7 +204,9 @@ const api = {
     ): Promise<{ base64: string; mime: string; size: number; error: string | null }> =>
       ipcRenderer.invoke('fs:read-binary', filePath, remoteId ?? undefined),
     writeText: (filePath: string, content: string, remoteId?: string): Promise<{ error: string | null }> =>
-      ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined)
+      ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined),
+    mkdir: (filePath: string, remoteId?: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:mkdir', filePath, remoteId ?? undefined)
   },
   git: {
     status: (cwd: string, remoteId?: string): Promise<GitStatus> =>

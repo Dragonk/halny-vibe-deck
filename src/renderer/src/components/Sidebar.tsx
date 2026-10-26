@@ -56,6 +56,11 @@ export default function Sidebar(): React.JSX.Element {
   const [isResizing, setIsResizing] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; target: DeleteTarget } | null>(null)
   const [confirmTarget, setConfirmTarget] = useState<DeleteTarget | null>(null)
+  // v0.13.14: web "New project…" dialog state
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [newProjectPath, setNewProjectPath] = useState('')
+  const [newProjectError, setNewProjectError] = useState<string | null>(null)
+  const [creatingProject, setCreatingProject] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
 
   const openCtx = useCallback((e: React.MouseEvent, target: DeleteTarget): void => {
@@ -193,6 +198,34 @@ export default function Sidebar(): React.JSX.Element {
     const folder = await window.api.dialog.openFolder()
     if (!folder) return
     startLocalDraft(folder)
+  }
+
+  // v0.13.14: create a project directory on the serve host (web mode -
+  // the native folder dialog is unavailable in the browser).
+  const handleCreateProject = async (): Promise<void> => {
+    const p = newProjectPath.trim()
+    if (!p) {
+      setNewProjectError(tr.newProjectErrorEmpty)
+      return
+    }
+    if (!p.startsWith('/')) {
+      setNewProjectError(tr.newProjectErrorAbsolute)
+      return
+    }
+    setCreatingProject(true)
+    try {
+      const res = await window.api.fs.mkdir(p)
+      if (res.error) {
+        setNewProjectError(res.error)
+        return
+      }
+      setNewProjectOpen(false)
+      setNewProjectPath('')
+      setNewProjectError(null)
+      startLocalDraft(p)
+    } finally {
+      setCreatingProject(false)
+    }
   }
 
   const handleSelectSession = async (id: string): Promise<void> => {
@@ -426,6 +459,17 @@ export default function Sidebar(): React.JSX.Element {
             📂 {tr.newSessionChooseFolder}
           </button>
         )}
+        {isWebMode() && (
+          <button
+            className="nsd-folder-pick"
+            onClick={() => {
+              setNewProjectError(null)
+              setNewProjectOpen(true)
+            }}
+          >
+            🆕 {tr.newProjectLabel}
+          </button>
+        )}
         {remoteConns.map((conn) => {
           const collapsed = collapsedProjects.includes('remote:' + conn.id)
           const st = remoteStatuses[conn.id]
@@ -576,6 +620,40 @@ export default function Sidebar(): React.JSX.Element {
           >
             🗑 {ctxMenu.target.kind === 'session' ? tr.deleteSessionLabel : tr.deleteProjectLabel}
           </button>
+        </div>
+      )}
+
+      {newProjectOpen && (
+        <div className="modal-overlay" onClick={() => setNewProjectOpen(false)}>
+          <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">{tr.newProjectLabel}</div>
+            <input
+              className="nsd-new-project-input"
+              placeholder={tr.newProjectPlaceholder}
+              value={newProjectPath}
+              autoFocus
+              onChange={(e) => {
+                setNewProjectPath(e.target.value)
+                setNewProjectError(null)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleCreateProject()
+              }}
+            />
+            {newProjectError && <div className="nsd-new-project-error">{newProjectError}</div>}
+            <div className="modal-actions">
+              <button className="modal-btn" onClick={() => setNewProjectOpen(false)}>
+                {tr.cancelLabel}
+              </button>
+              <button
+                className="modal-btn nsd-new-project-create"
+                onClick={() => void handleCreateProject()}
+                disabled={creatingProject}
+              >
+                {creatingProject ? '…' : tr.newProjectCreate}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
