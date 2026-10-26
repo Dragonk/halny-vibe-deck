@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
 import MessageBubble from './MessageBubble'
+import BrandIcon from './BrandIcon'
 import InputBar from './InputBar'
 import type { PlanEntry } from '../types'
 
@@ -46,18 +47,7 @@ export default function ChatView(): React.JSX.Element {
         <div className="chat-inner">
           {!session || (session.messages.length === 0 && !isResuming) ? (
             <div className="chat-empty">
-              <svg xmlns="http://www.w3.org/2000/svg" width="95" height="68" viewBox="0 0 212.121 151.515" version="1.1" shapeRendering="crispEdges" className="chat-empty-icon">
-                <rect fill="var(--yellowbright-500)" x="30.303001" y="0" width="30.302999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--yellowbright-500)" x="151.515" y="0" width="30.302999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--yellow-500)" x="30.303001" y="30.303001" width="60.605999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--yellow-500)" x="121.21201" y="30.303001" width="60.605999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--orangebright-500)" x="30.303001" y="60.606003" width="151.515" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--orange-500)" x="30.303001" y="90.908997" width="30.302999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--orange-500)" x="90.908997" y="90.908997" width="30.302999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--orange-500)" x="151.515" y="90.908997" width="30.302999" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--red-700)" x="0" y="121.21201" width="90.908997" height="30.302999" strokeWidth="0"/>
-                <rect fill="var(--red-700)" x="121.21201" y="121.21201" width="90.908997" height="30.302999" strokeWidth="0"/>
-              </svg>
+              <BrandIcon size={72} className="chat-empty-icon" />
               <div className="chat-empty-title">
                 {pendingNewSession ? tr.newChat : session ? tr.startConversation : tr.appName}
               </div>

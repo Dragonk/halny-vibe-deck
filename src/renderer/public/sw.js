@@ -1,7 +1,7 @@
 /* Halny Vibe Deck service worker (serve mode / PWA).
  * Cache-first for assets, network-first for the app shell; the API and the
  * the network. /ws is a websocket upgrade — the fetch handler never sees it. */
-const CACHE = 'halny-shell-v1'
+const CACHE = 'halny-shell-v2'
 
 self.addEventListener('install', () => {
   self.skipWaiting()

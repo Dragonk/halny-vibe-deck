@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
+import BrandIcon from './BrandIcon'
 
 interface SetupStatus {
   vibAcpFound: boolean
@@ -64,9 +65,7 @@ export default function SetupView({ onComplete, onSkip }: Props): React.JSX.Elem
         {/* Header */}
         <div className="setup-header">
           <div className="setup-logo">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="var(--accent)">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" />
-            </svg>
+            <BrandIcon size={32} />
           </div>
           <div>
             <div className="setup-title">{tr.appName}</div>
