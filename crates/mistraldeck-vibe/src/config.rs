@@ -218,6 +218,81 @@ pub struct McpServer {
     pub api_key_format: Option<String>,
     pub startup_timeout_sec: Option<u64>,
     pub tool_timeout_sec: Option<u64>,
+    pub cwd: Option<String>,
+    /// Explicit `[mcp_servers.auth]` block; `static` or `oauth` (discriminated
+    /// union — the other branch's keys must NOT be present). When `None`, the
+    /// legacy flat auth keys are used as-is (read + write).
+    pub auth: Option<McpAuth>,
+}
+
+/// MCP auth block (`[mcp_servers.auth]`): `static` (headers / API key) or
+/// `oauth` (browser login, auto-refreshing tokens).
+#[derive(Clone, Debug, Default)]
+pub struct McpAuth {
+    /// `static` or `oauth`.
+    pub auth_type: String,
+    pub headers: Vec<(String, String)>,
+    pub api_key_env: Option<String>,
+    pub api_key_header: Option<String>,
+    pub api_key_format: Option<String>,
+    pub scopes: Vec<String>,
+    pub client_id: Option<String>,
+    pub client_metadata_url: Option<String>,
+    pub redirect_port: Option<i64>,
+}
+
+fn mcp_auth_from_table(t: &Table) -> McpAuth {
+    McpAuth {
+        auth_type: table_str(t, "type")
+            .or_else(|| table_str(t, "auth_type"))
+            .unwrap_or_else(|| "static".into()),
+        headers: table_pairs(t, "headers"),
+        api_key_env: table_str(t, "api_key_env"),
+        api_key_header: table_str(t, "api_key_header"),
+        api_key_format: table_str(t, "api_key_format"),
+        scopes: table_str_list(t, "scopes"),
+        client_id: table_str(t, "client_id"),
+        client_metadata_url: table_str(t, "client_metadata_url"),
+        redirect_port: t.get("redirect_port").and_then(Value::as_integer),
+    }
+}
+
+fn mcp_auth_to_table(a: &McpAuth) -> Table {
+    let mut t = Table::new();
+    t.insert("type".into(), Value::from(a.auth_type.as_str()));
+    if a.auth_type == "oauth" {
+        // oauth branch: strip static-only keys (CLI discriminated union)
+        if !a.scopes.is_empty() {
+            t.insert(
+                "scopes".into(),
+                Value::from(a.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+            );
+        }
+        if let Some(v) = &a.client_id {
+            t.insert("client_id".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = &a.client_metadata_url {
+            t.insert("client_metadata_url".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = a.redirect_port {
+            t.insert("redirect_port".into(), Value::from(v));
+        }
+    } else {
+        // static branch: strip oauth-only keys
+        if let Some(v) = pairs_value(&a.headers) {
+            t.insert("headers".into(), v);
+        }
+        if let Some(v) = &a.api_key_env {
+            t.insert("api_key_env".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = &a.api_key_header {
+            t.insert("api_key_header".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = &a.api_key_format {
+            t.insert("api_key_format".into(), Value::from(v.as_str()));
+        }
+    }
+    t
 }
 
 /// Round-trip-safe view of `~/.vibe/config.toml`.
@@ -785,6 +860,8 @@ fn mcp_from_table(t: &Table) -> McpServer {
             .get("tool_timeout_sec")
             .and_then(Value::as_integer)
             .map(|v| v.max(0) as u64),
+        cwd: table_str(t, "cwd"),
+        auth: t.get("auth").and_then(Value::as_table).map(mcp_auth_from_table),
     }
 }
 
@@ -807,17 +884,26 @@ fn mcp_to_table(s: &McpServer) -> Table {
     if let Some(v) = pairs_value(&s.env) {
         t.insert("env".into(), v);
     }
-    if let Some(v) = pairs_value(&s.headers) {
-        t.insert("headers".into(), v);
+    if let Some(a) = &s.auth {
+        // Explicit auth block: legacy flat keys must NOT mix with [auth]
+        // (the CLI rejects that combination).
+        t.insert("auth".into(), Value::Table(mcp_auth_to_table(a)));
+    } else {
+        if let Some(v) = pairs_value(&s.headers) {
+            t.insert("headers".into(), v);
+        }
+        if let Some(v) = &s.api_key_env {
+            t.insert("api_key_env".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = &s.api_key_header {
+            t.insert("api_key_header".into(), Value::from(v.as_str()));
+        }
+        if let Some(v) = &s.api_key_format {
+            t.insert("api_key_format".into(), Value::from(v.as_str()));
+        }
     }
-    if let Some(v) = &s.api_key_env {
-        t.insert("api_key_env".into(), Value::from(v.as_str()));
-    }
-    if let Some(v) = &s.api_key_header {
-        t.insert("api_key_header".into(), Value::from(v.as_str()));
-    }
-    if let Some(v) = &s.api_key_format {
-        t.insert("api_key_format".into(), Value::from(v.as_str()));
+    if let Some(v) = &s.cwd {
+        t.insert("cwd".into(), Value::from(v.as_str()));
     }
     if let Some(v) = s.startup_timeout_sec {
         t.insert("startup_timeout_sec".into(), Value::from(v as i64));
@@ -1021,5 +1107,87 @@ enabled = true
         assert!(estimate_cost(&prices, "Mistral-Large", 10.0, 0.0, 0.0) > 0.0);
         assert!(estimate_cost(&prices, "some/mistral-large", 10.0, 0.0, 0.0) > 0.0);
         assert_eq!(estimate_cost(&prices, "other-model", 10.0, 0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn mcp_oauth_auth_block_roundtrip() {
+        let raw = "[[mcp_servers]]\nname = \"srv\"\ntransport = \"http\"\nurl = \"https://api.example.com/mcp\"\n\n[mcp_servers.auth]\ntype = \"oauth\"\nscopes = [\"read\", \"write\"]\nclient_id = \"cid-1\"\nclient_metadata_url = \"https://auth.example.com/metadata\"\nredirect_port = 47823\n";
+        let cfg = super::VibeConfigFile::from_raw(raw);
+        let srv = cfg.mcp_servers();
+        assert_eq!(srv.len(), 1);
+        let a = srv[0].auth.as_ref().expect("auth block parsed");
+        assert_eq!(a.auth_type, "oauth");
+        assert_eq!(a.scopes, vec!["read".to_string(), "write".to_string()]);
+        assert_eq!(a.client_id.as_deref(), Some("cid-1"));
+        assert_eq!(a.redirect_port, Some(47823));
+        assert!(a.headers.is_empty());
+        let out = cfg.render();
+        assert!(!out.is_empty(), "render must not fail");
+        assert!(!out.contains("api_key_env"), "no static keys in oauth branch");
+        let cfg2 = super::VibeConfigFile::from_raw(&out);
+        let srv2 = cfg2.mcp_servers();
+        assert_eq!(srv2.len(), 1, "roundtrip keeps the server:\n{out}");
+        let a2 = srv2[0].auth.as_ref().expect("auth survives roundtrip");
+        assert_eq!(a2.auth_type, "oauth");
+        assert_eq!(a2.scopes.len(), 2);
+        assert_eq!(a2.redirect_port, Some(47823));
+        assert_eq!(srv2[0].url.as_deref(), Some("https://api.example.com/mcp"));
+    }
+
+    #[test]
+    fn mcp_static_auth_block_and_legacy_flat() {
+        let raw = "[[mcp_servers]]\nname = \"s1\"\ntransport = \"http\"\nurl = \"https://x/mcp\"\n\n[mcp_servers.auth]\ntype = \"static\"\napi_key_env = \"MY_KEY\"\napi_key_header = \"X-Key\"\napi_key_format = \"Bearer {token}\"\n\n[mcp_servers.auth.headers]\nX-Api-Key = \"secret\"\n";
+        let cfg = super::VibeConfigFile::from_raw(raw);
+        let s = &cfg.mcp_servers()[0];
+        let a = s.auth.as_ref().expect("static auth parsed");
+        assert_eq!(a.auth_type, "static");
+        assert_eq!(a.api_key_env.as_deref(), Some("MY_KEY"));
+        assert_eq!(a.api_key_header.as_deref(), Some("X-Key"));
+        assert_eq!(
+            a.headers,
+            vec![("X-Api-Key".to_string(), "secret".to_string())]
+        );
+        // legacy flat keys are read as-is (auth stays None) and stay flat on re-render
+        let legacy = "[[mcp_servers]]\nname = \"old\"\ntransport = \"http\"\nurl = \"https://y/mcp\"\napi_key_env = \"OLD_KEY\"\napi_key_header = \"Authorization\"\napi_key_format = \"Bearer {token}\"\nheaders = { X-Api-Key = \"k\" }\n";
+        let cfg3 = super::VibeConfigFile::from_raw(legacy);
+        let s3 = &cfg3.mcp_servers()[0];
+        assert!(s3.auth.is_none(), "legacy config must not gain an auth block");
+        assert_eq!(s3.api_key_env.as_deref(), Some("OLD_KEY"));
+        assert_eq!(
+            s3.headers,
+            vec![("X-Api-Key".to_string(), "k".to_string())]
+        );
+        let out3 = cfg3.render();
+        assert!(
+            !out3.contains("[mcp_servers.auth]"),
+            "no auth header for legacy:\n{out3}"
+        );
+        assert!(out3.contains("OLD_KEY"));
+        let cfg4 = super::VibeConfigFile::from_raw(&out3);
+        let s4 = &cfg4.mcp_servers()[0];
+        assert!(s4.auth.is_none());
+        assert_eq!(s4.api_key_env.as_deref(), Some("OLD_KEY"));
+    }
+
+    #[test]
+    fn mcp_stdio_fields_roundtrip() {
+        let raw = "[[mcp_servers]]\nname = \"loc\"\ntransport = \"stdio\"\ncommand = \"uvx\"\nargs = [\"mcp-server\", \"--flag\"]\nenv = { DEBUG = \"1\" }\ncwd = \"/tmp/wd\"\nstartup_timeout_sec = 15\ntool_timeout_sec = 120\n";
+        let cfg = super::VibeConfigFile::from_raw(raw);
+        let s = &cfg.mcp_servers()[0];
+        assert_eq!(s.command.as_deref(), Some("uvx"));
+        assert_eq!(
+            s.args,
+            vec!["mcp-server".to_string(), "--flag".to_string()]
+        );
+        assert_eq!(s.env, vec![("DEBUG".to_string(), "1".to_string())]);
+        assert_eq!(s.cwd.as_deref(), Some("/tmp/wd"));
+        assert_eq!(s.startup_timeout_sec, Some(15));
+        assert_eq!(s.tool_timeout_sec, Some(120));
+        let cfg2 = super::VibeConfigFile::from_raw(&cfg.render());
+        let s2 = &cfg2.mcp_servers()[0];
+        assert_eq!(s2.cwd.as_deref(), Some("/tmp/wd"));
+        assert_eq!(s2.startup_timeout_sec, Some(15));
+        assert_eq!(s2.tool_timeout_sec, Some(120));
+        assert_eq!(s2.args.len(), 2);
     }
 }

@@ -439,6 +439,25 @@ pub fn SettingsView() -> Element {
     let mut c_command = use_signal(String::new);
     let mut c_args = use_signal(String::new);
     let c_api_key_env = use_signal(String::new);
+    let mut mc_sel = use_signal(String::new);
+    let mut mc_loaded = use_signal(String::new);
+    let mut mc_new = use_signal(|| false);
+    let mut mc_env = use_signal(String::new);
+    let mut mc_headers = use_signal(String::new);
+    let mut mc_auth_type = use_signal(|| "static".to_string());
+    let mut mc_api_env = use_signal(String::new);
+    let mut mc_api_hdr = use_signal(String::new);
+    let mut mc_api_fmt = use_signal(String::new);
+    let mut mc_scopes = use_signal(String::new);
+    let mut mc_cid = use_signal(String::new);
+    let mut mc_cmu = use_signal(String::new);
+    let mut mc_port = use_signal(String::new);
+    let mut mc_cwd = use_signal(String::new);
+    let mut mc_startup = use_signal(String::new);
+    let mut mc_tool = use_signal(String::new);
+    let mut mc_json = use_signal(|| false);
+    let mut mc_json_text = use_signal(String::new);
+    let mut mc_json_err = use_signal(String::new);
 
     // Effective scope from the agent + target selects (Nexus SettingsView):
     // local global / local project / remote global / remote project. All
@@ -1013,111 +1032,450 @@ pub fn SettingsView() -> Element {
             }
         }
         "mcp" => {
-            let mut rows: Vec<Element> = cfgd
-                .mcp
-                .iter()
-                .enumerate()
-                .map(|(i, s)| {
-                    let state2 = state;
-                    let cfg2 = cfg;
-                    let cfg_err2 = cfg_err;
-                    let sc2 = sc.clone();
-                    let name = s.name.clone();
-                    cfg_row(
-                        i.to_string(),
-                        s.name.clone(),
-                        format!("{} · {}", s.transport, if s.url.is_empty() { s.command.clone() } else { s.url.clone() }),
-                        Some(del_btn(move || {
-                            let name = name.clone();
-                            let sc2 = sc2.clone();
-                            spawn(async move {
-                                let _ = crate::vibeconfig::api_remove_mcp(
-                                    token(&state2),
-                                    name,
-                                    sc2.scope.clone(),
-                                    sc2.cwd.clone(),
-                                    sc2.conn.clone(),
-                                )
-                                .await;
-                                reload_cfg(state2, cfg2, cfg_err2, sc2).await;
-                            });
-                        })),
-                    )
-                })
-                .collect();
-            rows.push(rsx! {
-                div { class: "field-row",
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"name\")}", value: "{c_name.read()}",
-                        oninput: move |e| c_name.set(e.value()) }
-                    select { class: "field-select", style: "flex:1;",
-                        onchange: move |e| c_transport.set(e.value()),
-                        option { value: "stdio", selected: *c_transport.read() == "stdio", "stdio" }
-                        option { value: "http", selected: *c_transport.read() == "http", "http" }
-                        option { value: "streamable-http", selected: *c_transport.read() == "streamable-http", "streamable-http" }
+            let sel_name = mc_sel.read().clone();
+            let sel_row = cfgd.mcp.iter().find(|s| s.name == sel_name).cloned();
+            if let Some(s) = &sel_row {
+                if *mc_loaded.read() != s.name {
+                    mc_loaded.set(s.name.clone());
+                    mc_json.set(false);
+                    mc_json_text.set(String::new());
+                    mc_json_err.set(String::new());
+                    c_name.set(s.name.clone());
+                    c_transport.set(s.transport.clone());
+                    c_url.set(s.url.clone());
+                    c_command.set(s.command.clone());
+                    c_args.set(s.args.clone());
+                    mc_env.set(s.env.clone());
+                    mc_headers.set(s.headers.clone());
+                    mc_auth_type.set(if s.auth_type.is_empty() {
+                        "static".to_string()
+                    } else {
+                        s.auth_type.clone()
+                    });
+                    mc_api_env.set(s.api_key_env.clone());
+                    mc_api_hdr.set(s.api_key_header.clone());
+                    mc_api_fmt.set(s.api_key_format.clone());
+                    mc_scopes.set(s.scopes.clone());
+                    mc_cid.set(s.client_id.clone());
+                    mc_cmu.set(s.client_metadata_url.clone());
+                    mc_port.set(if s.redirect_port.is_empty() {
+                        "47823".to_string()
+                    } else {
+                        s.redirect_port.clone()
+                    });
+                    mc_cwd.set(s.cwd.clone());
+                    mc_startup.set(if s.startup_timeout_sec.is_empty() {
+                        "10".to_string()
+                    } else {
+                        s.startup_timeout_sec.clone()
+                    });
+                    mc_tool.set(if s.tool_timeout_sec.is_empty() {
+                        "60".to_string()
+                    } else {
+                        s.tool_timeout_sec.clone()
+                    });
+                }
+            }
+            let is_http = *c_transport.read() != "stdio";
+            let is_oauth = *mc_auth_type.read() == "oauth";
+            let json_on = *mc_json.read();
+            let json_err_txt = mc_json_err.read().clone();
+            let auth_hint = if is_oauth {
+                tr(&lang, "authOauthHint")
+            } else {
+                tr(&lang, "authStaticHint")
+            };
+            let fmt_ph = "Bearer {token}".to_string();
+            let mut master: Vec<Element> = Vec::new();
+            for s in cfgd.mcp.iter() {
+                let nm = s.name.clone();
+                let disp = s.name.clone();
+                let tp = s.transport.clone();
+                let cls = if s.name == sel_name {
+                    "master-item selected"
+                } else {
+                    "master-item"
+                };
+                master.push(rsx! {
+                    div { class: "{cls}",
+                        onclick: move |_| {
+                            mc_sel.set(nm.clone());
+                            mc_new.set(false);
+                        },
+                        span { class: "master-item-name", "{disp}" }
+                        span { class: "master-item-type", "{tp}" }
                     }
-                    input { class: "field-input", style: "flex:2;", r#type: "text",
-                        placeholder: "URL", value: "{c_url.read()}",
-                        oninput: move |e| c_url.set(e.value()) }
-                    input { class: "field-input", style: "flex:1;", r#type: "text",
-                        placeholder: "{tr(&lang, \"command\")}", value: "{c_command.read()}",
-                        oninput: move |e| c_command.set(e.value()) }
-                    input { class: "field-input", style: "flex:2;", r#type: "text",
-                        placeholder: "args · {tr(&lang, \"apiKey\")} env", value: "{c_args.read()}",
-                        oninput: move |e| c_args.set(e.value()) }
-                    button { class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cfg = cfg.clone();
-                            let cfg_err = cfg_err.clone();
-                            let sc = sc.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let cfg = cfg.clone();
-                                let cfg_err = cfg_err.clone();
-                                let sc = sc.clone();
-                                async move {
-                                    let name = c_name.read().trim().to_string();
-                                    if name.is_empty() {
-                                        return;
-                                    }
-                                    let row = crate::vibeconfig::McpRow {
-                                        name,
-                                        transport: c_transport.read().clone(),
-                                        url: c_url.read().trim().to_string(),
-                                        command: c_command.read().trim().to_string(),
-                                        args: c_args.read().trim().to_string(),
-                                    };
-                                    let _ = crate::vibeconfig::api_upsert_mcp(
-                                        token(&state),
-                                        row,
-                                        sc.scope.clone(),
-                                        sc.cwd.clone(),
-                                        sc.conn.clone(),
-                                    )
-                                    .await;
-                                    c_name.set(String::new());
-                                    c_url.set(String::new());
-                                    c_command.set(String::new());
-                                    c_args.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
+                });
+            }
+            let show_detail = sel_row.is_some() || *mc_new.read();
+            let detail: Element = if show_detail {
+                rsx! {
+                    div {
+                        div { class: "field",
+                            div { class: "field-label", "{tr(&lang, \"name\")}" }
+                            div { class: "field-row",
+                                input { class: "field-input", style: "flex:1;", r#type: "text",
+                                    placeholder: "{tr(&lang, \"serverName\")}", value: "{c_name.read()}",
+                                    oninput: move |e| c_name.set(e.value()) }
+                                button { class: "save-btn",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        move |_| {
+                                            let state = state.clone();
+                                            let cfg = cfg.clone();
+                                            let cfg_err = cfg_err.clone();
+                                            let sc = sc.clone();
+                                            async move {
+                                                let name = c_name.read().trim().to_string();
+                                                if name.is_empty() {
+                                                    return;
+                                                }
+                                                let row = crate::vibeconfig::McpRow {
+                                                    name: name.clone(),
+                                                    transport: c_transport.read().clone(),
+                                                    url: c_url.read().trim().to_string(),
+                                                    command: c_command.read().trim().to_string(),
+                                                    args: c_args.read().trim().to_string(),
+                                                    env: mc_env.read().trim().to_string(),
+                                                    headers: mc_headers.read().trim().to_string(),
+                                                    api_key_env: mc_api_env.read().trim().to_string(),
+                                                    api_key_header: mc_api_hdr.read().trim().to_string(),
+                                                    api_key_format: mc_api_fmt.read().trim().to_string(),
+                                                    auth_type: mc_auth_type.read().clone(),
+                                                    scopes: mc_scopes.read().trim().to_string(),
+                                                    client_id: mc_cid.read().trim().to_string(),
+                                                    client_metadata_url: mc_cmu.read().trim().to_string(),
+                                                    redirect_port: mc_port.read().trim().to_string(),
+                                                    cwd: mc_cwd.read().trim().to_string(),
+                                                    startup_timeout_sec: mc_startup.read().trim().to_string(),
+                                                    tool_timeout_sec: mc_tool.read().trim().to_string(),
+                                                };
+                                                let _ = crate::vibeconfig::api_upsert_mcp(
+                                                    token(&state),
+                                                    row,
+                                                    sc.scope.clone(),
+                                                    sc.cwd.clone(),
+                                                    sc.conn.clone(),
+                                                )
+                                                .await;
+                                                mc_sel.set(name);
+                                                mc_new.set(false);
+                                                mc_loaded.set(String::new());
+                                                reload_cfg(state, cfg, cfg_err, sc).await;
+                                            }
+                                        }
+                                    },
+                                    "{tr(&lang, \"previewSave\")}" }
+                                button { class: "field-btn danger",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        move |_| {
+                                            let state = state.clone();
+                                            let cfg = cfg.clone();
+                                            let cfg_err = cfg_err.clone();
+                                            let sc = sc.clone();
+                                            async move {
+                                                let name = c_name.read().trim().to_string();
+                                                if !name.is_empty() {
+                                                    let _ = crate::vibeconfig::api_remove_mcp(
+                                                        token(&state),
+                                                        name,
+                                                        sc.scope.clone(),
+                                                        sc.cwd.clone(),
+                                                        sc.conn.clone(),
+                                                    )
+                                                    .await;
+                                                }
+                                                mc_sel.set(String::new());
+                                                mc_new.set(false);
+                                                mc_loaded.set(String::new());
+                                                reload_cfg(state, cfg, cfg_err, sc).await;
+                                            }
+                                        }
+                                    },
+                                    "{tr(&lang, \"remove\")}" }
+                            }
+                        }
+                        if json_on {
+                            div {
+                                textarea { class: "field-input",
+                                    style: "min-height:200px;font-family:monospace;font-size:12px;white-space:pre;",
+                                    value: "{mc_json_text.read()}",
+                                    oninput: move |e| {
+                                        mc_json_text.set(e.value());
+                                        mc_json_err.set(String::new());
+                                    } }
+                                if !json_err_txt.is_empty() {
+                                    div { class: "field-hint", style: "color:var(--color-danger);", "{json_err_txt}" }
+                                }
+                                div { class: "field-row",
+                                    button { class: "field-btn primary",
+                                        onclick: {
+                                            let lang_c = lang.clone();
+                                            let state = state.clone();
+                                            let cfg = cfg.clone();
+                                            let cfg_err = cfg_err.clone();
+                                            let sc = sc.clone();
+                                            move |_| {
+                                                let state = state.clone();
+                                                let cfg = cfg.clone();
+                                                let cfg_err = cfg_err.clone();
+                                                let sc = sc.clone();
+                                                let lang = lang_c.clone();
+                                                async move {
+                                                    let txt = mc_json_text.read().clone();
+                                                    match serde_json::from_str::<
+                                                        crate::vibeconfig::McpRow,
+                                                    >(&txt)
+                                                    {
+                                                        Ok(row) => {
+                                                            let nm = row.name.clone();
+                                                            let _ = crate::vibeconfig::api_upsert_mcp(
+                                                                token(&state),
+                                                                row,
+                                                                sc.scope.clone(),
+                                                                sc.cwd.clone(),
+                                                                sc.conn.clone(),
+                                                            )
+                                                            .await;
+                                                            mc_sel.set(nm);
+                                                            mc_new.set(false);
+                                                            mc_loaded.set(String::new());
+                                                            mc_json.set(false);
+                                                            mc_json_err.set(String::new());
+                                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                                        }
+                                                        Err(e) => {
+                                                            mc_json_err.set(
+                                                                tr(&lang, "mcpJsonInvalid")
+                                                                    .replace("{{error}}", &e.to_string()),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "{tr(&lang, \"mcpJsonApply\")}" }
+                                    button { class: "field-btn", onclick: move |_| mc_json.set(false),
+                                        "{tr(&lang, \"mcpFormView\")}" }
                                 }
                             }
-                        },
-                        "{tr(&lang, \"add\")}" }
+                        } else {
+                            div {
+                                div { class: "field",
+                                    div { class: "field-label", "{tr(&lang, \"transport\")}" }
+                                    select { class: "field-select",
+                                        onchange: move |e| c_transport.set(e.value()),
+                                        option { value: "stdio", selected: !is_http, "stdio" }
+                                        option { value: "http", selected: *c_transport.read() == "http", "http" }
+                                        option { value: "streamable-http", selected: *c_transport.read() == "streamable-http", "streamable-http" }
+                                    }
+                                }
+                                if is_http {
+                                    div {
+                                        div { class: "field",
+                                            div { class: "field-label", "URL" }
+                                            input { class: "field-input", r#type: "text",
+                                                placeholder: "http://localhost:3000", value: "{c_url.read()}",
+                                                oninput: move |e| c_url.set(e.value()) }
+                                        }
+                                        div { class: "field",
+                                            div { class: "field-label", "{tr(&lang, \"authType\")}" }
+                                            select { class: "field-select",
+                                                onchange: move |e| mc_auth_type.set(e.value()),
+                                                option { value: "static", selected: !is_oauth, "{tr(&lang, \"authStatic\")}" }
+                                                option { value: "oauth", selected: is_oauth, "{tr(&lang, \"authOauth\")}" }
+                                            }
+                                            div { class: "field-hint", "{auth_hint}" }
+                                        }
+                                        if is_oauth {
+                                            div {
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"oauthScopes\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "read, write",
+                                                        value: "{mc_scopes.read()}",
+                                                        oninput: move |e| mc_scopes.set(e.value()) }
+                                                    div { class: "field-hint", "{tr(&lang, \"oauthScopesHint\")}" }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"oauthClientId\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "my-mcp-client",
+                                                        value: "{mc_cid.read()}",
+                                                        oninput: move |e| mc_cid.set(e.value()) }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"oauthMetadataUrl\")}" }
+                                                    input { class: "field-input", r#type: "text",
+                                                        placeholder: "https://example.com/.well-known/oauth-authorization-server",
+                                                        value: "{mc_cmu.read()}",
+                                                        oninput: move |e| mc_cmu.set(e.value()) }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"oauthRedirectPort\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "47823",
+                                                        value: "{mc_port.read()}",
+                                                        oninput: move |e| mc_port.set(e.value()) }
+                                                    div { class: "field-hint", "{tr(&lang, \"oauthRedirectPortHint\")}" }
+                                                }
+                                            }
+                                        } else {
+                                            div {
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"mcpHeaders\")}" }
+                                                    input { class: "field-input", r#type: "text",
+                                                        value: "{mc_headers.read()}",
+                                                        oninput: move |e| mc_headers.set(e.value()) }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"apiKeyEnv\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "MCP_API_KEY",
+                                                        value: "{mc_api_env.read()}",
+                                                        oninput: move |e| mc_api_env.set(e.value()) }
+                                                    div { class: "field-hint", "{tr(&lang, \"apiKeyEnvHint\")}" }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"apiKeyHeader\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "Authorization",
+                                                        value: "{mc_api_hdr.read()}",
+                                                        oninput: move |e| mc_api_hdr.set(e.value()) }
+                                                }
+                                                div { class: "field",
+                                                    div { class: "field-label", "{tr(&lang, \"apiKeyFormat\")}" }
+                                                    input { class: "field-input", r#type: "text", placeholder: "{fmt_ph}",
+                                                        value: "{mc_api_fmt.read()}",
+                                                        oninput: move |e| mc_api_fmt.set(e.value()) }
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    div {
+                                        div { class: "field",
+                                            div { class: "field-label", "{tr(&lang, \"command\")}" }
+                                            input { class: "field-input", r#type: "text",
+                                                placeholder: "{tr(&lang, \"commandPlaceholder\")}", value: "{c_command.read()}",
+                                                oninput: move |e| c_command.set(e.value()) }
+                                        }
+                                        div { class: "field",
+                                            div { class: "field-label", "{tr(&lang, \"argumentsJson\")}" }
+                                            input { class: "field-input", r#type: "text",
+                                                placeholder: "{tr(&lang, \"argumentsPlaceholder\")}", value: "{c_args.read()}",
+                                                oninput: move |e| c_args.set(e.value()) }
+                                        }
+                                        div { class: "field",
+                                            div { class: "field-label", "{tr(&lang, \"envJson\")}" }
+                                            input { class: "field-input", r#type: "text",
+                                                value: "{mc_env.read()}",
+                                                oninput: move |e| mc_env.set(e.value()) }
+                                        }
+                                        div { class: "field",
+                                            div { class: "field-label", "{tr(&lang, \"mcpCwd\")}" }
+                                            input { class: "field-input", r#type: "text", placeholder: "/path/to/dir",
+                                                value: "{mc_cwd.read()}",
+                                                oninput: move |e| mc_cwd.set(e.value()) }
+                                            div { class: "field-hint", "{tr(&lang, \"mcpCwdHint\")}" }
+                                        }
+                                    }
+                                }
+                                div { class: "field",
+                                    div { class: "field-label", "{tr(&lang, \"startupTimeout\")}" }
+                                    input { class: "field-input", r#type: "text", placeholder: "10",
+                                        value: "{mc_startup.read()}",
+                                        oninput: move |e| mc_startup.set(e.value()) }
+                                    div { class: "field-hint", "{tr(&lang, \"startupTimeoutHint\")}" }
+                                }
+                                div { class: "field",
+                                    div { class: "field-label", "{tr(&lang, \"toolTimeout\")}" }
+                                    input { class: "field-input", r#type: "text", placeholder: "60",
+                                        value: "{mc_tool.read()}",
+                                        oninput: move |e| mc_tool.set(e.value()) }
+                                    div { class: "field-hint", "{tr(&lang, \"toolTimeoutHint\")}" }
+                                }
+                                div { class: "field-row",
+                                    button { class: "field-btn",
+                                        onclick: move |_| {
+                                            let row = crate::vibeconfig::McpRow {
+                                                name: c_name.read().trim().to_string(),
+                                                transport: c_transport.read().clone(),
+                                                url: c_url.read().trim().to_string(),
+                                                command: c_command.read().trim().to_string(),
+                                                args: c_args.read().trim().to_string(),
+                                                env: mc_env.read().trim().to_string(),
+                                                headers: mc_headers.read().trim().to_string(),
+                                                api_key_env: mc_api_env.read().trim().to_string(),
+                                                api_key_header: mc_api_hdr.read().trim().to_string(),
+                                                api_key_format: mc_api_fmt.read().trim().to_string(),
+                                                auth_type: mc_auth_type.read().clone(),
+                                                scopes: mc_scopes.read().trim().to_string(),
+                                                client_id: mc_cid.read().trim().to_string(),
+                                                client_metadata_url: mc_cmu.read().trim().to_string(),
+                                                redirect_port: mc_port.read().trim().to_string(),
+                                                cwd: mc_cwd.read().trim().to_string(),
+                                                startup_timeout_sec: mc_startup.read().trim().to_string(),
+                                                tool_timeout_sec: mc_tool.read().trim().to_string(),
+                                            };
+                                            mc_json_text.set(serde_json::to_string_pretty(&row).unwrap_or_default());
+                                            mc_json_err.set(String::new());
+                                            mc_json.set(true);
+                                        },
+                                        "{tr(&lang, \"mcpJsonView\")}" }
+                                }
+                            }
+                        }
+                    }
                 }
-            });
+            } else {
+                rsx! { div { class: "master-detail-empty", "{tr(&lang, \"noMcpConfigured\")}" } }
+            };
             let _ = &c_api_key_env;
             rsx! {
                 div { class: "settings-section",
                     div { class: "settings-section-header",
-                        div { class: "settings-section-title", "{tr(&lang, \"mcp\")}" }
+                        div { class: "settings-section-title", "{tr(&lang, \"mcpServers\")}" }
+                        button { class: "field-btn",
+                            onclick: move |_| {
+                                mc_new.set(true);
+                                mc_sel.set(String::new());
+                                mc_loaded.set(String::new());
+                                c_name.set(String::new());
+                                c_transport.set("stdio".to_string());
+                                c_url.set(String::new());
+                                c_command.set(String::new());
+                                c_args.set("[]".to_string());
+                                mc_env.set("{}".to_string());
+                                mc_headers.set("{}".to_string());
+                                mc_auth_type.set("static".to_string());
+                                mc_api_env.set(String::new());
+                                mc_api_hdr.set(String::new());
+                                mc_api_fmt.set(String::new());
+                                mc_scopes.set(String::new());
+                                mc_cid.set(String::new());
+                                mc_cmu.set(String::new());
+                                mc_port.set("47823".to_string());
+                                mc_cwd.set(String::new());
+                                mc_startup.set("10".to_string());
+                                mc_tool.set("60".to_string());
+                                mc_json.set(false);
+                                mc_json_text.set(String::new());
+                                mc_json_err.set(String::new());
+                            },
+                            "{tr(&lang, \"addMcpServer\")}" }
                     }
-                    div { class: "session-rows", {rows.iter().cloned()} }
+                    div { class: "master-detail",
+                        div { class: "master-list", {master.iter().cloned()} }
+                        div { class: "master-detail-panel", {detail} }
+                    }
                     {err_el}
                 }
             }
         }
+
         "tools" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",

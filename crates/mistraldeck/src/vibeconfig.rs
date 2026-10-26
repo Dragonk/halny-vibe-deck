@@ -29,7 +29,28 @@ pub struct McpRow {
     pub transport: String,
     pub url: String,
     pub command: String,
+    /// JSON array string, e.g. ["arg1", "arg2"].
     pub args: String,
+    /// JSON object string, e.g. {"DEBUG": "1"} (stdio).
+    pub env: String,
+    /// JSON object string of static-auth headers.
+    pub headers: String,
+    pub api_key_env: String,
+    pub api_key_header: String,
+    pub api_key_format: String,
+    /// "" (none) | "static" | "oauth".
+    pub auth_type: String,
+    /// Comma-separated scopes (oauth).
+    pub scopes: String,
+    pub client_id: String,
+    pub client_metadata_url: String,
+    /// "" = default 47823 (oauth).
+    pub redirect_port: String,
+    pub cwd: String,
+    /// "" = default 10.
+    pub startup_timeout_sec: String,
+    /// "" = default 60.
+    pub tool_timeout_sec: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -74,7 +95,9 @@ mod imp {
     use mistraldeck_core::snapshot::RemoteConnection;
     use mistraldeck_engine::remote_vibe;
     use mistraldeck_engine::Engine;
-    use mistraldeck_vibe::config::{McpServer, ModelConfig, Provider, VibeConfigFile};
+    use mistraldeck_vibe::config::{
+        McpAuth, McpServer, ModelConfig, Provider, VibeConfigFile,
+    };
     use mistraldeck_vibe::files::{AgentFile, PromptFile, SkillFile};
     use mistraldeck_vibe::vibe_home;
 
@@ -138,6 +161,71 @@ mod imp {
         Ok(data_from(&cfg, raw_toml))
     }
 
+    /// Engine row -> UI row. Maps an explicit `[auth]` block; legacy flat
+    /// auth keys (no auth block) surface as a "static" row (Nexus
+    /// `mcpLegacyAuth`).
+    fn mcp_row_from(s: McpServer) -> McpRow {
+        let pairs_json = |v: Vec<(String, String)>| {
+            serde_json::to_string(&v.into_iter().collect::<std::collections::BTreeMap<String, String>>())
+                .unwrap_or_else(|_| "{}".into())
+        };
+        let (auth_type, headers, api_env, api_hdr, api_fmt, scopes, cid, cmu, port) =
+            match &s.auth {
+                Some(a) => (
+                    if a.auth_type.is_empty() {
+                        "static".to_string()
+                    } else {
+                        a.auth_type.clone()
+                    },
+                    pairs_json(a.headers.clone()),
+                    a.api_key_env.clone().unwrap_or_default(),
+                    a.api_key_header.clone().unwrap_or_default(),
+                    a.api_key_format.clone().unwrap_or_default(),
+                    a.scopes.join(", "),
+                    a.client_id.clone().unwrap_or_default(),
+                    a.client_metadata_url.clone().unwrap_or_default(),
+                    a.redirect_port.map(|p| p.to_string()).unwrap_or_default(),
+                ),
+                None => {
+                    let legacy = !s.headers.is_empty()
+                        || s.api_key_env.is_some()
+                        || s.api_key_header.is_some()
+                        || s.api_key_format.is_some();
+                    (
+                        if legacy { "static".to_string() } else { String::new() },
+                        pairs_json(s.headers.clone()),
+                        s.api_key_env.clone().unwrap_or_default(),
+                        s.api_key_header.clone().unwrap_or_default(),
+                        s.api_key_format.clone().unwrap_or_default(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    )
+                }
+            };
+        McpRow {
+            name: s.name,
+            transport: s.transport,
+            url: s.url.unwrap_or_default(),
+            command: s.command.unwrap_or_default(),
+            args: serde_json::to_string(&s.args).unwrap_or_else(|_| "[]".into()),
+            env: pairs_json(s.env),
+            headers,
+            api_key_env: api_env,
+            api_key_header: api_hdr,
+            api_key_format: api_fmt,
+            auth_type,
+            scopes,
+            client_id: cid,
+            client_metadata_url: cmu,
+            redirect_port: port,
+            cwd: s.cwd.unwrap_or_default(),
+            startup_timeout_sec: s.startup_timeout_sec.map(|v| v.to_string()).unwrap_or_default(),
+            tool_timeout_sec: s.tool_timeout_sec.map(|v| v.to_string()).unwrap_or_default(),
+        }
+    }
+
     fn data_from(cfg: &VibeConfigFile, raw_toml: String) -> VibeConfigData {
         VibeConfigData {
             raw_toml,
@@ -164,17 +252,7 @@ mod imp {
                     enabled: m.enabled.unwrap_or(true),
                 })
                 .collect(),
-            mcp: cfg
-                .mcp_servers()
-                .into_iter()
-                .map(|s| McpRow {
-                    name: s.name,
-                    transport: s.transport,
-                    url: s.url.unwrap_or_default(),
-                    command: s.command.unwrap_or_default(),
-                    args: s.args.join(" "),
-                })
-                .collect(),
+            mcp: cfg.mcp_servers().into_iter().map(mcp_row_from).collect(),
             enabled_tools: cfg.enabled_tools(),
             disabled_tools: cfg.disabled_tools(),
             enabled_skills: cfg.enabled_skills(),
@@ -683,27 +761,81 @@ mod imp {
     ) -> Result<(), ServerFnError> {
         let ctx = resolve_ctx(scope, cwd, conn)?;
         with_cfg(&ctx, |cfg| {
+            let transport = if row.transport.is_empty() {
+                "stdio".to_string()
+            } else {
+                row.transport.trim().to_string()
+            };
+            let is_stdio = transport == "stdio";
+            // Invalid JSON in a textarea keeps the previously stored values
+            // (Nexus silently ignores a failed JSON.parse too).
+            let prev = cfg
+                .mcp_servers()
+                .into_iter()
+                .find(|s| s.name == row.name.trim())
+                .unwrap_or_default();
+            let parse_pairs = |txt: &str, fallback: Vec<(String, String)>| {
+                serde_json::from_str::<std::collections::BTreeMap<String, String>>(txt)
+                    .map(|m| m.into_iter().collect())
+                    .unwrap_or(fallback)
+            };
+            let args = serde_json::from_str::<Vec<String>>(row.args.trim()).unwrap_or(prev.args);
+            let env = parse_pairs(row.env.trim(), prev.env);
+            let headers = parse_pairs(row.headers.trim(), prev.headers);
+            // Writing an explicit auth block clears the legacy flat keys
+            // (Nexus `mcpAuthUpdate`/`mcpOauthUpdate`); stdio has no auth.
+            let auth = if is_stdio {
+                None
+            } else {
+                match row.auth_type.as_str() {
+                    "oauth" => Some(McpAuth {
+                        auth_type: "oauth".to_string(),
+                        scopes: row
+                            .scopes
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                        client_id: opt(&row.client_id),
+                        client_metadata_url: opt(&row.client_metadata_url),
+                        redirect_port: row.redirect_port.trim().parse().ok(),
+                        ..Default::default()
+                    }),
+                    "static" => Some(McpAuth {
+                        auth_type: "static".to_string(),
+                        headers,
+                        api_key_env: opt(&row.api_key_env),
+                        api_key_header: Some(if row.api_key_header.trim().is_empty() {
+                            "Authorization".to_string()
+                        } else {
+                            row.api_key_header.trim().to_string()
+                        }),
+                        api_key_format: Some(if row.api_key_format.trim().is_empty() {
+                            "Bearer {token}".to_string()
+                        } else {
+                            row.api_key_format.trim().to_string()
+                        }),
+                        ..Default::default()
+                    }),
+                    _ => None,
+                }
+            };
             cfg.upsert_mcp_server(&McpServer {
                 name: row.name.trim().to_string(),
-                transport: if row.transport.is_empty() {
-                    "stdio".to_string()
-                } else {
-                    row.transport.trim().to_string()
-                },
-                url: opt(&row.url),
-                command: opt(&row.command),
-                args: row
-                    .args
-                    .split_whitespace()
-                    .map(|s| s.to_string())
-                    .collect(),
-                env: Vec::new(),
+                transport,
+                // transport switch clears the other branch's keys (Nexus)
+                url: if is_stdio { None } else { opt(&row.url) },
+                command: if is_stdio { opt(&row.command) } else { None },
+                args: if is_stdio { args } else { Vec::new() },
+                env: if is_stdio { env } else { Vec::new() },
                 headers: Vec::new(),
                 api_key_env: None,
                 api_key_header: None,
                 api_key_format: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
+                startup_timeout_sec: row.startup_timeout_sec.trim().parse().ok(),
+                tool_timeout_sec: row.tool_timeout_sec.trim().parse().ok(),
+                cwd: if is_stdio { opt(&row.cwd) } else { None },
+                auth,
             });
         })
     }
@@ -935,4 +1067,134 @@ pub async fn api_set_vibe_list(
     tokio::task::spawn_blocking(move || imp::set_list(&scope, &cwd, conn.as_ref(), &key, values))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+#[cfg(all(test, feature = "server"))]
+mod mcp_smoke {
+    use super::imp;
+    use super::McpRow;
+
+    fn read_server(name: &str) -> mistraldeck_vibe::config::McpServer {
+        let path = mistraldeck_vibe::vibe_home().join("config.toml");
+        let toml = std::fs::read_to_string(&path).expect("config.toml readable");
+        let cfg = mistraldeck_vibe::config::VibeConfigFile::from_raw(&toml);
+        cfg.mcp_servers()
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap_or_else(|| panic!("server {name} not found"))
+    }
+
+    fn upsert(row: McpRow) {
+        imp::upsert_mcp("global", "", None, row)
+            .unwrap_or_else(|e| panic!("upsert failed: {e}"));
+    }
+
+    #[test]
+    fn upsert_mcp_scenarios() {
+        // Isolated VIBE_HOME so the smoke test never touches the real ~/.vibe.
+        let d = std::env::temp_dir().join(format!("md-smoke7b-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).expect("temp dir");
+        std::env::set_var("VIBE_HOME", &d);
+
+        // 1) http + static auth -> explicit [auth] block, legacy flat keys cleared
+        upsert(McpRow {
+            name: "srv-http".into(),
+            transport: "http".into(),
+            url: "https://api.example.com/mcp".into(),
+            auth_type: "static".into(),
+            headers: r#"{"X-Api-Key":"secret"}"#.into(),
+            api_key_env: "MY_KEY".into(),
+            ..Default::default()
+        });
+        let s = read_server("srv-http");
+        assert_eq!(s.url.as_deref(), Some("https://api.example.com/mcp"));
+        assert!(s.command.is_none(), "http clears stdio command");
+        let a = s.auth.as_ref().expect("auth block written");
+        assert_eq!(a.auth_type, "static");
+        assert_eq!(a.api_key_env.as_deref(), Some("MY_KEY"));
+        assert_eq!(a.api_key_header.as_deref(), Some("Authorization"));
+        assert_eq!(a.api_key_format.as_deref(), Some("Bearer {token}"));
+        assert_eq!(
+            a.headers,
+            vec![("X-Api-Key".to_string(), "secret".to_string())]
+        );
+        // legacy flat keys cleared at server level
+        assert!(s.api_key_env.is_none());
+        assert!(s.headers.is_empty());
+
+        // 2) oauth: csv scopes, redirect_port, static keys dropped
+        upsert(McpRow {
+            name: "srv-oauth".into(),
+            transport: "http".into(),
+            url: "https://mcp.example.com".into(),
+            auth_type: "oauth".into(),
+            scopes: "read, write".into(),
+            client_id: "cid".into(),
+            client_metadata_url: "https://auth.example.com/metadata".into(),
+            redirect_port: "9999".into(),
+            ..Default::default()
+        });
+        let s = read_server("srv-oauth");
+        let a = s.auth.as_ref().expect("oauth auth written");
+        assert_eq!(a.auth_type, "oauth");
+        assert_eq!(a.scopes, vec!["read".to_string(), "write".to_string()]);
+        assert_eq!(a.client_id.as_deref(), Some("cid"));
+        assert_eq!(a.client_metadata_url.as_deref(), Some("https://auth.example.com/metadata"));
+        assert_eq!(a.redirect_port, Some(9999));
+        assert!(a.api_key_env.is_none(), "oauth branch drops static keys");
+        assert!(a.headers.is_empty());
+
+        // 3) stdio: JSON args/env, cwd, timeouts
+        upsert(McpRow {
+            name: "srv-stdio".into(),
+            transport: "stdio".into(),
+            command: "uvx".into(),
+            args: r#"["mcp-server","--flag"]"#.into(),
+            env: r#"{"DEBUG":"1"}"#.into(),
+            cwd: "/tmp/wd".into(),
+            startup_timeout_sec: "15".into(),
+            tool_timeout_sec: "120".into(),
+            ..Default::default()
+        });
+        let s = read_server("srv-stdio");
+        assert_eq!(s.command.as_deref(), Some("uvx"));
+        assert_eq!(
+            s.args,
+            vec!["mcp-server".to_string(), "--flag".to_string()]
+        );
+        assert_eq!(s.env, vec![("DEBUG".to_string(), "1".to_string())]);
+        assert_eq!(s.cwd.as_deref(), Some("/tmp/wd"));
+        assert_eq!(s.startup_timeout_sec, Some(15));
+        assert_eq!(s.tool_timeout_sec, Some(120));
+        assert!(s.auth.is_none());
+        assert!(s.url.is_none());
+
+        // 4) invalid JSON keeps the previously stored values (Nexus JSON.parse semantics)
+        upsert(McpRow {
+            name: "srv-stdio".into(),
+            transport: "stdio".into(),
+            command: "uvx".into(),
+            args: "not json".into(),
+            ..Default::default()
+        });
+        let s = read_server("srv-stdio");
+        assert_eq!(s.args.len(), 2, "prev args kept on invalid JSON");
+        assert_eq!(s.env.len(), 1, "prev env kept on empty env");
+
+        // 5) transport switch http -> stdio clears url + auth
+        upsert(McpRow {
+            name: "srv-http".into(),
+            transport: "stdio".into(),
+            command: "sh".into(),
+            ..Default::default()
+        });
+        let s = read_server("srv-http");
+        assert!(s.auth.is_none(), "auth cleared on transport switch");
+        assert!(s.url.is_none(), "url cleared on transport switch");
+        assert_eq!(s.command.as_deref(), Some("sh"));
+
+        std::env::remove_var("VIBE_HOME");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
