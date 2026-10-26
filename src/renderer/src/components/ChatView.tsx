@@ -139,6 +139,11 @@ export default function ChatView(): React.JSX.Element {
               )}
             </div>
           )}
+          {session && session.messages.length > 0 && acpError && (
+            <div className="chat-error-banner">
+              <span>⚠</span> {acpError}
+            </div>
+          )}
           {isResuming && (
             <div className="agent-busy-row">
               <span className="agent-busy-spinner" />

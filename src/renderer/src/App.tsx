@@ -423,6 +423,7 @@ export default function App(): React.JSX.Element {
             const rid = (d.remoteId as string | undefined) ?? null
             window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined).catch((err: Error) => {
               setAcpError(err.message)
+              if (store.pendingLoadSessionId !== acpSessId) markSessionIdle(localId)
             })
           }
           break

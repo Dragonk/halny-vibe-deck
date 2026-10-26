@@ -459,6 +459,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
     if (!textToSend && pastedImages.length === 0) return
 
+    // v0.13.1: a new send attempt clears the stale error banner
+    setAcpError(null)
+
     // Extract @path markers and fetch file/folder contents for ACP
     const atPathRegex = /@([^\s]+)/g
     const cwd = currentSessionWorkingDirectory() || config.workingDirectory || ''
@@ -577,6 +580,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
       try {
         await window.api.acp.sendPrompt(expandedText, linkedSess?.acpSessionId ?? undefined, rid ?? undefined)
       } catch (err) {
+        if (linkedSess?.id) useStore.getState().markSessionIdle(linkedSess.id)
         setAcpError((err as Error).message)
       }
       return
@@ -677,9 +681,11 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           setSessionStarting(false)
         } catch (err2) {
           setSessionStarting(false)
+          useStore.getState().markSessionIdle(currentSess.id)
           setAcpError((err2 as Error).message)
         }
       } else {
+        useStore.getState().markSessionIdle(currentSess.id)
         setAcpError(errMsg)
       }
     }

@@ -447,28 +447,12 @@ export default function Sidebar(): React.JSX.Element {
               </button>
               {!collapsed && (
                 <>
-                  {conn.locations.map((loc) => (
-                    <button
-                      key={conn.id + '-loc-' + loc}
-                      className="session-item remote-location-item"
-                      title={loc}
-                      onClick={() => {
-                        setMobileSidebarOpen(false)
-                        void startRemoteSession(conn.id, loc)
-                      }}
-                    >
-                      <div className="session-item-content">
-                        <div className="session-item-row">
-                          <span className="remote-loc-icon">📁</span>
-                          <span className="session-name">
-                            {loc.split(/[/\\]/).filter(Boolean).pop() || loc}
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
                   {(() => {
-                    // v0.7.0: group the connection's sessions per project cwd
+                    // v0.13.1: unified per-remote folder list - configured
+                    // locations plus session cwds, deduplicated. A configured
+                    // folder without sessions keeps the old location-item
+                    // behaviour: clicking it starts a new session there.
+                    const normWd = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p)
                     const wdGroups = new Map<string, typeof connSessions>()
                     for (const s of connSessions) {
                       const wd = s.workingDirectory || ''
@@ -476,7 +460,29 @@ export default function Sidebar(): React.JSX.Element {
                       if (list) list.push(s)
                       else wdGroups.set(wd, [s])
                     }
-                    return Array.from(wdGroups.entries()).map(([wd, list]) => {
+                    const groupFor = (target: string): typeof connSessions => {
+                      const nt = normWd(target)
+                      for (const [gwd, glist] of wdGroups) {
+                        if (normWd(gwd) === nt) return glist
+                      }
+                      return [] as typeof connSessions
+                    }
+                    const seen = new Set<string>()
+                    const folders: Array<{ wd: string; list: typeof connSessions }> = []
+                    for (const loc of conn.locations) {
+                      const nt = normWd(loc)
+                      if (seen.has(nt)) continue
+                      seen.add(nt)
+                      folders.push({ wd: loc, list: groupFor(loc) })
+                    }
+                    for (const [gwd, glist] of wdGroups) {
+                      const nt = normWd(gwd)
+                      if (seen.has(nt)) continue
+                      seen.add(nt)
+                      folders.push({ wd: gwd, list: glist })
+                    }
+                    return folders.map(({ wd, list }) => {
+                      const hasSessions = list.length > 0
                       const grpKey = 'remote:' + conn.id + ':' + wd
                       const grpCollapsed = collapsedProjects.includes(grpKey)
                       const label =
@@ -487,24 +493,35 @@ export default function Sidebar(): React.JSX.Element {
                         <div key={grpKey} className="remote-cwd-group">
                           <button
                             className="project-group-header remote-cwd-header"
-                            onClick={() => toggleProjectCollapse(grpKey)}
+                            onClick={() => {
+                              if (hasSessions) toggleProjectCollapse(grpKey)
+                              else {
+                                setMobileSidebarOpen(false)
+                                void startRemoteSession(conn.id, wd)
+                              }
+                            }}
                             title={wd || tr.noProject}
                           >
-                            <span className={`project-chevron ${grpCollapsed ? '' : 'open'}`}>▸</span>
+                            {hasSessions ? (
+                              <span className={'project-chevron ' + (grpCollapsed ? '' : 'open')}>▸</span>
+                            ) : (
+                              <span className="remote-loc-icon">📁</span>
+                            )}
                             <span className="project-name">{label}</span>
-                            <span className="project-count">{list.length}</span>
+                            {hasSessions ? <span className="project-count">{list.length}</span> : null}
                             <span
                               className="pgh-plus"
                               title={tr.newSessionHere}
                               onClick={(e) => {
                                 e.stopPropagation()
+                                setMobileSidebarOpen(false)
                                 void startRemoteSession(conn.id, wd)
                               }}
                             >
                               ＋
                             </span>
                           </button>
-                          {!grpCollapsed && list.map((s) => renderSession(s))}
+                          {hasSessions && !grpCollapsed && list.map((s) => renderSession(s))}
                         </div>
                       )
                     })
