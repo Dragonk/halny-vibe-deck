@@ -711,6 +711,27 @@ export default function App(): React.JSX.Element {
     return unsub
   }, [handleAcpEvent])
 
+  // v1.0.9: the system back gesture/button (Android phone) pops ONE view
+  // layer at a time: an open panel, then edit mode / preview tabs /
+  // settings - exactly like a native app. When nothing is open, the back
+  // gesture is left to the browser (it may leave the page).
+  useEffect(() => {
+    if (!isWebMode()) return
+    window.history.replaceState({ nav: 'app' }, '')
+    const onPop = (): void => {
+      const st = useStore.getState()
+      const handled =
+        (st.mobileSidebarOpen && (st.setMobileSidebarOpen(false), true)) ||
+        (st.dockOpen &&
+          window.matchMedia('(max-width: 768px)').matches &&
+          (st.setDockOpen(false), true)) ||
+        (st.backStack.length > 0 && (st.popBack(), true))
+      if (handled) window.history.pushState({ nav: 'app' }, '')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // v0.9.0: auto-close idle live sessions (config.autoCloseIdleMinutes,
   // default 60; 0 disables). Sending a message to a closed session revives
   // it through the regular resume path.

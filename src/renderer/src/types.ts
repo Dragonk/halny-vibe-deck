@@ -111,6 +111,8 @@ export interface PreviewTab {
   path: string
   diff?: string
   remoteId?: string | null
+  /** v1.0.9: open directly in edit mode (file-list context menu). */
+  startEdit?: boolean
 }
 
 /** One selectable choice of an ACP config option. */

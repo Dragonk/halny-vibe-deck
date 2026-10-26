@@ -588,12 +588,24 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
   const [text, setText] = useState<string | null>(null)
   const [textError, setTextError] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
-  const [editMode, setEditMode] = useState(false)
+  // v1.0.9: open directly in edit mode when the tab asked for it
+  // (file-list context menu "Edit").
+  const [editMode, setEditMode] = useState(tab.kind === 'file' && Boolean(tab.startEdit))
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
   const [binary, setBinary] = useState<{ base64: string; mime: string } | null>(null)
   const [stat, setStat] = useState<{ exists: boolean; isDir: boolean; size: number } | null>(null)
   const [dirEntries, setDirEntries] = useState<Array<{ name: string; isDir: boolean }>>([])
+  // v1.0.9: while editing, the system back gesture returns to the preview
+  // (the layer is registered only for the edit state).
+  const pushBack = useStore((st) => st.pushBack)
+  const removeBack = useStore((st) => st.removeBack)
+  React.useEffect(() => {
+    if (!editMode) return
+    const id = pushBack(() => setEditMode(false))
+    return () => removeBack(id)
+  }, [editMode, pushBack, removeBack])
+
   const docRef = React.useRef<(() => string) | null>(null)
   const registerDoc = React.useCallback((fn: (() => string) | null) => {
     docRef.current = fn
@@ -735,24 +747,58 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
               </button>
             )
           )}
-          {!(tab.remoteId ?? null) &&
-            (isWebMode() ? (
+          {/* v1.0.9: download ALWAYS works - also for remote (SSH) files;
+              desktop saves via a dialog, web via /api/download or a blob. */}
+          {isWebMode() ? (
+            <button
+              className="file-preview-btn"
+              title={tr.downloadLabel}
+              onClick={() =>
+                tab.remoteId
+                  ? void (async () => {
+                      try {
+                        const b = (await window.api.fs.readBinary(tab.path, tab.remoteId ?? undefined)) as { base64: string; mime: string; error: string | null }
+                        if (b.error) return
+                        const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(b.base64), (c) => c.charCodeAt(0))], { type: b.mime || 'application/octet-stream' }))
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = tab.name
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      } catch (err) {
+                        console.error('Download failed:', err)
+                      }
+                    })()
+                  : void downloadFile(tab.path)
+              }
+            >
+              ⬇
+            </button>
+          ) : (
+            <>
               <button
                 className="file-preview-btn"
                 title={tr.downloadLabel}
-                onClick={() => void downloadFile(tab.path)}
+                onClick={() =>
+                  void (window.api.fs.saveAs as ((p: string, rid?: string) => Promise<{ error: string | null }>) | undefined)?.(
+                    tab.path,
+                    tab.remoteId ?? undefined,
+                  )
+                }
               >
                 ⬇
               </button>
-            ) : (
-              <button
-                className="file-preview-btn"
-                title={tr.previewOpenExternally}
-                onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
-              >
-                ↗
-              </button>
-            ))}
+              {!(tab.remoteId ?? null) && (
+                <button
+                  className="file-preview-btn"
+                  title={tr.previewOpenExternally}
+                  onClick={() => window.api.shell.openPath(tab.path).catch(console.error)}
+                >
+                  ↗
+                </button>
+              )}
+            </>
+          )}
         </div>
       </div>
 

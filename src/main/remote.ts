@@ -29,6 +29,11 @@ export function shq(s: string): string {
 
 export interface SshRunResult { code: number; stdout: string; stderr: string }
 
+/** Options every ssh spawn gets: accept unknown host keys (first connect
+ * used to hang on the interactive prompt, blocking the session list for
+ * minutes) and fail fast instead of hanging on an unreachable network. */
+const SSH_CONNECT_OPTS = ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
+
 /** Run a remote command over the connection's ssh command (single quoted arg). */
 export function sshRun(
   conn: RemoteConnection,
@@ -44,7 +49,7 @@ export function sshRun(
     }
     let proc
     try {
-      proc = spawn(tokens[0], [...tokens.slice(1), remoteCmd], { windowsHide: true })
+      proc = spawn(tokens[0], [...tokens.slice(1), ...SSH_CONNECT_OPTS, remoteCmd], { windowsHide: true })
     } catch (err) {
       resolve({ code: -1, stdout: "", stderr: String(err) })
       return
@@ -146,7 +151,7 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
     let proc
     try {
       // Login shell so the remote PATH includes ~/.local/bin (uv tools).
-    proc = spawn(tokens[0], [...tokens.slice(1), 'bash -lc "exec vibe-acp"'], { windowsHide: true })
+    proc = spawn(tokens[0], [...tokens.slice(1), ...SSH_CONNECT_OPTS, 'bash -lc "exec vibe-acp"'], { windowsHide: true })
     } catch {
       resolve([])
       return

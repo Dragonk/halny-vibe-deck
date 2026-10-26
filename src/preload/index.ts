@@ -209,6 +209,13 @@ const api = {
       ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined),
     writeBinary: (filePath: string, base64: string, remoteId?: string): Promise<{ error: string | null }> =>
       ipcRenderer.invoke('fs:write-binary', filePath, base64, remoteId ?? undefined),
+    // v1.0.9: file-list context menu actions (rename / delete / save-as)
+    rename: (filePath: string, newName: string, remoteId?: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:rename', filePath, newName, remoteId ?? undefined),
+    delete: (filePath: string, remoteId?: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:delete', filePath, remoteId ?? undefined),
+    saveAs: (filePath: string, remoteId?: string): Promise<{ error: string | null; saved: boolean }> =>
+      ipcRenderer.invoke('fs:save-as', filePath, remoteId ?? undefined),
     // v1.0.8: absolute host path of a dropped File (Electron webUtils) -
     // null in the browser (the drop handler uploads the bytes instead).
     pathForFile: (file: File): string | null => {

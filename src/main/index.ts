@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, Menu } from "electron";
-import { join } from "path";
+import { join, dirname } from "path";
 import fs from "fs";
 import os from "os";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
@@ -78,7 +78,7 @@ import {
   makeSalt,
   hashPassword,
 } from "./serve";
-import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus, sshRun } from "./remote";
+import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus, sshRun, shq } from "./remote";
 import {
   checkAppUpdate,
   checkCliUpdate,
@@ -665,6 +665,65 @@ app.whenReady().then(() => {
   });
 
   // v0.13.14: create a project directory (web mode "New project…" dialog)
+  // v1.0.9: file-list context menu actions - rename / delete / save-as,
+  // all remote-aware (the tree also browses SSH hosts).
+  ipcMain.handle("fs:rename", async (_e, filePath: string, newName: string, remoteId?: string) => {
+    const clean = String(newName ?? "").trim();
+    if (!clean || clean.includes("/") || clean.includes("\\") || clean === "." || clean === "..") {
+      return { error: "Invalid name" };
+    }
+    const target = join(dirname(filePath), clean);
+    if (remoteId) {
+      const r = await sshRun(remoteConnOrThrow(remoteId), "mv " + shq(filePath) + " " + shq(target), 20000);
+      return { error: r.code === 0 ? null : (r.stderr || "mv failed").slice(0, 300) };
+    }
+    try {
+      fs.renameSync(filePath, target);
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  ipcMain.handle("fs:delete", async (_e, filePath: string, remoteId?: string) => {
+    if (remoteId) {
+      const r = await sshRun(remoteConnOrThrow(remoteId), "rm -rf " + shq(filePath), 30000);
+      return { error: r.code === 0 ? null : (r.stderr || "rm failed").slice(0, 300) };
+    }
+    try {
+      fs.rmSync(filePath, { recursive: true, force: true });
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // v1.0.9: download a (possibly remote) file into a local path chosen by
+  // the user - the "Pobierz" action of the file-list context menu.
+  ipcMain.handle("fs:save-as", async (_e, filePath: string, remoteId?: string) => {
+    const name = filePath.split(/[\\/]/).pop() || "file";
+    const win = BrowserWindow.getAllWindows()[0] ?? null;
+    const res = await dialog.showSaveDialog(win, { defaultPath: join(os.homedir(), "Downloads", name) });
+    if (res.canceled || !res.filePath) return { error: null, saved: false };
+    const data = remoteId
+      ? await remoteReadBinary(remoteConnOrThrow(remoteId), filePath, mimeFor)
+      : await (async () => {
+          try {
+            const b = fs.readFileSync(filePath);
+            return { base64: b.toString("base64"), mime: "application/octet-stream", size: b.length, error: null };
+          } catch (err) {
+            return { base64: "", mime: "", size: 0, error: err instanceof Error ? err.message : String(err) };
+          }
+        })();
+    if (data.error) return { error: data.error, saved: false };
+    try {
+      fs.writeFileSync(res.filePath, Buffer.from(data.base64, "base64"));
+      return { error: null, saved: true };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err), saved: false };
+    }
+  });
+
   ipcMain.handle("fs:mkdir", async (_e, filePath: string, remoteId?: string) => {
     if (remoteId) return remoteMkdir(remoteConnOrThrow(remoteId), filePath);
     try {

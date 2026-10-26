@@ -44,6 +44,7 @@ export default function Sidebar(): React.JSX.Element {
     hideSession,
     hideProject,
     remoteStatuses,
+    remoteLoading,
     startRemoteSession,
     mobileSidebarOpen,
     setMobileSidebarOpen,
@@ -377,13 +378,8 @@ export default function Sidebar(): React.JSX.Element {
       className={`sidebar ${isResizing ? 'sidebar-resizing' : ''} ${mobileSidebarOpen ? 'mobile-open' : ''}`}
       style={{ width: sidebarWidth }}
     >
-      <button
-        className="mobile-panel-close"
-        title={tr.closePanelLabel}
-        onClick={() => setMobileSidebarOpen(false)}
-      >
-        ✕
-      </button>
+      {/* v1.0.9: no ✕ on the mobile sessions panel - the user closes it
+          with the back gesture / swipe, or by picking a session. */}
 
       <div className="sidebar-sessions-header">
         <span className="sidebar-sessions-label">{tr.sessions}</span>
@@ -469,10 +465,19 @@ export default function Sidebar(): React.JSX.Element {
                 <span className={`project-chevron ${collapsed ? '' : 'open'}`}>▸</span>
                 <span className="remote-badge">📍</span>
                 <span className="project-name">{conn.name}</span>
-                <span
-                  className={`remote-dot ${st?.ok ? 'ok' : 'down'}`}
-                  title={st?.ok ? tr.remoteConnUp : tr.remoteConnDown}
-                />
+                {remoteLoading[conn.id] ? (
+                  // v1.0.9: the SSH list is being fetched (SSH handshake +
+                  // ACP session/list can take a while) - say so instead of
+                  // looking like "no sessions".
+                  <span className="remote-loading" title={tr.remoteLoading}>
+                    ⟳
+                  </span>
+                ) : (
+                  <span
+                    className={`remote-dot ${st?.ok ? 'ok' : 'down'}`}
+                    title={st?.ok ? tr.remoteConnUp : tr.remoteConnDown}
+                  />
+                )}
                 <span
                   className="pgh-plus"
                   title={tr.newProjectLabel + ' · ' + conn.name}
@@ -585,6 +590,8 @@ export default function Sidebar(): React.JSX.Element {
           className={`sidebar-nav-item ${currentView === 'stats' ? 'active' : ''}`}
           onClick={() => {
             setMobileSidebarOpen(false)
+            // v1.0.9: the back gesture returns to the chat from Stats.
+            useStore.getState().pushBack(() => useStore.getState().setCurrentView('chat'))
             setCurrentView('stats')
           }}
         >
@@ -594,6 +601,8 @@ export default function Sidebar(): React.JSX.Element {
           className={`sidebar-nav-item ${currentView === 'history' ? 'active' : ''}`}
           onClick={() => {
             setMobileSidebarOpen(false)
+            // v1.0.9: the back gesture returns to the chat from History.
+            useStore.getState().pushBack(() => useStore.getState().setCurrentView('chat'))
             setCurrentView('history')
           }}
         >
@@ -603,6 +612,8 @@ export default function Sidebar(): React.JSX.Element {
           className={`sidebar-nav-item ${currentView === 'settings' ? 'active' : ''}`}
           onClick={() => {
             setMobileSidebarOpen(false)
+            // v1.0.9: the back gesture returns to the chat from Settings.
+            useStore.getState().pushBack(() => useStore.getState().setCurrentView('chat'))
             setCurrentView('settings')
           }}
         >

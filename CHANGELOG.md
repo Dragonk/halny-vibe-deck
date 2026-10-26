@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.9 — 2026-10-26
+
+### Fixed
+- **The SSH session list no longer takes minutes on first launch.** Every
+  ssh spawn now passes `StrictHostKeyChecking=accept-new` and
+  `ConnectTimeout=10` - previously the FIRST connection to a host hung on
+  the interactive host-key prompt until the timeout, the status check
+  failed and the session list was silently skipped until a later refresh
+  cycle. The per-connection session lists are also fetched CONCURRENTLY
+  (the old loop stacked whole SSH+ACP handshakes), and the remote group
+  header shows a spinner while the list is being fetched instead of
+  looking like "no sessions".
+
+### Added
+- **File-list context menu** (right-click on desktop, long-press on
+  touch): preview, edit (opens the CodeMirror editor with save),
+  download (always available - a save dialog on desktop, /api/download
+  or a client-side blob in the browser, SSH files included), open
+  externally (desktop + local files), rename and delete (both
+  remote-aware, delete asks for confirmation).
+- **System back gesture/button pops one view layer at a time** on the
+  phone: an open panel, then edit mode, preview tabs, Stats/History/
+  Settings - exactly like a native app. With nothing open the gesture
+  behaves as the browser default.
+- **Mobile: the sessions panel has no ✕ close button** anymore - close
+  it with the back gesture/swipe or by picking a session.
+- **Mobile: the file list gets finger-sized rows** (44 px, bigger text
+  and context-menu items).
+
 ## 1.0.8 — 2026-10-26
 
 ### Fixed

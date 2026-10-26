@@ -214,7 +214,14 @@ function buildApi(): AppAPI {
       // File - the drop handler falls back to uploading the bytes.
       pathForFile: (_file: File): string | null => null,
       mkdir: (filePath: string, remoteId?: string): Promise<unknown> =>
-        invoke('fs:mkdir', [filePath, remoteId ?? undefined])
+        invoke('fs:mkdir', [filePath, remoteId ?? undefined]),
+      // v1.0.9: file-list context menu actions (save-as is desktop-only;
+      // the web client downloads via /api/download or a client-side blob)
+      rename: (filePath: string, newName: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:rename', [filePath, newName, remoteId ?? undefined]),
+      delete: (filePath: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:delete', [filePath, remoteId ?? undefined]),
+      saveAs: (): Promise<unknown> => Promise.resolve({ error: 'save dialog unavailable in the browser', saved: false })
     },
     git: {
       status: (cwd: string, remoteId?: string): Promise<unknown> => invoke('git:status', [cwd, remoteId ?? undefined]),

@@ -5853,6 +5853,9 @@ code {
 }
 .remote-dot.ok { background: #22c55e; }
 .remote-dot.down { background: #ef4444; }
+/* v1.0.9: spinner while the SSH session list is being fetched */
+.remote-loading { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--text-muted); animation: remote-loading-spin 1s linear infinite; display: inline-block; }
+@keyframes remote-loading-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .remote-project-group .project-group-header { color: var(--accent); }
 .remote-cwd-header { padding-left: 22px; }
 .remote-cwd-group .session-item { padding-left: 26px; }
@@ -6100,6 +6103,14 @@ code {
 /* v1.0.8: drag & drop highlight + vision warning banner */
 .input-card-wrap.drag-over .input-card { outline: 2px dashed var(--primary, #5b6cff); outline-offset: 2px; }
 .vision-warn { margin: 0 0 6px; padding: 8px 12px; border: 1px solid #b58a2b66; background: #b58a2b1a; border-radius: 8px; color: #d9a83f; font-size: 12px; line-height: 1.45; }
+/* v1.0.9: the file list needs breathing room under a finger */
+@media (max-width: 768px) {
+  .filetree-item { min-height: 44px; gap: 8px; font-size: 14px; }
+  .filetree-empty { min-height: 36px; font-size: 13px; }
+  .ctx-menu { min-width: 220px; }
+  .ctx-menu-item { padding: 12px 14px; font-size: 14px; }
+  .confirm-text { padding: 4px 2px 8px; font-size: 14px; line-height: 1.5; }
+}
 .history-load-more { padding: 10px 0 4px; text-align: center; font-size: 12px; opacity: 0.65; }
 .history-remote-marker { opacity: 0.85; }
 

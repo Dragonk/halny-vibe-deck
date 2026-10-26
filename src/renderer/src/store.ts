@@ -214,6 +214,8 @@ interface AppStore {
   closePreviewTab: (id: string) => void;
   setActivePreview: (id: string) => void;
   openFilePreviewTab: (path: string, name?: string, remoteId?: string | null) => void;
+  /** v1.0.9: open the preview and go straight into edit mode. */
+  openFileEditor: (path: string, name?: string, remoteId?: string | null) => void;
   // File-tree state lives in the store so expansion survives dock tab switches.
   // v0.7.0: keys are namespaced per remote connection (fileTreeKey).
   fileTreeExpanded: Set<string>;
@@ -279,6 +281,13 @@ interface AppStore {
   // ---- v0.6.0/v0.7.0: remote SSH connections ----
   /** Latest reachability status per connection id */
   remoteStatuses: Record<string, RemoteStatus>;
+  /** v1.0.9: layers the system back gesture pops (previews, edit, views). */
+  backStack: Array<{ id: number; run: () => void }>;
+  pushBack: (run: () => void) => number;
+  removeBack: (id: number) => void;
+  popBack: () => void;
+  /** v1.0.9: connections whose session list is currently being fetched. */
+  remoteLoading: Record<string, boolean>;
   /**
    * v0.7.0: idempotently make sure the ACP worker for a connection (null =
    * the local agent) is running. Never primes a session - resume paths rely
@@ -985,6 +994,8 @@ export const useStore = create<AppStore>((set, get) => ({
   },
   openFilePreviewTab: (path, name, remoteId) => {
     const rid = remoteId ?? null;
+    // v1.0.9: back gesture returns to the file list from a preview tab.
+    get().pushBack(() => useStore.setState({ activePreviewId: null }));
     get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
@@ -1003,8 +1014,36 @@ export const useStore = create<AppStore>((set, get) => ({
       return { previewTabs: [...s.previewTabs, tab], activePreviewId: tab.id };
     });
   },
+  openFileEditor: (path, name, remoteId) => {
+    const rid = remoteId ?? null;
+    // v1.0.9: back gesture returns to the file list from the editor.
+    get().pushBack(() => useStore.setState({ activePreviewId: null }));
+    get().ensureDockOpen();
+    set((s) => {
+      const existing = s.previewTabs.find(
+        (t) => t.kind === "file" && t.path === path && (t.remoteId ?? null) === rid,
+      );
+      let tabs = s.previewTabs;
+      let activeId = existing?.id;
+      if (!existing) {
+        const tab: PreviewTab = {
+          id: uuid(),
+          kind: "file",
+          name: name || path.split(/[\\/]/).pop() || path,
+          path,
+          remoteId: rid,
+          startEdit: true,
+        };
+        tabs = [...tabs, tab];
+        activeId = tab.id;
+      }
+      return { previewTabs: tabs, activePreviewId: activeId };
+    });
+  },
   openDiffPreview: (name, path, diff, remoteId) => {
     const rid = remoteId ?? null;
+    // v1.0.9: back gesture returns to the file list from a diff tab.
+    get().pushBack(() => useStore.setState({ activePreviewId: null }));
     get().ensureDockOpen();
     set((s) => {
       const existing = s.previewTabs.find(
@@ -1831,6 +1870,25 @@ export const useStore = create<AppStore>((set, get) => ({
 
   // ---- v0.6.0/v0.7.0: remote SSH connections ----
   remoteStatuses: {},
+  remoteLoading: {},
+  backStack: [],
+  pushBack: (run) => {
+    const id = Date.now() + Math.random();
+    set((s) => ({ backStack: [...s.backStack, { id, run }] }));
+    return id;
+  },
+  removeBack: (id) => set((s) => ({ backStack: s.backStack.filter((e) => e.id !== id) })),
+  popBack: () => {
+    const st = get();
+    const top = st.backStack[st.backStack.length - 1];
+    if (!top) return;
+    set({ backStack: st.backStack.slice(0, -1) });
+    try {
+      top.run();
+    } catch {
+      /* a stale layer must never break the back gesture */
+    }
+  },
 
   ensureAcpWorker: async (remoteId, cwd) => {
     const cfg = get().config;
@@ -1856,22 +1914,32 @@ export const useStore = create<AppStore>((set, get) => ({
       if (Object.keys(get().remoteStatuses).length > 0) set({ remoteStatuses: {} });
       return;
     }
+    // v1.0.9: per-connection loading flag - the sidebar shows a spinner
+    // instead of the "no sessions" look while the list is being fetched.
+    set({ remoteLoading: Object.fromEntries(conns.map((c) => [c.id, true])) });
     try {
       const statuses = (await window.api.remote.statusNow(
         conns.map((c) => c.id),
       )) as Record<string, RemoteStatus>;
       set({ remoteStatuses: statuses });
-      for (const c of conns) {
-        if (!statuses[c.id]?.ok) continue;
-        try {
-          const infos = (await window.api.remote.sessions(c.id)) as RemoteSessionInfo[];
-          get().importRemoteSessions(c.id, infos);
-        } catch (err) {
-          console.error("[store] remote sessions failed:", c.name, err);
-        }
-      }
+      // v1.0.9: fetch every connection's session list CONCURRENTLY - the
+      // old sequential loop stacked whole SSH+ACP handshakes (25 s timeout
+      // each), so the first launch could sit for minutes without a list.
+      await Promise.allSettled(
+        conns.map(async (c) => {
+          if (!statuses[c.id]?.ok) return;
+          try {
+            const infos = (await window.api.remote.sessions(c.id)) as RemoteSessionInfo[];
+            get().importRemoteSessions(c.id, infos);
+          } catch (err) {
+            console.error("[store] remote sessions failed:", c.name, err);
+          }
+        }),
+      );
     } catch (err) {
       console.error("[store] remote status failed:", err);
+    } finally {
+      set({ remoteLoading: {} });
     }
   },
 
