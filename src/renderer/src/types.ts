@@ -338,6 +338,7 @@ export interface SessionPreviewData {
     completionTokens: number
     cachedTokens: number
     totalTokens: number
+    cost?: number
   } | null
 }
 

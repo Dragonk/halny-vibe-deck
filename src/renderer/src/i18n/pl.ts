@@ -475,8 +475,8 @@ export const pl = {
   remoteNoConnections: 'Brak połączeń zdalnych.',
   remoteInstallOk: 'vibe-acp zainstalowany pomyślnie.',
   usageContextTooltip: 'Kontekst: {{used}} / {{total}} tokenów',
-  usageGaugeTooltip: 'Kontekst: {{used}} / {{window}} tokenÃ³w Â· auto-kompresja od {{compact}}',
-  usageCompactOff: 'auto-kompresja wyÅÄczona',
+  usageGaugeTooltip: 'Kontekst: {{used}} / {{window}} tokenów (maks. kontekst modelu) · autokompaktowanie od {{compact}} tokenów',
+  usageCompactOff: 'autokompaktowanie wyłączone',
   usageCacheTooltip: 'Cache: {{cached}} z {{total}} tokenów wejścia',
   usagePromptTooltip: 'Tokeny wejściowe',
   usageCompletionTooltip: 'Tokeny wyjściowe',

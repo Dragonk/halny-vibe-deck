@@ -3772,6 +3772,8 @@ code {
     gap: 10px;
     padding: 0 4px;
 }
+/* v0.13.5: the usage bar lives inline in the status bar (single row) */
+.input-status-bar .usage-bar { padding: 0; height: 20px; }
 
 .status-cwd {
     font-size: 10px;
@@ -4992,21 +4994,6 @@ code {
 .usage-cost .usage-bar-value {
     color: var(--text);
 }
-.input-usage-inline {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-}
-.usage-inline-item {
-    font-size: 10px;
-    color: var(--text-dim);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-.usage-inline-item.usage-cache {
-    color: var(--color-success);
-}
-
 /* ===== Input chips (model / mode / thinking / folder) ===== */
 .ic-chip-wrap {
     position: relative;

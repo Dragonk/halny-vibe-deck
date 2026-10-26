@@ -475,7 +475,7 @@ export const en = {
   remoteNoConnections: 'No remote connections yet.',
   remoteInstallOk: 'vibe-acp installed successfully.',
   usageContextTooltip: 'Context: {{used}} / {{total}} tokens',
-  usageGaugeTooltip: 'Context: {{used}} / {{window}} tokens Â· auto-compact at {{compact}}',
+  usageGaugeTooltip: 'Context: {{used}} / {{window}} tokens (model max context) · auto-compact from {{compact}} tokens',
   usageCompactOff: 'auto-compaction disabled',
   usageCacheTooltip: 'Cache: {{cached}} of {{total}} prompt tokens',
   usagePromptTooltip: 'Prompt tokens',

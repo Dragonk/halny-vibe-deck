@@ -477,7 +477,7 @@ export const it = {
   remoteNoConnections: 'Nessuna connessione remota.',
   remoteInstallOk: 'vibe-acp installato correttamente.',
   usageContextTooltip: 'Contesto: {{used}} / {{total}} token',
-  usageGaugeTooltip: 'Contesto: {{used}} / {{window}} token Â· compattazione automatica a {{compact}}',
+  usageGaugeTooltip: 'Contesto: {{used}} / {{window}} token (contesto max del modello) · compattazione automatica da {{compact}} token',
   usageCompactOff: 'compattazione automatica disattivata',
   usageCacheTooltip: 'Cache: {{cached}} di {{total}} token di input',
   usagePromptTooltip: 'Token di input',

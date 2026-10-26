@@ -1181,9 +1181,6 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         </div>
       </div>
 
-      {/* Live usage / cache stats */}
-      <UsageBar />
-
       {/* Status bar below card */}
       <div className="input-status-bar">
         <div className={`acp-status ${acpStatus}`}>
@@ -1198,9 +1195,7 @@ export default function InputBar({ config }: Props): React.JSX.Element {
                   : tr.disconnected}
           </span>
         </div>
-        <div className="input-usage-inline">
-          <UsageInline />
-        </div>
+        <UsageBar />
         {currentWd && (
           <span className="status-cwd" title={currentWd}>
             {currentWd.split(/[/\\]/).filter(Boolean).pop()}
@@ -1208,41 +1203,5 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         )}
       </div>
     </div>
-  )
-}
-
-/** Compact inline usage summary rendered inside the status bar */
-function UsageInline(): React.JSX.Element | null {
-  const { usage, currentSessionId } = useStore()
-  const u = currentSessionId ? usage[currentSessionId] : undefined
-  if (!u || !u.contextSize) return null
-
-  const ctxPct = Math.min(100, Math.round((u.contextUsed / u.contextSize) * 100))
-  const cached = u.cachedTokens ?? 0
-  const prompt = u.promptTokens ?? 0
-  const hitPct = prompt > 0 ? Math.round((cached / prompt) * 100) : null
-
-  return (
-    <>
-      <span className="usage-inline-item" title={`${u.contextUsed} / ${u.contextSize} tokens`}>
-        {ctxPct}%
-      </span>
-      {hitPct !== null && (
-        <span
-          className="usage-inline-item usage-cache"
-          title={`Cache hit: ${cached} / ${prompt} prompt tokens`}
-        >
-          ⚡{hitPct}%
-        </span>
-      )}
-      {u.tokensPerSecond !== undefined && u.tokensPerSecond > 0 && (
-        <span className="usage-inline-item">{Math.round(u.tokensPerSecond)} tok/s</span>
-      )}
-      {u.cost !== undefined && (
-        <span className="usage-inline-item usage-cost">
-          ${u.cost.toFixed(4)}
-        </span>
-      )}
-    </>
   )
 }

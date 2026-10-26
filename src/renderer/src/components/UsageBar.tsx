@@ -113,11 +113,12 @@ export default function UsageBar(): React.JSX.Element | null {
 
   if (!u) return null
 
-  // The DECLARED max_context_length wins as the denominator. The runtime
-  // usage_update.size actually reports the resolved auto-compact threshold
-  // (verified: 209715 for a 262144-token window), so it is only a fallback
-  // for models that declare no window (previewed sessions report 0).
-  const ctxWindow = modelInfo?.window ?? (u.contextSize > 0 ? u.contextSize : null)
+  // v0.13.5: the real max context (window) comes ONLY from the model config
+  // (max_context_length). The runtime usage_update.size is the CLI-resolved
+  // AUTO-COMPACT THRESHOLD, not the window - using it as the denominator
+  // would conflate the compact limit with the real context size. A model
+  // that declares no window simply has no gauge (tokens still show).
+  const ctxWindow = modelInfo?.window ?? null
   const hasContext = ctxWindow !== null && ctxWindow > 0
   const ctxPct = hasContext ? Math.min(100, (u.contextUsed / (ctxWindow as number)) * 100) : 0
   const threshold = modelInfo?.threshold ?? null

@@ -515,6 +515,7 @@ export const useStore = create<AppStore>((set, get) => ({
             completionTokens: preview.usage.completionTokens,
             cachedTokens: preview.usage.cachedTokens,
             totalTokens: preview.usage.totalTokens,
+            cost: preview.usage.cost,
           });
         }
         const patch: { lastModel?: string; lastMode?: string; lastThinking?: string } = {};

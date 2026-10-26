@@ -656,6 +656,7 @@ export interface SessionPreview {
     completionTokens: number
     cachedTokens: number
     totalTokens: number
+    cost?: number
   } | null
   /** v0.11.1: last todo snapshot (session plan) from vibe.todo effects; null = no todos ever. */
   plan: Array<{
@@ -931,5 +932,20 @@ export function loadSessionPreview(sessionId: string): SessionPreview | null {
   if (!dir) return null
   const entries = readUnifiedChunks(dir)
   if (!entries) return null
-  return buildSessionPreview(entries, readSessionIndexEntry(sessionId))
+  const preview = buildSessionPreview(entries, readSessionIndexEntry(sessionId))
+  // v0.13.5: the usage bar shows file data before the session resumes -
+  // compute the cost from the local config prices (StatsView parity).
+  if (preview?.usage && preview.config?.model) {
+    const models = (loadVibeConfig().models ?? []) as VibeModelConfig[]
+    const price = modelPriceFor(preview.config.model, models)
+    if (price) {
+      preview.usage.cost = computeSessionCost(
+        preview.usage.promptTokens,
+        preview.usage.cachedTokens,
+        preview.usage.completionTokens,
+        price
+      )
+    }
+  }
+  return preview
 }
