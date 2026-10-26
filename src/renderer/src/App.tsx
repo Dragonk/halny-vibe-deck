@@ -1001,7 +1001,7 @@ export default function App(): React.JSX.Element {
             const input = params?.input as Record<string, unknown> | undefined
             const funcObj = params?.function as Record<string, unknown> | undefined
             const toolCall = params?.tool_call as Record<string, unknown> | undefined
-            const toolName = (
+            const rawName = (
               params?.resolvedToolName ??
               toolCall?.tool_name ??
               params?.name ??
@@ -1011,8 +1011,24 @@ export default function App(): React.JSX.Element {
               input?.tool ??
               req.method.replace('session/', '').replace('tool/', '')
             ) as string
+            // ACP titles often look like "bash: cd ... && ..." - keep only the
+            // short tool name in the question and show the command separately
+            // in a monospace chip, so long commands never stretch the bar.
+            const titleMatch = rawName.match(/^([A-Za-z0-9_.-]+):\s*([\s\S]+)$/)
+            const toolName = titleMatch ? titleMatch[1] : rawName
             const displayName =
-              toolName.length > 40 ? toolName.slice(0, 40) + '…' : toolName
+              toolName.length > 24 ? toolName.slice(0, 24) + '…' : toolName
+            const command = (
+              input?.command ??
+              input?.cmd ??
+              input?.script ??
+              input?.code ??
+              (titleMatch ? titleMatch[2] : '')
+            ) as string
+            const commandPreview =
+              typeof command === 'string' && command.trim().length > 0
+                ? command.trim().slice(0, 400)
+                : ''
             return (
               <div key={req.requestId} className="tool-approval-request">
                 <div className="tool-approval-info">
@@ -1037,6 +1053,9 @@ export default function App(): React.JSX.Element {
                     {t(tr, 'allowToolQuestion', { tool: displayName })}
                   </span>
                 </div>
+                {commandPreview && (
+                  <div className="tool-approval-input">{commandPreview}</div>
+                )}
                 <div className="tool-approval-actions">
                   <button
                     className="tool-approval-btn tool-approval-allow-once"
