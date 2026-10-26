@@ -69,6 +69,10 @@ pub struct VibeSession {
     pub stats: VibeSessionStats,
     #[serde(default)]
     pub config: Option<VibeSessionConfig>,
+    /// All models used across generations (unified layout; Nexus
+    /// `loadUnifiedSessionModels`). Empty for classic sessions.
+    #[serde(default)]
+    pub models: Vec<String>,
     #[serde(default)]
     pub agent_profile: Option<VibeAgentProfile>,
 }
@@ -119,11 +123,13 @@ pub struct VibeSubagentSession {
 ///
 /// Two on-disk layouts are supported:
 /// - classic: `logs/session/<id>/meta.json` (stats included),
-/// - vibe-acp ≥ 3.0: `logs/session/unified/<id>/meta.json`
-///   (no `stats` block — token/cost metrics come from the live
-///   `usage_update` ACP notifications instead).
+/// - vibe-acp >= 3.0: `logs/session/unified/<id>/meta.json` (no `stats`
+///   block - token metrics are augmented from
+///   `generations/<gen>/projection-state.json` and costs from the
+///   local price table, like Nexus `loadUnifiedSessionUsage`).
 pub fn load_sessions() -> Vec<VibeSession> {
     let dir = sessions_log_dir();
+    let prices = crate::config::model_prices();
     let mut sessions: Vec<VibeSession> = Vec::new();
     // classic layout
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -132,12 +138,25 @@ pub fn load_sessions() -> Vec<VibeSession> {
             if !path.is_dir() || entry.file_name().to_str() == Some("unified") {
                 continue;
             }
-            if let Some(s) = load_meta(&path.join("meta.json")) {
+            if let Some(mut s) = load_meta(&path.join("meta.json")) {
+                // Nexus: recompute the cost when the legacy log carries
+                // no pricing info (zero cost with real prompt tokens).
+                if s.stats.session_cost == 0.0 && s.stats.session_prompt_tokens > 0.0 {
+                    let model = s.config.as_ref().and_then(|c| c.active_model.clone());
+                    s.stats.session_cost = session_cost_from_prices(
+                        &prices,
+                        model.as_deref(),
+                        s.stats.session_prompt_tokens,
+                        s.stats.cached_tokens,
+                        s.stats.session_completion_tokens,
+                    );
+                }
                 sessions.push(s);
             }
         }
     }
-    // unified layout (newer CLI)
+    // unified layout (newer CLI): token/cost stats live in
+    // generations/<gen>/projection-state.json, not meta.json
     let unified = dir.join("unified");
     if let Ok(entries) = std::fs::read_dir(&unified) {
         for entry in entries.flatten() {
@@ -145,7 +164,30 @@ pub fn load_sessions() -> Vec<VibeSession> {
             if !path.is_dir() {
                 continue;
             }
-            if let Some(s) = load_meta(&path.join("meta.json")) {
+            if let Some(mut s) = load_meta(&path.join("meta.json")) {
+                if let Some(u) = load_unified_usage(&path) {
+                    let model = s.config.as_ref().and_then(|c| c.active_model.clone());
+                    s.stats.steps = u.tool_calls as f64;
+                    s.stats.session_prompt_tokens = u.input_tokens;
+                    s.stats.cached_tokens = u.cached_tokens;
+                    s.stats.session_completion_tokens = u.output_tokens;
+                    s.stats.tool_calls_agreed = u.tool_calls as f64;
+                    s.stats.tool_calls_succeeded = u.tool_calls as f64;
+                    s.stats.context_tokens = u.context_tokens;
+                    s.stats.session_total_llm_tokens = u.total_tokens;
+                    s.total_messages = Some(u.message_count);
+                    s.stats.session_cost = session_cost_from_prices(
+                        &prices,
+                        model.as_deref(),
+                        u.input_tokens,
+                        u.cached_tokens,
+                        u.output_tokens,
+                    );
+                }
+                s.models = load_unified_models(
+                    &path,
+                    s.config.as_ref().and_then(|c| c.active_model.as_deref()),
+                );
                 sessions.push(s);
             }
         }
@@ -170,6 +212,137 @@ fn load_meta(meta: &Path) -> Option<VibeSession> {
         return None;
     }
     Some(session)
+}
+
+/// The newest generation of a unified session (Nexus `latestGeneration`):
+/// the `CURRENT` file when present, else the highest numbered
+/// `generations/<N>/` directory.
+fn latest_generation(session_dir: &Path) -> Option<String> {
+    if let Ok(raw) = std::fs::read_to_string(session_dir.join("CURRENT")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(gen) = v.get("generation").and_then(|g| g.as_str()) {
+                return Some(gen.to_string());
+            }
+        }
+    }
+    let mut best: Option<u64> = None;
+    for entry in std::fs::read_dir(session_dir.join("generations")).ok()?.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            if let Ok(n) = name.parse::<u64>() {
+                if best.map_or(true, |b| n > b) {
+                    best = Some(n);
+                }
+            }
+        }
+    }
+    best.map(|n| n.to_string())
+}
+
+/// Token/message/tool counts of a unified session (Nexus
+/// `loadUnifiedSessionUsage`): usage lives in
+/// `generations/<gen>/projection-state.json` under
+/// `snapshot.session.tokenUsage`, not in `meta.json`.
+struct UnifiedUsage {
+    input_tokens: f64,
+    cached_tokens: f64,
+    output_tokens: f64,
+    total_tokens: f64,
+    context_tokens: f64,
+    tool_calls: u64,
+    message_count: u64,
+}
+
+fn load_unified_usage(session_dir: &Path) -> Option<UnifiedUsage> {
+    let gen = latest_generation(session_dir)?;
+    let raw = std::fs::read_to_string(
+        session_dir
+            .join("generations")
+            .join(&gen)
+            .join("projection-state.json"),
+    )
+    .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let usage = v
+        .pointer("/snapshot/session/tokenUsage")
+        .cloned()
+        .unwrap_or_default();
+    let get = |k: &str| usage.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let input = get("inputTokens");
+    let cached = get("cachedInputTokens");
+    let output = get("outputTokens");
+    let total = get("totalTokens");
+    let total = if total > 0.0 { total } else { input + output };
+    let context = v
+        .pointer("/snapshot/session/contextUsage/totalTokens")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(0.0);
+    let count_dir = |name: &str| {
+        std::fs::read_dir(session_dir.join(name))
+            .map(|d| d.count() as u64)
+            .unwrap_or(0)
+    };
+    Some(UnifiedUsage {
+        input_tokens: input,
+        cached_tokens: cached,
+        output_tokens: output,
+        total_tokens: total,
+        context_tokens: if context > 0.0 { context } else { input + output },
+        tool_calls: count_dir("tool-results"),
+        message_count: count_dir("chunks"),
+    })
+}
+
+/// All models used across the generations of a unified session (Nexus
+/// `loadUnifiedSessionModels`), from `runtime-state.json ->
+/// session_metadata.active_model`; falls back to the meta model.
+fn load_unified_models(session_dir: &Path, fallback: Option<&str>) -> Vec<String> {
+    let mut used: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(session_dir.join("generations")) {
+        let mut gens: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .collect();
+        gens.sort();
+        for gen in gens {
+            let Ok(raw) = std::fs::read_to_string(
+                session_dir.join("generations").join(&gen).join("runtime-state.json"),
+            ) else {
+                continue;
+            };
+            let Ok(state) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if let Some(model) = state
+                .pointer("/session_metadata/active_model")
+                .and_then(|m| m.as_str())
+            {
+                if !used.iter().any(|u| u == model) {
+                    used.push(model.to_string());
+                }
+            }
+        }
+    }
+    if used.is_empty() {
+        if let Some(f) = fallback {
+            used.push(f.to_string());
+        }
+    }
+    used
+}
+
+/// Session cost from the local price table (Nexus `computeSessionCost`
+/// via `modelPriceFor`); 0 when the model has no price entry.
+fn session_cost_from_prices(
+    prices: &[crate::config::ModelPrice],
+    model: Option<&str>,
+    prompt_tokens: f64,
+    cached_tokens: f64,
+    completion_tokens: f64,
+) -> f64 {
+    match model {
+        Some(m) => crate::config::estimate_cost(prices, m, prompt_tokens, completion_tokens, cached_tokens),
+        None => 0.0,
+    }
 }
 
 /// Locate the on-disk folder of a session by id (folder name or meta.json).
@@ -1101,6 +1274,92 @@ mod tests {
         assert!(!usage.is_known());
     }
 
+    #[test]
+    fn latest_generation_reads_current_file() {
+        let dir = std::env::temp_dir().join("vd-gen-current");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("generations/1")).unwrap();
+        std::fs::create_dir_all(dir.join("generations/3")).unwrap();
+        std::fs::write(dir.join("CURRENT"), r#"{"generation":"3"}"#).unwrap();
+        assert_eq!(latest_generation(&dir).as_deref(), Some("3"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn latest_generation_falls_back_to_max_numeric() {
+        let dir = std::env::temp_dir().join("vd-gen-max");
+        let _ = std::fs::remove_dir_all(&dir);
+        for g in ["1", "2", "10"] {
+            std::fs::create_dir_all(dir.join("generations").join(g)).unwrap();
+        }
+        assert_eq!(latest_generation(&dir).as_deref(), Some("10"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unified_usage_from_projection_state() {
+        let dir = std::env::temp_dir().join("vd-usage");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("generations/2")).unwrap();
+        std::fs::write(
+            dir.join("generations/2/projection-state.json"),
+            r#"{"snapshot":{"session":{"tokenUsage":{"inputTokens":2150303,"cachedInputTokens":1889280,"outputTokens":9548,"totalTokens":2159851},"contextUsage":{"totalTokens":120000}}}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("tool-results")).unwrap();
+        std::fs::write(dir.join("tool-results/a.json"), "{}").unwrap();
+        std::fs::write(dir.join("tool-results/b.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.join("chunks")).unwrap();
+        for i in 0..3 {
+            std::fs::write(dir.join("chunks").join(i.to_string()), "{}").unwrap();
+        }
+        let u = load_unified_usage(&dir).unwrap();
+        assert_eq!(u.input_tokens, 2150303.0);
+        assert_eq!(u.cached_tokens, 1889280.0);
+        assert_eq!(u.output_tokens, 9548.0);
+        assert_eq!(u.total_tokens, 2159851.0);
+        assert_eq!(u.context_tokens, 120000.0);
+        assert_eq!(u.tool_calls, 2);
+        assert_eq!(u.message_count, 3);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unified_usage_total_falls_back_to_in_plus_out() {
+        let dir = std::env::temp_dir().join("vd-usage-fb");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("generations/1")).unwrap();
+        std::fs::write(
+            dir.join("generations/1/projection-state.json"),
+            r#"{"snapshot":{"session":{"tokenUsage":{"inputTokens":100,"outputTokens":50}}}}"#,
+        )
+        .unwrap();
+        let u = load_unified_usage(&dir).unwrap();
+        assert_eq!(u.total_tokens, 150.0);
+        assert_eq!(u.context_tokens, 150.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unified_models_across_generations() {
+        let dir = std::env::temp_dir().join("vd-models");
+        let _ = std::fs::remove_dir_all(&dir);
+        for (gen, model) in [("1", "a-model"), ("2", "b-model")] {
+            std::fs::create_dir_all(dir.join("generations").join(gen)).unwrap();
+            std::fs::write(
+                dir.join("generations").join(gen).join("runtime-state.json"),
+                format!(r#"{{"session_metadata":{{"active_model":"{model}"}}}}"#),
+            )
+            .unwrap();
+        }
+        let models = load_unified_models(&dir, None);
+        assert_eq!(models, vec!["a-model", "b-model"]);
+        assert_eq!(
+            load_unified_models(&dir, Some("fallback")),
+            vec!["a-model", "b-model"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn preview_plan_last_todo_write_wins() {
         let entries: Vec<serde_json::Value> = serde_json::json!([

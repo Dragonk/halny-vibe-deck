@@ -21,7 +21,9 @@ pub struct ModelPrice {
     pub alias: Option<String>,
     pub input_price: f64,
     pub output_price: f64,
-    pub cached_input_price: f64,
+    /// `None` on a model without cache support - cached tokens are then
+    /// billed at the plain input price (Nexus `modelPriceFor`).
+    pub cached_input_price: Option<f64>,
 }
 
 /// Read the `[[models]]` price table from `~/.vibe/config.toml`.
@@ -54,7 +56,9 @@ pub fn model_prices() -> Vec<ModelPrice> {
                 name,
                 input_price: f("input_price"),
                 output_price: f("output_price"),
-                cached_input_price: f("cached_input_price"),
+                cached_input_price: m
+                    .get("cached_input_price")
+                    .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))),
             })
         })
         .collect()
@@ -69,15 +73,29 @@ pub fn estimate_cost(
     completion_tokens: f64,
     cached_tokens: f64,
 ) -> f64 {
-    let price = prices
-        .iter()
-        .find(|p| p.name == model || p.alias.as_deref() == Some(model));
+    // Nexus modelPriceFor: match by name/alias case-insensitively,
+    // including mutual endsWith.
+    let lower = model.to_lowercase();
+    let price = prices.iter().find(|p| {
+        p.name == model
+            || p.alias.as_deref() == Some(model)
+            || p.name.to_lowercase() == lower
+            || p.alias.as_deref().map(str::to_lowercase).as_deref() == Some(lower.as_str())
+            || p.name.to_lowercase().ends_with(&lower)
+            || lower.ends_with(&p.name.to_lowercase())
+    });
     let Some(price) = price else {
         return 0.0;
     };
-    (prompt_tokens * price.input_price
-        + completion_tokens * price.output_price
-        + cached_tokens * price.cached_input_price)
+    // Nexus computeSessionCost: cached tokens are billed at the cached
+    // price, the uncached remainder at the input price; a missing
+    // cached_input_price (model without cache support) bills cache at
+    // the plain input price instead of free.
+    let cached_price = price.cached_input_price.unwrap_or(price.input_price);
+    let uncached = (prompt_tokens - cached_tokens).max(0.0);
+    (uncached * price.input_price
+        + cached_tokens * cached_price
+        + completion_tokens * price.output_price)
         / 1_000_000.0
 }
 
@@ -800,5 +818,39 @@ enabled = true
         assert!(!cfg.enable_otel());
         assert!(!cfg.enable_system_trust_store());
         assert_eq!(cfg.default_agent(), "accept-edits");
+    }
+
+    fn price(name: &str, input: f64, output: f64, cached: Option<f64>) -> ModelPrice {
+        ModelPrice {
+            name: name.to_string(),
+            alias: None,
+            input_price: input,
+            output_price: output,
+            cached_input_price: cached,
+        }
+    }
+
+    #[test]
+    fn estimate_cost_bills_cache_separately() {
+        let prices = vec![price("m", 1.0, 2.0, Some(0.5))];
+        // 600 uncached @1.0 + 400 cached @0.5 + 100 output @2.0 (per Mtok)
+        let cost = estimate_cost(&prices, "m", 1000.0, 100.0, 400.0);
+        assert!((cost - 0.001).abs() < 1e-12, "{cost}");
+    }
+
+    #[test]
+    fn estimate_cost_missing_cache_price_bills_input() {
+        let prices = vec![price("m", 1.0, 2.0, None)];
+        // cached billed at the plain input price: 1000 @1.0 + 100 @2.0
+        let cost = estimate_cost(&prices, "m", 1000.0, 100.0, 400.0);
+        assert!((cost - 0.0012).abs() < 1e-12, "{cost}");
+    }
+
+    #[test]
+    fn estimate_cost_matches_case_insensitive_and_suffix() {
+        let prices = vec![price("mistral-large", 1.0, 2.0, None)];
+        assert!(estimate_cost(&prices, "Mistral-Large", 10.0, 0.0, 0.0) > 0.0);
+        assert!(estimate_cost(&prices, "some/mistral-large", 10.0, 0.0, 0.0) > 0.0);
+        assert_eq!(estimate_cost(&prices, "other-model", 10.0, 0.0, 0.0), 0.0);
     }
 }
