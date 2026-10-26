@@ -96,29 +96,47 @@ fn check_app_update_inner(
     flavor: &str,
     os: &str,
 ) -> Result<AppUpdateInfo, String> {
-    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    // Prerelease channel: Rust releases (v1.99.x) are GitHub prereleases, so
+    // /releases/latest never returns them (it would surface the Electron
+    // edition instead). Iterate the release list (newest first) and pick the
+    // first release that ships a platform asset for this edition.
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=30");
     let body = http_get_json(&url, 15)?;
-    let rel: serde_json::Value =
+    let list: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    let tag = rel
-        .pointer("/tag_name")
-        .and_then(|v| v.as_str())
-        .map(|t| t.trim_start_matches('v').to_string());
-    let release_url = rel
-        .pointer("/html_url")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let mut assets: Vec<(String, String)> = Vec::new();
-    if let Some(list) = rel.pointer("/assets").and_then(|v| v.as_array()) {
-        for a in list {
-            let name = a.get("name").and_then(|v| v.as_str());
-            let dl = a.get("browser_download_url").and_then(|v| v.as_str());
-            if let (Some(name), Some(dl)) = (name, dl) {
-                assets.push((name.to_string(), dl.to_string()));
+    let list = list
+        .as_array()
+        .ok_or_else(|| "unexpected releases payload".to_string())?;
+    let mut tag: Option<String> = None;
+    let mut release_url: Option<String> = None;
+    let mut download_url: Option<String> = None;
+    for rel in list {
+        let mut assets: Vec<(String, String)> = Vec::new();
+        if let Some(items) = rel.pointer("/assets").and_then(|v| v.as_array()) {
+            for a in items {
+                let name = a.get("name").and_then(|v| v.as_str());
+                let dl = a.get("browser_download_url").and_then(|v| v.as_str());
+                if let (Some(name), Some(dl)) = (name, dl) {
+                    assets.push((name.to_string(), dl.to_string()));
+                }
             }
         }
+        if let Some(dl) = pick_asset_url(&assets, os) {
+            tag = rel
+                .pointer("/tag_name")
+                .and_then(|v| v.as_str())
+                .map(|t| t.trim_start_matches('v').to_string());
+            release_url = rel
+                .pointer("/html_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            download_url = Some(dl);
+            break;
+        }
     }
-    let download_url = pick_asset_url(&assets, os);
+    if tag.is_none() {
+        return Err("no release with a matching platform asset".to_string());
+    }
     let update_available = match &tag {
         Some(latest) => is_newer_version(latest, current_version),
         None => false,
