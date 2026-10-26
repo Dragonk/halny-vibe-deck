@@ -210,7 +210,7 @@ impl Engine {
             }
         };
         let mut st = self.state.lock().unwrap();
-        if let Some(slot_id) = st.slot_of_session(session_key) {
+        if let Some(slot_id) = reuse_slot_or_cleanup(&mut st, session_key) {
             return Some(slot_id);
         }
         let slot_id = st.next_slot;
@@ -803,13 +803,25 @@ impl Engine {
                 // feedback while the agent acknowledges session/cancel;
                 // cleared when the turn really ends (or a new turn
                 // starts — send_message_with).
-                st.stopping.insert(key);
+                st.stopping.insert(key.clone());
                 marked = true;
             }
         }
         drop(st);
         if marked {
             self.publish_structure();
+            // Nexus 2.6: when the agent never acknowledges the cancel
+            // within 4 s, force-release the session and stop the hung
+            // worker (it revives as a lazy preview on the next prompt).
+            std::thread::Builder::new()
+                .name("mistraldeck-cancel-watchdog".into())
+                .spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if let Some(e) = crate::Engine::try_global() {
+                        e.force_release_if_stopping(key);
+                    }
+                })
+                .ok();
         }
     }
 
@@ -971,6 +983,22 @@ impl Engine {
         };
         if !stopped.is_empty() {
             self.publish(BusEvent::StructureChanged);
+        }
+    }
+
+    /// Watchdog callback for a stuck cancel (Nexus 2.6 Stop-after-timeout
+    /// force-release): if the stopping marker is still there, the agent
+    /// never acknowledged the cancel - kill the worker, drop the slot and
+    /// surface a visible error.
+    pub fn force_release_if_stopping(&'static self, key: String) {
+        let released = {
+            let mut st = self.state.lock().unwrap();
+            force_release_stopping(&mut st, &key)
+        };
+        if released {
+            *self.global_error.lock().unwrap() = "Cancel timed out - the agent was stopped; the session revives on the next prompt."
+                .to_string();
+            self.publish_structure();
         }
     }
 
@@ -1914,5 +1942,117 @@ mod idle_reaper_tests {
         assert!(stopped.is_empty());
         assert!(st.slots.contains_key(&1));
         assert!(st.slots.contains_key(&2));
+    }
+}
+
+/// Zombie check before slot reuse (Nexus 2.6 ping-before-reuse): a slot
+/// that already reported `Disconnected` is a dead worker - the command
+/// channel would happily swallow prompts into the void. Stop it, drop
+/// the mapping and let the caller spawn a fresh slot. Returns
+/// `Some(slot_id)` when the existing slot can be reused.
+pub fn reuse_slot_or_cleanup(
+    st: &mut crate::types::EngineState,
+    session_key: &str,
+) -> Option<u64> {
+    let slot_id = st.slot_of_session(session_key)?;
+    if let Some(slot) = st.slots.get(&slot_id) {
+        if slot.status != mistraldeck_core::snapshot::AcpStatus::Disconnected {
+            return Some(slot_id);
+        }
+    }
+    if let Some(slot) = st.slots.remove(&slot_id) {
+        let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+    }
+    st.slot_of.remove(session_key);
+    None
+}
+
+/// Force-release a stuck cancel (Nexus 2.6: Stop after a 4 s timeout ->
+/// markSessionIdle + stopWorker). Returns true when a release happened.
+pub fn force_release_stopping(st: &mut crate::types::EngineState, key: &str) -> bool {
+    if !st.stopping.remove(key) {
+        return false;
+    }
+    if let Some(slot_id) = st.slot_of.remove(key) {
+        if let Some(slot) = st.slots.remove(&slot_id) {
+            let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+        }
+        let _ = slot_id;
+    }
+    // Close dangling assistant messages - the turn will never end on its
+    // own (same as the Disconnected handler / Nexus markSessionIdle).
+    if let Some(session) = st.sessions.iter_mut().find(|s| s.id == key) {
+        for msg in &mut session.messages {
+            if msg.sender == MessageSender::Ai {
+                msg.is_complete = true;
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod zombie_tests {
+    use super::*;
+    use crate::types::{EngineState, SlotPurpose, SlotState};
+    use mistraldeck_core::proto::AcpCommand;
+    use mistraldeck_core::snapshot::AcpStatus;
+    use std::sync::mpsc;
+
+    fn slot(status: AcpStatus, busy: bool) -> (SlotState, mpsc::Receiver<AcpCommand>) {
+        let (tx, rx) = mpsc::channel();
+        let s = SlotState {
+            cmd: tx,
+            purpose: SlotPurpose::NewLocal { cwd: "/tmp".into() },
+            status,
+            error: String::new(),
+            busy,
+            last_activity: std::time::Instant::now(),
+            pending_prompt: None,
+            pending_option: None,
+            approval: None,
+            question: None,
+            usage: Default::default(),
+            load_progress: None,
+            commands: Vec::new(),
+            config_options: Vec::new(),
+            modes: Vec::new(),
+        };
+        (s, rx)
+    }
+
+    #[test]
+    fn reuse_skips_disconnected_and_keeps_connected() {
+        let mut st = EngineState::default();
+        let (dead, dead_rx) = slot(AcpStatus::Disconnected, false);
+        st.slots.insert(1, dead);
+        st.slot_of.insert("s-dead".into(), 1);
+        assert_eq!(reuse_slot_or_cleanup(&mut st, "s-dead"), None);
+        assert!(st.slots.is_empty());
+        assert!(st.slot_of.is_empty());
+        assert!(matches!(dead_rx.try_recv(), Ok(AcpCommand::Stop)));
+
+        let (alive, _alive_rx) = slot(AcpStatus::Connected, false);
+        st.slots.insert(2, alive);
+        st.slot_of.insert("s-alive".into(), 2);
+        assert_eq!(reuse_slot_or_cleanup(&mut st, "s-alive"), Some(2));
+        assert!(st.slots.contains_key(&2));
+    }
+
+    #[test]
+    fn force_release_clears_stopping_and_kills_slot() {
+        let mut st = EngineState::default();
+        let (hung, hung_rx) = slot(AcpStatus::Connected, true);
+        st.slots.insert(1, hung);
+        st.slot_of.insert("s-key".into(), 1);
+        st.stopping.insert("s-key".to_string());
+
+        assert!(force_release_stopping(&mut st, "s-key"));
+        assert!(st.slots.is_empty());
+        assert!(st.slot_of.is_empty());
+        assert!(st.stopping.is_empty());
+        assert!(matches!(hung_rx.try_recv(), Ok(AcpCommand::Stop)));
+        // A second watchdog (or a turn that already ended) is a no-op.
+        assert!(!force_release_stopping(&mut st, "s-key"));
     }
 }
