@@ -16,7 +16,7 @@ version = "0.8.3"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-repository = "https://github.com/Dragonk/mistraldeck"
+repository = "https://github.com/Dragonk/halny-vibe-deck"
 description = "Mistral Deck — an unofficial desktop GUI for the Mistral Vibe CLI"
 
 [workspace.dependencies]
