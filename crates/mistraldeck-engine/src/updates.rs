@@ -96,10 +96,10 @@ fn check_app_update_inner(
     flavor: &str,
     os: &str,
 ) -> Result<AppUpdateInfo, String> {
-    // Prerelease channel: Rust releases (v1.99.x) are GitHub prereleases, so
-    // /releases/latest never returns them (it would surface the Electron
-    // edition instead). Iterate the release list (newest first) and pick the
-    // first release that ships a platform asset for this edition.
+    // The Electron edition on main owns the official Release channel; Rust
+    // dev builds (v1.99.x) are dev tags with workflow artifacts and may have
+    // no GitHub Release at all. Iterate the release list (newest first) and
+    // pick the first release that ships a platform asset for this edition.
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=30");
     let body = http_get_json(&url, 15)?;
     let list: serde_json::Value =
@@ -135,7 +135,18 @@ fn check_app_update_inner(
         }
     }
     if tag.is_none() {
-        return Err("no release with a matching platform asset".to_string());
+        // No release with a matching platform asset (dev builds are tag +
+        // workflow artifacts only). Report a clean "no update" state instead
+        // of surfacing an error in the UI.
+        return Ok(AppUpdateInfo {
+            current_version: current_version.to_string(),
+            flavor: flavor.to_string(),
+            latest_version: None,
+            update_available: false,
+            release_url: None,
+            download_url: None,
+            error: None,
+        });
     }
     let update_available = match &tag {
         Some(latest) => is_newer_version(latest, current_version),

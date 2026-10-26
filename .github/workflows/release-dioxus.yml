@@ -1,6 +1,7 @@
 name: release-dioxus
 
-# Two ways to start a release:
+# Dev builds for the Rust edition (branch next, tags v1.99.*).
+# Ways to start a dev build:
 #   1. Push a tag matching v*-dioxus* or v1.99.* (classic).
 #   2. Push a commit to next whose message contains a marker
 #      "[release vX.Y.Z]" — the "tag" job resolves the version, creates the
@@ -8,6 +9,9 @@ name: release-dioxus
 #      (workflows started by GITHUB_TOKEN never trigger other workflows, so
 #      tag-on-marker-created tags cannot start this workflow — hence marker #2.)
 #   3. workflow_dispatch with a tag input (full pipeline, tag is created/moved).
+# Bundles are uploaded as workflow-run artifacts ("bundles"); NO GitHub Release
+# is created — 1.99.x are dev-only tags and must not disturb the stable release
+# channel of the Electron edition on main.
 on:
   push:
     tags:
@@ -203,66 +207,3 @@ jobs:
             halny-vibe-deck-appserver-*-linux-x64.tar.gz
             halny-vibe-deck-appserver-*-windows-x64.zip
           if-no-files-found: error
-
-  release:
-    name: Create release
-    needs: [tag, bundles]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: bundles
-          path: dist
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.tag.outputs.tag }}
-          name: Halny Vibe Deck (Rust) ${{ needs.tag.outputs.tag }}
-          prerelease: true
-          files: dist/*
-          body: |
-            **Halny Vibe Deck (Rust edition) — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
-
-            > ⚠️ Halny Vibe Deck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
-
-            > ℹ️ This is the **Rust edition** built from the `next` branch — a **prerelease** on the 1.99.x line. The official Halny Vibe Deck releases live on `main` (Electron edition) and stay the default until this Rust edition matures and replaces them.
-
-            ## Binaries
-
-            | Platform | File |
-            |---|---|
-            | Linux (x86_64, glibc) | `halny-vibe-deck-${{ needs.tag.outputs.tag }}-linux-x64.tar.gz` |
-            | Windows (x86_64) | `halny-vibe-deck-${{ needs.tag.outputs.tag }}-windows-x64.zip` |
-            | Linux headless server | `halny-vibe-deck-appserver-${{ needs.tag.outputs.tag }}-linux-x64.tar.gz` |
-            | Windows headless server | `halny-vibe-deck-appserver-${{ needs.tag.outputs.tag }}-windows-x64.zip` |
-
-            ## What's new (v1.99.0 — Halny Vibe Deck rebrand)
-
-            - Rebranded to **Halny Vibe Deck**: window title, login page, PWA manifest, About screen.
-            - Binaries renamed: `halny-vibe-deck` (Linux) / `HalnyVibeDeck.exe` (Windows); headless server: `halny-vibe-deck-appserver`.
-            - Application icon and logo now match the Electron edition on `main`.
-            - In-app updater tracks `Dragonk/halny-vibe-deck` releases; configuration moved to `~/.config/halny-vibe-deck` (existing mistraldeck/vibedeck configs migrate automatically).
-            - New `HALNY_VIBE_DECK_PORT` env var (legacy `MISTRALDECK_PORT` still honored).
-            - Versioning: 1.99.x prereleases until the Rust edition replaces the Electron edition on `main`.
-
-            ## Also in this build (M9/M9.4)
-
-            - Resizable panels (sidebar, dock); file/diff previews as tabs; Global/Project scope for skills and prompts; auto UI language and auto color mode.
-            - Frameless desktop window with custom title bar buttons; color-coded tool calls; collapsible sidebar project groups with context menu.
-            - M9 fixes: the Windows GUI window opens (tao `any_thread`); icon embedded in the exe; closing the window quits the app; Windows panics logged to `halny-vibe-deck.log`.
-
-            ## Requirements
-
-            - Linux: webkit2gtk 4.1 runtime (on Debian/Ubuntu: `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0`), glibc-based distro.
-            - Windows: 10/11 with WebView2 (preinstalled on current systems; otherwise install from Microsoft).
-            - Vibe CLI / `vibe-acp` (see first-run Setup in the app).
-
-            ## Usage
-
-            - `./halny-vibe-deck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
-            - `./halny-vibe-deck --mode gui` — force desktop window.
-            - `./halny-vibe-deck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
-            - `./halny-vibe-deck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
-            - `./halny-vibe-deck --port 1234` / `--set-login user pass` — configure the remote server.
