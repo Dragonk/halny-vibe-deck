@@ -98,6 +98,10 @@ pub struct EngineConfig {
     #[serde(default)]
     pub sidebar_sessions_limit: Option<u32>,
     #[serde(default)]
+    pub auto_close_idle_minutes: Option<u32>,
+    #[serde(default)]
+    pub recent_folders: Vec<String>,
+    #[serde(default)]
     pub hidden_sessions: Vec<String>,
     #[serde(default)]
     pub hidden_projects: Vec<String>,

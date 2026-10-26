@@ -127,6 +127,34 @@ pub async fn api_set_prefs(
     Ok(())
 }
 
+/// General settings (SettingsView general tab): acp path + idle timeout.
+#[server]
+pub async fn api_set_general(
+    token: String,
+    acp_path: String,
+    auto_close_idle_minutes: u32,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().set_general(acp_path, auto_close_idle_minutes);
+    Ok(())
+}
+
+/// Connect the local agent (Nexus handleStartAcp).
+#[server]
+pub async fn api_agent_connect(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().start_agent();
+    Ok(())
+}
+
+/// Disconnect the local agent (Nexus acp.stop).
+#[server]
+pub async fn api_agent_disconnect(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().stop_agent();
+    Ok(())
+}
+
 /// Configure remote-access credentials (login + password + port + enabled).
 /// The password is hashed (sha256 with salt) server-side; nothing is
 /// ever displayed back to the client. LOCAL-ONLY: requests routed through

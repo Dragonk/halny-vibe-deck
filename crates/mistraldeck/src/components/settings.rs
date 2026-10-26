@@ -350,6 +350,8 @@ pub fn SettingsView() -> Element {
     let limit = s.snapshot.config.sidebar_sessions_limit.unwrap_or(0);
     let acp_path = s.snapshot.config.acp_path.clone();
     let wd = s.snapshot.config.working_directory.clone();
+    let recent_folders = s.snapshot.config.recent_folders.clone();
+    let auto_idle = s.snapshot.config.auto_close_idle_minutes.unwrap_or(60);
     let remote_enabled = s.snapshot.config.remote_enabled;
     let auth_configured = s.snapshot.config.auth_configured;
     let remote_port = s.snapshot.config.remote_port;
@@ -401,6 +403,15 @@ pub fn SettingsView() -> Element {
     let scope_agent = use_signal(|| "local".to_string());
     let scope_target = use_signal(|| "global".to_string());
     let scope_key = use_signal(String::new);
+    // Element 7 stage 7D: General-tab fields (acp path + idle timeout) and
+    // the raw side-by-side file list (config.toml + agents/prompts/skills).
+    let g_acp_init = acp_path.clone();
+    let mut g_acp = use_signal(move || g_acp_init);
+    let mut g_idle = use_signal(move || auto_idle.to_string());
+    let g_msg = use_signal(String::new);
+    let raw_files = use_signal(|| Vec::<FileCard>::new());
+    let mut raw_sel = use_signal(String::new);
+    let mut raw_seen = use_signal(String::new);
 
     // provider + model detail state (element 7 stage 7C): the master-detail
     // editors mirror Nexus SettingsView — pv_* for providers, md_* for models.
@@ -515,6 +526,8 @@ pub fn SettingsView() -> Element {
         let mut files_kind = files_kind.clone();
         files.set(Vec::new());
         files_kind.set(String::new());
+        let mut raw_sel = raw_sel.clone();
+        raw_sel.set(String::new());
         // Same fix for the master-detail panels (providers/models/mcp):
         // selections and loaded-field markers never survive a scope switch.
         let mut pv_sel = pv_sel.clone();
@@ -583,6 +596,33 @@ pub fn SettingsView() -> Element {
         });
     }
 
+    // Element 7 stage 7D: the raw side-by-side tab lists config.toml plus
+    // every managed file (agents/prompts/skills) in the current scope.
+    if tab.read().as_str() == "raw" && *raw_seen.read() != sc_key {
+        raw_seen.set(sc_key.clone());
+        let st = state.clone();
+        let sc2 = sc.clone();
+        raw_sel.set(String::new());
+        let mut raw_files_c = raw_files.clone();
+        spawn(async move {
+            let mut merged: Vec<FileCard> = Vec::new();
+            for kind in ["agents", "prompts", "skills"] {
+                if let Ok(fs) = crate::vibeconfig::api_list_vibe_files(
+                    token(&st),
+                    sc2.scope.clone(),
+                    sc2.cwd.clone(),
+                    sc2.conn.clone(),
+                    kind.to_string(),
+                )
+                .await
+                {
+                    merged.extend(fs);
+                }
+            }
+            raw_files_c.set(merged);
+        });
+    }
+
     let cfgd = cfg.read().clone().unwrap_or_default();
 
     let tab_cls = |name: &str| {
@@ -607,6 +647,11 @@ pub fn SettingsView() -> Element {
         let mut v: Vec<String> = Vec::new();
         if !session_cwd.is_empty() {
             v.push(session_cwd.clone());
+        }
+        for r in recent_folders.iter() {
+            if !r.is_empty() && !v.contains(r) {
+                v.push(r.clone());
+            }
         }
         if !wd.is_empty() && !v.contains(&wd) {
             v.push(wd.clone());
@@ -655,29 +700,6 @@ pub fn SettingsView() -> Element {
     );
 
     let body_el = match tab.read().as_str() {
-        "acp" => rsx! {
-            div { class: "settings-section",
-                div { class: "settings-section-header",
-                    div { class: "settings-section-title", "ACP" }
-                }
-                div { class: "field",
-                    div { class: "field-label", "vibe-acp" }
-                    input { class: "field-input", readonly: true, value: "{acp_path}" }
-                    div { class: "field-hint", "{loc(&lang, \"Zmiana ścieżki wymaga edycji pliku konfiguracyjnego i restartu.\", \"Changing the path requires editing the config file and a restart.\")}" }
-                }
-                div { class: "field",
-                    div { class: "field-label", "{tr(&lang, \"workingDirectory\")}" }
-                    input { class: "field-input", readonly: true, value: "{wd}" }
-                }
-                div { class: "field",
-                    div { class: "field-label", "Status" }
-                    div { class: "acp-status {status}",
-                        span { class: "status-dot" }
-                        span { class: "status-label", "{status}" }
-                    }
-                }
-            }
-        },
         "remote" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
@@ -2006,55 +2028,190 @@ pub fn SettingsView() -> Element {
         },
         "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved, sc.clone()),
         "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved, sc.clone()),
-        "raw" => rsx! {
-            div { class: "settings-section",
-                div { class: "settings-section-header",
-                    div { class: "settings-section-title", "config.toml" }
-                }
-                div { class: "field",
-                    CodeEditor {
-                        code: raw_toml,
-                        id: "raw".to_string(),
-                    }
-                    div { class: "field-hint", "{loc(&lang, \"Zapis waliduje TOML — błędny plik nie nadpisze konfiguracji.\", \"Saving validates the TOML — an invalid file will not overwrite the config.\")}" }
+        "raw" => {
+            // Element 7 stage 7D: side-by-side raw editor (Nexus raw tab) -
+            // config.toml plus every managed file in the left column.
+            let sel = raw_sel.read().clone();
+            let sel_lbl = if sel.is_empty() {
+                tr(&lang, "rawConfig").to_string()
+            } else {
+                sel.clone()
+            };
+            let sel_hint = if sel.is_empty() {
+                tr(&lang, "rawTomlHint").to_string()
+            } else {
+                tr(&lang, "rawFileHint").to_string()
+            };
+            let save_lbl = tr(&lang, "saveLabel").to_string();
+            let reload_lbl = tr(&lang, "reload").to_string();
+            let cfg_cls = if sel.is_empty() {
+                "cfg-file-item active"
+            } else {
+                "cfg-file-item"
+            };
+            let flist = raw_files.read().clone();
+            let mut file_rows: Vec<Element> = Vec::new();
+            for (i, f) in flist.iter().enumerate() {
+                let cls = if f.path == sel {
+                    "cfg-file-item active"
+                } else {
+                    "cfg-file-item"
+                };
+                let path = f.path.clone();
+                let content = f.content.clone();
+                let mut raw_sel2 = raw_sel.clone();
+                let mut raw_toml2 = raw_toml.clone();
+                file_rows.push(rsx! {
                     button {
-                        class: "save-btn",
-                        style: "margin-top:8px;",
+                        key: "{i}",
+                        class: "{cls}",
+                        onclick: move |_| {
+                            raw_sel2.set(path.clone());
+                            raw_toml2.set(content.clone());
+                        },
+                        "{path}"
+                    }
+                });
+            }
+            rsx! {
+            div { class: "settings-section raw-config-section",
+                div { class: "dirtree-col",
+                    button {
+                        class: "{cfg_cls}",
                         onclick: {
                             let state = state.clone();
                             let cfg = cfg.clone();
                             let cfg_err = cfg_err.clone();
-                            let list_saved = list_saved.clone();
-                            let lang_c = lang.clone();
                             let sc = sc.clone();
+                            let raw_sel3 = raw_sel.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
-                                let mut list_saved = list_saved.clone();
-                                let _lang = lang_c.clone();
                                 let sc = sc.clone();
+                                let mut raw_sel3 = raw_sel3.clone();
                                 async move {
-                                    match crate::vibeconfig::api_save_vibe_config_raw(
-                                        token(&state), raw_toml.read().clone(),
-                                        sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(()) => list_saved.set(String::new()),
-                                        Err(e) => list_saved.set(e.to_string()),
-                                    }
+                                    raw_sel3.set(String::new());
                                     reload_cfg(state, cfg, cfg_err, sc).await;
                                 }
                             }
                         },
-                        "{tr(&lang, \"saveLabel\")}"
+                        "config.toml"
+                    }
+                    {file_rows.iter().cloned()}
+                }
+                div { class: "raw-editor-col",
+                    div { class: "field",
+                        div { class: "field-label", "{sel_lbl}" }
+                        div { class: "field-hint", "{sel_hint}" }
+                        CodeEditor {
+                            code: raw_toml,
+                            id: "raw".to_string(),
+                        }
                     }
                     if !list_saved.read().is_empty() {
-                        span { class: "field-hint", style: "margin-left:10px;color:#f87171;", "{list_saved.read()}" }
+                        div { class: "field-hint", style: "color:#f87171;", "{list_saved.read()}" }
                     }
+                    div { class: "field-row",
+                        button {
+                            class: "save-btn",
+                            onclick: {
+                                let state = state.clone();
+                                let cfg = cfg.clone();
+                                let cfg_err = cfg_err.clone();
+                                let list_saved_c = list_saved.clone();
+                                let raw_sel4 = raw_sel.clone();
+                                let raw_files4 = raw_files.clone();
+                                let sc = sc.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let mut list_saved = list_saved_c.clone();
+                                    let raw_sel = raw_sel4.clone();
+                                    let raw_files = raw_files4.clone();
+                                    let sc = sc.clone();
+                                    async move {
+                                        let sel = raw_sel.read().clone();
+                                        let content = raw_toml.read().clone();
+                                        if sel.is_empty() {
+                                            match crate::vibeconfig::api_save_vibe_config_raw(
+                                                token(&state), content,
+                                                sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                            )
+                                            .await
+                                            {
+                                                Ok(()) => list_saved.set(String::new()),
+                                                Err(e) => list_saved.set(e.to_string()),
+                                            }
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        } else {
+                                            match crate::vibeconfig::api_save_vibe_file(
+                                                token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), sel.clone(), content,
+                                            )
+                                            .await
+                                            {
+                                                Ok(()) => {
+                                                    list_saved.set(String::new());
+                                                    let st = state.clone();
+                                                    let sc2 = sc.clone();
+                                                    let mut raw_files_c = raw_files.clone();
+                                                    spawn(async move {
+                                                        let mut merged: Vec<FileCard> = Vec::new();
+                                                        for kind in ["agents", "prompts", "skills"] {
+                                                            if let Ok(fs) = crate::vibeconfig::api_list_vibe_files(
+                                                                token(&st), sc2.scope.clone(), sc2.cwd.clone(), sc2.conn.clone(), kind.to_string(),
+                                                            )
+                                                            .await
+                                                            {
+                                                                merged.extend(fs);
+                                                            }
+                                                        }
+                                                        raw_files_c.set(merged);
+                                                    });
+                                                }
+                                                Err(e) => list_saved.set(e.to_string()),
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            "{save_lbl}"
+                        }
+                        button {
+                            class: "save-btn",
+                            onclick: {
+                                let state = state.clone();
+                                let cfg = cfg.clone();
+                                let cfg_err = cfg_err.clone();
+                                let raw_sel5 = raw_sel.clone();
+                                let raw_files5 = raw_files.clone();
+                                let raw_toml3 = raw_toml.clone();
+                                let sc = sc.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let raw_sel = raw_sel5.clone();
+                                    let raw_files = raw_files5.clone();
+                                    let mut raw_toml3 = raw_toml3.clone();
+                                    let sc = sc.clone();
+                                    async move {
+                                        let sel = raw_sel.read().clone();
+                                        if sel.is_empty() {
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        } else if let Some(f) = raw_files.read().iter().find(|f| f.path == sel) {
+                                            raw_toml3.set(f.content.clone());
+                                        }
+                                    }
+                                }
+                            },
+                            "{reload_lbl}"
+                        }
+                    }
+                    {err_el}
                 }
-                {err_el}
+            }
             }
         },
         _ => {
@@ -2068,6 +2225,20 @@ pub fn SettingsView() -> Element {
             let prog = upd.update_progress.clone();
             drop(upd);
             let desktop = crate::state::is_desktop();
+            // Element 7 stage 7D: General-tab labels (precomputed pre-rsx).
+            let acp_lbl = tr(&lang, "vibeAcpPath");
+            let acp_hint = tr(&lang, "vibeAcpHint");
+            let acp_ph = tr(&lang, "vibeAcpPlaceholder");
+            let idle_lbl = tr(&lang, "autoCloseIdleLabel");
+            let connect_lbl = tr(&lang, "connectToAgent");
+            let disconnect_lbl = tr(&lang, "disconnect");
+            let save_lbl = tr(&lang, "saveLabel");
+            let agent_lbl = loc(&lang, "Agent", "Agent");
+            let reconnect_hint = loc(
+                &lang,
+                "Zmiana ścieżki ACP wymaga ponownego połączenia.",
+                "Changing the ACP path requires reconnecting the agent.",
+            );
             let app_cur = app
                 .as_ref()
                 .map(|a| a.current_version.clone())
@@ -2226,6 +2397,102 @@ pub fn SettingsView() -> Element {
                     div { class: "field-hint", "0 = {loc(&lang, \"bez limitu\", \"no limit\")}" }
                 }
 
+                // ---- ACP agent (element 7 stage 7D; Nexus general tab) ----
+                div { class: "field",
+                    div { class: "field-label", "{acp_lbl}" }
+                    div { class: "field-hint", "{acp_hint}" }
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        autocomplete: "off",
+                        placeholder: "{acp_ph}",
+                        value: "{g_acp.read()}",
+                        oninput: move |e| g_acp.set(e.value()),
+                    }
+                }
+                div { class: "field",
+                    div { class: "field-label", "{idle_lbl}" }
+                    input {
+                        class: "field-input",
+                        r#type: "number",
+                        value: "{g_idle.read()}",
+                        oninput: move |e| g_idle.set(e.value()),
+                    }
+                }
+                div { class: "field",
+                    button {
+                        class: "save-btn",
+                        onclick: {
+                            let state = state.clone();
+                            let g_acp_c = g_acp.clone();
+                            let g_idle_c = g_idle.clone();
+                            let g_msg_c = g_msg.clone();
+                            move |_| {
+                                let state = state.clone();
+                                let g_acp = g_acp_c.clone();
+                                let g_idle = g_idle_c.clone();
+                                let mut g_msg = g_msg_c.clone();
+                                async move {
+                                    let minutes = g_idle.read().parse::<u32>().unwrap_or(60);
+                                    match crate::api::api_set_general(
+                                        token(&state),
+                                        g_acp.read().clone(),
+                                        minutes,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => g_msg.set(String::new()),
+                                        Err(e) => g_msg.set(e.to_string()),
+                                    }
+                                    refresh_after_save(state).await;
+                                }
+                            }
+                        },
+                        "{save_lbl}"
+                    }
+                    if !g_msg.read().is_empty() {
+                        span { class: "field-hint", style: "margin-left:10px;", "{g_msg.read()}" }
+                    }
+                }
+                div { class: "field",
+                    div { class: "field-label", "{agent_lbl}" }
+                    div { class: "acp-status {status}",
+                        span { class: "status-dot" }
+                        span { class: "status-label", "{status}" }
+                    }
+                    div { class: "field-row", style: "margin-top:6px;",
+                        button {
+                            class: "action-btn",
+                            onclick: {
+                                let state = state.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    async move {
+                                        let _ = crate::api::api_agent_connect(token(&state)).await;
+                                        refresh_after_save(state).await;
+                                    }
+                                }
+                            },
+                            "{connect_lbl}"
+                        }
+                        button {
+                            class: "action-btn danger",
+                            style: "margin-left:8px;",
+                            onclick: {
+                                let state = state.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    async move {
+                                        let _ = crate::api::api_agent_disconnect(token(&state)).await;
+                                        refresh_after_save(state).await;
+                                    }
+                                }
+                            },
+                            "{disconnect_lbl}"
+                        }
+                    }
+                    div { class: "field-hint", "{reconnect_hint}" }
+                }
                 // ---- Updates (element 6; Nexus SettingsView general tab) ----
                 div { class: "settings-section-header",
                     div { class: "settings-section-title", "{loc(&lang, \"Aktualizacje\", \"Updates\")}" }
@@ -2453,7 +2720,6 @@ pub fn SettingsView() -> Element {
             }
             div { class: "settings-tabs scope-switch",
                 button { class: "{tab_cls(\"general\")}", onclick: move |_| tab.set("general".into()), "{tr(&lang, \"general\")}" }
-                button { class: "{tab_cls(\"acp\")}", onclick: move |_| tab.set("acp".into()), "ACP" }
                 button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne\", \"Remote\")}" }
                 button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
                 button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }

@@ -285,6 +285,8 @@ impl Engine {
                 auth_configured: cfg.auth.is_some(),
                 dock_open: cfg.dock_open,
                 sidebar_sessions_limit: cfg.sidebar_sessions_limit,
+                auto_close_idle_minutes: cfg.auto_close_idle_minutes,
+                recent_folders: cfg.recent_folders.clone(),
                 hidden_sessions: cfg.hidden_sessions.clone(),
                 hidden_projects: cfg.hidden_projects.clone(),
                 remote_connections: cfg.remote_connections.clone(),
@@ -303,6 +305,7 @@ impl Engine {
                 .map(|s| s.working_directory.clone())
                 .unwrap_or_else(|| self.config().working_directory.clone())
         };
+        self.note_recent_folder(&cwd);
         // Always create a fresh session: with parallel slots every local
         // session owns its agent process, so '+' must never silently reuse
         // (and switch away from) an existing empty session.
@@ -388,6 +391,7 @@ impl Engine {
         } else {
             info.cwd.clone()
         };
+        self.note_recent_folder(&cwd);
         {
             let mut st = self.state.lock().unwrap();
             let mut session = ChatSession::new(
@@ -901,6 +905,52 @@ impl Engine {
             };
         });
         self.publish_structure();
+    }
+
+    /// General settings (SettingsView general tab): acp path + the idle
+    /// auto-close timeout in minutes (the idle reaper itself is element 8).
+    pub fn set_general(&self, acp_path: String, auto_close_idle_minutes: u32) {
+        self.update_config(|c| {
+            c.acp_path = acp_path;
+            c.auto_close_idle_minutes = if auto_close_idle_minutes > 0 {
+                Some(auto_close_idle_minutes)
+            } else {
+                None
+            };
+        });
+        self.publish_structure();
+    }
+
+    /// Disconnect the agent (Nexus acp.stop): stop the lister and every
+    /// live slot. Sessions survive as lazy previews and wake again on
+    /// the next prompt (lazy resume, Nexus 2.2).
+    pub fn stop_agent(&self) {
+        self.lister.send(AcpCommand::Stop);
+        {
+            let mut st = self.state.lock().unwrap();
+            let slot_ids: Vec<u64> = st.slot_of.values().cloned().collect();
+            for slot_id in slot_ids {
+                if let Some(slot) = st.slots.remove(&slot_id) {
+                    let _ = slot.cmd.send(AcpCommand::Stop);
+                }
+            }
+            st.slot_of.clear();
+        }
+        *self.global_status.lock().unwrap() = AcpStatus::Disconnected;
+        self.publish(BusEvent::StructureChanged);
+    }
+
+    /// Record a folder in the recent list (Nexus recentFolders, cap 10).
+    pub fn note_recent_folder(&self, cwd: &str) {
+        let cwd = cwd.trim();
+        if cwd.is_empty() {
+            return;
+        }
+        self.update_config(|c| {
+            c.recent_folders.retain(|f| f != cwd);
+            c.recent_folders.insert(0, cwd.to_string());
+            c.recent_folders.truncate(10);
+        });
     }
 
     /// Configure remote-control access: login credentials + port + enabled.
