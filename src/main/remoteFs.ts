@@ -108,6 +108,21 @@ export async function remoteWriteText(
   }
 }
 
+/** v0.13.14: write raw bytes (base64-encoded) - web client attachments. */
+export async function remoteWriteBinary(
+  conn: RemoteConnection,
+  filePath: string,
+  base64: string,
+): Promise<{ error: string | null }> {
+  try {
+    const res = await sshRun(conn, "base64 -d > " + shq(filePath), 60000, base64);
+    if (res.code !== 0) return { error: res.stderr || "Write failed" };
+    return { error: null };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function remoteReadFile(
   conn: RemoteConnection,
   filePath: string,

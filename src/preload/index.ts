@@ -205,6 +205,8 @@ const api = {
       ipcRenderer.invoke('fs:read-binary', filePath, remoteId ?? undefined),
     writeText: (filePath: string, content: string, remoteId?: string): Promise<{ error: string | null }> =>
       ipcRenderer.invoke('fs:write-text', filePath, content, remoteId ?? undefined),
+    writeBinary: (filePath: string, base64: string, remoteId?: string): Promise<{ error: string | null }> =>
+      ipcRenderer.invoke('fs:write-binary', filePath, base64, remoteId ?? undefined),
     mkdir: (filePath: string, remoteId?: string): Promise<{ error: string | null }> =>
       ipcRenderer.invoke('fs:mkdir', filePath, remoteId ?? undefined)
   },

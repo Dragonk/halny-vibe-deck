@@ -93,6 +93,7 @@ import {
   remoteReadText,
   remoteReadBinary,
   remoteWriteText,
+  remoteWriteBinary,
   remoteMkdir,
   remoteReadFile,
   remoteSearchFiles,
@@ -614,6 +615,18 @@ app.whenReady().then(() => {
     if (remoteId) return remoteWriteText(remoteConnOrThrow(remoteId), filePath, content);
     try {
       await fs.promises.writeFile(filePath, content, "utf-8");
+      return { error: null };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // v0.13.14: write raw bytes (base64) - web client file/image attachments
+  // upload their picked file to the session's host this way.
+  ipcMain.handle("fs:write-binary", async (_e, filePath: string, base64: string, remoteId?: string) => {
+    if (remoteId) return remoteWriteBinary(remoteConnOrThrow(remoteId), filePath, base64);
+    try {
+      await fs.promises.writeFile(filePath, Buffer.from(base64, "base64"));
       return { error: null };
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };

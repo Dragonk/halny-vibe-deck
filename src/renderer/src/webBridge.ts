@@ -207,6 +207,8 @@ function buildApi(): AppAPI {
         invoke('fs:read-binary', [filePath, remoteId ?? undefined]),
       writeText: (filePath: string, content: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:write-text', [filePath, content, remoteId ?? undefined]),
+      writeBinary: (filePath: string, base64: string, remoteId?: string): Promise<unknown> =>
+        invoke('fs:write-binary', [filePath, base64, remoteId ?? undefined]),
       mkdir: (filePath: string, remoteId?: string): Promise<unknown> =>
         invoke('fs:mkdir', [filePath, remoteId ?? undefined])
     },

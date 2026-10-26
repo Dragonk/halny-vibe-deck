@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation } from '../i18n'
+import { isWebMode } from '../webBridge'
 import { resolveLanguage, translateModeName, translateModeDescription, translateThinkingLevel, translateThinkingDescription } from '../i18n/terms'
 import type { TermsLang } from '../i18n/terms'
 import type { AppConfig, ConfigOption, ConfigOptionChoice } from '../types'
@@ -193,6 +194,9 @@ export default function InputBar({ config }: Props): React.JSX.Element {
 
   // Pasted images
   const [pastedImages, setPastedImages] = useState<{ name: string; url: string }[]>([])
+  // v0.13.14: web attachment pickers (native dialogs are unavailable in the browser)
+  const webFileInputRef = useRef<HTMLInputElement>(null)
+  const webImageInputRef = useRef<HTMLInputElement>(null)
 
   const editorRef = useRef<HTMLDivElement>(null)
   const atPickerRef = useRef<HTMLDivElement>(null)
@@ -831,20 +835,31 @@ export default function InputBar({ config }: Props): React.JSX.Element {
   }
 
   const handleAttachFile = async (): Promise<void> => {
+    setShowAttachMenu(false)
+    // v0.13.14: the browser cannot reach the host disk - open the native
+    // <input type="file"> picker instead; the picked file is uploaded to
+    // the session's host below (handleWebFilesPicked).
+    if (isWebMode()) {
+      webFileInputRef.current?.click()
+      return
+    }
     const filePath = await window.api.dialog.openFile()
     if (filePath) insertTextAtCursor('@' + filePath + ' ')
-    setShowAttachMenu(false)
   }
 
   const handleAttachDirectory = async (): Promise<void> => {
+    setShowAttachMenu(false)
     const folder = await window.api.dialog.openFolder()
     if (folder) insertTextAtCursor('@' + folder + '/ ')
-    setShowAttachMenu(false)
   }
 
   const handleAttachImage = async (): Promise<void> => {
-    const filePath = await window.api.dialog.openFile()
     setShowAttachMenu(false)
+    if (isWebMode()) {
+      webImageInputRef.current?.click()
+      return
+    }
+    const filePath = await window.api.dialog.openFile()
     if (!filePath) return
     const name = filePath.split(/[/\\]/).pop() ?? 'image.png'
     try {
@@ -856,6 +871,43 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     } catch (err) {
       console.error('Failed to attach image:', err)
     }
+  }
+
+  // v0.13.14: upload a file picked in the browser to the session's host
+  // (serve host or the remote SSH machine) and reference it by path - the
+  // same @path expansion as a desktop attachment then embeds its content.
+  const handleWebFilesPicked = async (files: FileList | null, asImage: boolean): Promise<void> => {
+    if (!files || files.length === 0) return
+    const attachRid = useStore.getState().currentSession()?.remoteId ?? undefined
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      try {
+        const b64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result ?? '').split(',')[1] ?? '')
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(file)
+        })
+        const safe = file.name.replace(/[^A-Za-z0-9._-]/g, '_')
+        const target = '/tmp/nexus-attachments/' + Date.now() + '-' + i + '-' + safe
+        const res = await window.api.fs.writeBinary(target, b64, attachRid)
+        if (res?.error) {
+          console.error('Attachment upload failed:', res.error)
+          continue
+        }
+        if (asImage) {
+          setPastedImages((prev) => [
+            ...prev,
+            { name: file.name, url: 'data:' + (file.type || 'image/png') + ';base64,' + b64 },
+          ])
+        }
+        insertTextAtCursor('@' + target + ' ')
+      } catch (err) {
+        console.error('Failed to attach file:', err)
+      }
+    }
+    if (webFileInputRef.current) webFileInputRef.current.value = ''
+    if (webImageInputRef.current) webImageInputRef.current.value = ''
   }
 
   const handleAttachBranchDiff = async (): Promise<void> => {
@@ -1154,9 +1206,11 @@ export default function InputBar({ config }: Props): React.JSX.Element {
                   <button className="folder-picker-item" onClick={handleAttachFile}>
                     <span>📄 {tr.attachFile}</span>
                   </button>
-                  <button className="folder-picker-item" onClick={handleAttachDirectory}>
-                    <span>📁 {tr.attachDirectory}</span>
-                  </button>
+                  {!isWebMode() && (
+                    <button className="folder-picker-item" onClick={handleAttachDirectory}>
+                      <span>📁 {tr.attachDirectory}</span>
+                    </button>
+                  )}
                   <button className="folder-picker-item" onClick={handleAttachImage}>
                     <span>🖼️ {tr.attachImage}</span>
                   </button>
@@ -1217,6 +1271,22 @@ export default function InputBar({ config }: Props): React.JSX.Element {
           </div>
         </div>
       </div>
+
+      {/* v0.13.14: hidden web attachment pickers */}
+      <input
+        ref={webFileInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => void handleWebFilesPicked(e.target.files, false)}
+      />
+      <input
+        ref={webImageInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => void handleWebFilesPicked(e.target.files, true)}
+      />
 
       {/* Status bar below card */}
       <div className="input-status-bar">
