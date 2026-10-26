@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.11 — 2026-10-26
+
+### Fixed
+- **Joining a running session showed only the new messages, no history.**
+  The click handler loaded the on-disk history only when the session had
+  ZERO messages - but a client joining a turn in flight had already
+  received the streaming tail (ACP events go to every client), so the
+  guard never fired and the phone showed just the last messages with the
+  whole history missing. Sessions are now loaded from disk until the
+  history IS loaded (a per-client flag set by applySessionHistory); the
+  file preview is a ~20 ms idempotent read, and a client driving a busy
+  turn skips the reload so its live tail is never clobbered.
+
 ## 1.0.10 — 2026-10-26
 
 ### Fixed

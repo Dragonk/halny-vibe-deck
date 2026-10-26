@@ -37,6 +37,7 @@ export default function Sidebar(): React.JSX.Element {
     setPendingNewSession,
     setSessionStarting,
     busySessions,
+    historyLoadedSessions,
     config,
     loadAcpSession,
     collapsedProjects,
@@ -232,7 +233,17 @@ export default function Sidebar(): React.JSX.Element {
     // v0.9.0 lazy resume: clicking a session only reads its history from
     // disk (no vibe-acp start). ACP wakes up when the user consciously
     // sends a message in this session.
-    if (session.messages.length === 0 && !session.loading) {
+    // v1.0.11: the old `messages.length === 0` guard starved clients that
+    // joined a RUNNING turn: streaming events had already delivered the
+    // tail, so history was never fetched and the phone showed only the
+    // new messages. Load from disk until the history IS loaded (the flag
+    // is per client and set by applySessionHistory) - the file preview is
+    // a ~20 ms read, idempotent, and the disk state wins.
+    if (
+      !historyLoadedSessions.includes(id) &&
+      !session.loading &&
+      !busySessions.includes(id)
+    ) {
       await useStore.getState().previewSession(id)
     }
     // v0.12: rebuild the chip option lists AFTER the preview so they use

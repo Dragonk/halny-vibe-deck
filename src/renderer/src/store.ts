@@ -275,6 +275,8 @@ interface AppStore {
     history: AcpHistoryMessage[],
     title?: string,
   ) => void;
+  /** v1.0.11: sessions whose history was loaded from disk (per client). */
+  historyLoadedSessions: string[];
   loadAcpSession: (localSessionId: string) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
@@ -1569,6 +1571,13 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ sessionLoadProgress: null });
     const local = get().getSessionByAcpId(acpSessionId);
     if (!local) return;
+    // v1.0.11: this client now has the full on-disk history for the
+    // session - a re-open does not need to re-read it.
+    set((st) => ({
+      historyLoadedSessions: st.historyLoadedSessions.includes(local.id)
+        ? st.historyLoadedSessions
+        : [...st.historyLoadedSessions, local.id],
+    }));
     const messages: Message[] = [];
     history.forEach((h, idx) => {
       const baseId = acpSessionId + "-" + idx;
@@ -1874,6 +1883,7 @@ export const useStore = create<AppStore>((set, get) => ({
   remoteStatuses: {},
   remoteLoading: {},
   backStack: [],
+  historyLoadedSessions: [],
   pushBack: (run) => {
     const id = Date.now() + Math.random();
     set((s) => ({ backStack: [...s.backStack, { id, run }] }));
