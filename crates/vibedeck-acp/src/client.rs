@@ -321,8 +321,17 @@ impl Client {
                         .to_string();
                     if let Some(replay) = self.replaying.get_mut(&session_id) {
                         // session/load replay — collected, emitted as
-                        // SessionHistory once the request finishes.
+                        // SessionHistory once the request finishes. Every
+                        // 25 buffered updates a progress event goes out
+                        // (Nexus `SessionLoadProgress`) for the
+                        // "Resuming session… (N)" overlay.
                         replay.push(params);
+                        if replay.len() % 25 == 0 {
+                            events.push(AcpEvent::SessionLoadProgress {
+                                session_id: session_id.clone(),
+                                count: replay.len(),
+                            });
+                        }
                         continue;
                     }
                     events.extend(crate::convert::convert_update(&params));

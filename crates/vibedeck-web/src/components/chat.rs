@@ -21,7 +21,26 @@ pub fn ChatView() -> Element {
     let busy = s.snapshot.busy;
     let status = s.snapshot.status.clone();
     let acp_error = s.snapshot.acp_error.clone();
+    // Lazy-resume overlay (Nexus isResuming): the current session's agent
+    // is waking via session/load — spinner + "Resuming session… (N)" with
+    // the replay chunk count.
+    let current_acp_id = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .and_then(|m| m.acp_session_id.clone());
+    let load_progress = s.snapshot.session_load_progress.clone();
     drop(s);
+    let is_resuming = current_acp_id
+        .as_deref()
+        .zip(load_progress.as_ref().map(|p| p.session_id.as_str()))
+        .map(|(a, p)| a == p)
+        .unwrap_or(false);
+    let resume_count = if is_resuming {
+        load_progress.map(|p| p.count).unwrap_or(0)
+    } else {
+        0
+    };
 
     // one-shot: install the mermaid MutationObserver renderer and the
     // markdown path-link click bridge (client only; the server SSR build
@@ -70,7 +89,7 @@ pub fn ChatView() -> Element {
             }
             div { class: "chat-messages",
                 div { class: "chat-inner",
-                    if messages.is_empty() {
+                    if messages.is_empty() && !is_resuming {
                         div { class: "chat-empty",
                             Flame {}
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
@@ -87,11 +106,22 @@ pub fn ChatView() -> Element {
                             if !plan.is_empty() {
                                 PlanCard { entries: plan.clone() }
                             }
-                            if busy {
+                            if busy && !is_resuming {
                                 div { class: "agent-busy-row",
                                     span { class: "agent-busy-dots", span {}, span {}, span {} }
                                     "{tr(&lang, \"agentWorkingLabel\")}"
                                 }
+                            }
+                        }
+                    }
+                    // Lazy-resume overlay (Nexus ChatView isResuming):
+                    // spinner + label, chunk count once the replay streams.
+                    if is_resuming {
+                        div { class: "agent-busy-row",
+                            span { class: "agent-busy-spinner" }
+                            "{tr(&lang, \"resumingSessionLabel\")}"
+                            if resume_count > 0 {
+                                " ({resume_count})"
                             }
                         }
                     }

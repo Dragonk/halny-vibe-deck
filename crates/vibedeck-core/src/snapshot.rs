@@ -119,6 +119,15 @@ pub enum BusEvent {
     StructureChanged,
 }
 
+/// Replay progress of a waking `session/load` (Nexus
+/// `sessionLoadProgress`): shown by the chat as a "Resuming session…
+/// (N)" overlay while the lazy-resumed session replays its history.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionLoadProgress {
+    pub session_id: String,
+    pub count: usize,
+}
+
 /// Sidebar-friendly summary of one session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionMeta {
@@ -282,6 +291,10 @@ pub struct Snapshot {
     pub commands: Vec<AvailableCommand>,
     pub backend_sessions: Vec<AcpSessionInfo>,
     pub usage: UsageStats,
+    /// `session/load` replay progress for the current session's agent
+    /// (None when nothing is resuming) — lazy-resume overlay.
+    #[serde(default)]
+    pub session_load_progress: Option<SessionLoadProgress>,
     pub approval: Option<PendingApproval>,
     pub question: Option<PendingQuestion>,
     pub working_directory: String,
@@ -304,6 +317,7 @@ impl Default for Snapshot {
             commands: Vec::new(),
             backend_sessions: Vec::new(),
             usage: UsageStats::default(),
+            session_load_progress: None,
             approval: None,
             question: None,
             working_directory: String::new(),

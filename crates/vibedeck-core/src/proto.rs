@@ -119,6 +119,13 @@ pub enum AcpEvent {
         #[serde(default)]
         plan: Vec<crate::types::PlanEntry>,
     },
+    /// Replay progress while `session/load` is streaming history back
+    /// (Nexus `SessionLoadProgress`: emitted every 25 buffered updates).
+    /// Drives the "Resuming session… (N)" overlay.
+    SessionLoadProgress {
+        session_id: String,
+        count: usize,
+    },
     /// Streaming assistant reasoning text.
     ThinkingChunk { session_id: String, text: String },
     /// Reasoning stream ended.

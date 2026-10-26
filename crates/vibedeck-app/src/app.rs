@@ -555,6 +555,9 @@ impl VibedeckApp {
             // variant exists for the session/load replay path, which the
             // worker folds into `SessionHistory` instead.
             AcpEvent::UserMessageChunk { .. } => {}
+            // Replay progress only drives the web resuming overlay; the
+            // desktop app shows the busy state directly.
+            AcpEvent::SessionLoadProgress { .. } => {}
             AcpEvent::SessionError { context, message } => {
                 self.busy = false;
                 self.priming = false;

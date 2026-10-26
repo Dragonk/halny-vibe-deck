@@ -9,7 +9,9 @@ use vibedeck_acp::AcpHandle;
 use vibedeck_core::proto::{
     AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo,
 };
-use vibedeck_core::snapshot::{AcpStatus, PendingApproval, PendingQuestion, UsageStats};
+use vibedeck_core::snapshot::{
+    AcpStatus, PendingApproval, PendingQuestion, SessionLoadProgress, UsageStats,
+};
 use vibedeck_core::types::ChatSession;
 
 /// Why a slot's process exists - decides what happens once the agent
@@ -46,6 +48,10 @@ pub struct SlotState {
     pub approval: Option<PendingApproval>,
     pub question: Option<PendingQuestion>,
     pub usage: UsageStats,
+    /// `session/load` replay progress while a lazy-resumed session
+    /// wakes up (set to `count: 0` when the wake starts, cleared on
+    /// SessionReady / error) — drives the resuming overlay.
+    pub load_progress: Option<SessionLoadProgress>,
     pub commands: Vec<AvailableCommand>,
     pub config_options: Vec<ConfigOption>,
     pub modes: Vec<ModeInfo>,
@@ -143,6 +149,7 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
         approval: None,
         question: None,
         usage: UsageStats::default(),
+        load_progress: None,
         commands: Vec::new(),
         config_options: Vec::new(),
         modes: Vec::new(),

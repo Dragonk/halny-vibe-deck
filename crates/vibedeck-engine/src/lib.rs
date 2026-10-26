@@ -13,8 +13,8 @@ mod types;
 pub use config::{random_hex, AuthEntry, EngineConfig};
 pub use types::EngineState;
 pub use vibedeck_core::snapshot::{
-    AcpStatus, BusEvent, PendingApproval, PendingQuestion, SessionMeta, Snapshot, UiConfig,
-    UsageStats,
+    AcpStatus, BusEvent, PendingApproval, PendingQuestion, SessionLoadProgress, SessionMeta,
+    Snapshot, UiConfig, UsageStats,
 };
 
 use std::collections::HashMap;
@@ -23,7 +23,10 @@ use tokio::sync::broadcast;
 
 use vibedeck_acp::AcpHandle;
 use vibedeck_core::proto::{AcpCommand, AcpEvent};
-use vibedeck_core::types::{now_ms, Attachment, ChatSession, Message, MessageSender};
+use vibedeck_core::types::{
+    now_ms, new_id, Attachment, ChatSession, Message, MessageSender, ThinkingBlock, ToolCall,
+    ToolStatus,
+};
 
 use crate::types::{spawn_slot, SlotPurpose};
 
@@ -256,7 +259,14 @@ impl Engine {
                 .unwrap_or_default(),
             commands: current_slot.map(|s| s.commands.clone()).unwrap_or_default(),
             backend_sessions: st.backend_sessions.clone(),
-            usage: current_slot.map(|s| s.usage.clone()).unwrap_or_default(),
+            // The live slot wins; a lazy-resumed session (no slot yet,
+            // preview read from disk) or one whose slot died keeps its
+            // mirrored per-session usage (Nexus `session.usage`).
+            usage: current_slot
+                .map(|s| s.usage.clone())
+                .or_else(|| st.current_session().map(|s| s.usage.clone()))
+                .unwrap_or_default(),
+            session_load_progress: current_slot.and_then(|s| s.load_progress.clone()),
             approval: current_slot.and_then(|s| s.approval.clone()),
             question: current_slot.and_then(|s| s.question.clone()),
             working_directory: cfg.working_directory.clone(),
@@ -343,8 +353,12 @@ impl Engine {
         self.publish(BusEvent::StructureChanged);
     }
 
-    /// Open (or switch to) a session from session/list - creates the local
-    /// mirror with its own agent process and replays the CLI history.
+    /// Open (or switch to) a session from session/list — lazy resume
+    /// (Nexus §2.2): the transcript, plan, usage and last config are
+    /// read straight from the unified store on disk; **no agent process
+    /// is spawned**. The first prompt wakes the session via
+    /// `session/load` (with the recorded config re-applied), which then
+    /// replaces the preview with the full replayed history.
     pub fn open_backend_session(&self, session_id: &str) {
         let info = {
             let mut st = self.state.lock().unwrap();
@@ -369,25 +383,55 @@ impl Engine {
         } else {
             info.cwd.clone()
         };
-        let key = {
+        {
             let mut st = self.state.lock().unwrap();
             let mut session = ChatSession::new(
                 if info.name.is_empty() { "CLI session" } else { &info.name },
                 &cwd,
             );
             session.working_directory = cwd.clone();
-            let key = session.id.clone();
+            // Lazy: the ACP id is known upfront, the agent process is not
+            // spawned until a prompt (or config change) needs it.
+            session.acp_session_id = Some(info.session_id.clone());
+            // Disk preview (Nexus `previewSession`): transcript + plan +
+            // usage + last config from the unified store — zero ACP.
+            if let Some(preview) = vibedeck_vibe::load_full_session_preview(&info.session_id) {
+                session.messages = preview_to_messages(&preview.messages);
+                session.plan = preview
+                    .plan
+                    .into_iter()
+                    .map(|e| vibedeck_core::types::PlanEntry {
+                        content: e.content,
+                        status: vibedeck_core::types::PlanEntry::normalize_status(&e.status),
+                        priority: e.priority,
+                    })
+                    .collect();
+                if let Some(title) = preview.title.filter(|t| !t.is_empty()) {
+                    session.name = title;
+                }
+                if let Some(cfg) = preview.config {
+                    session.last_model = cfg.model;
+                    session.last_mode = cfg.mode;
+                    session.last_thinking = cfg.thinking;
+                }
+                session.usage = vibedeck_core::snapshot::UsageStats {
+                    prompt_tokens: preview.usage.prompt_tokens,
+                    completion_tokens: preview.usage.completion_tokens,
+                    cached_tokens: preview.usage.cached_tokens,
+                    total_tokens: preview.usage.total_tokens,
+                    context_used: preview.usage.context_used,
+                    // The preview has no context window size (Nexus sets 0);
+                    // a live usage_update fills it in once the agent runs.
+                    context_size: 0.0,
+                    ..Default::default()
+                };
+            }
             st.sessions.insert(0, session);
             st.current = Some(0);
-            key
-        };
-        self.ensure_slot(
-            &key,
-            SlotPurpose::LoadBackend {
-                session_id: info.session_id.clone(),
-                cwd,
-            },
-        );
+            // Per-session chips for a session that never went live this
+            // run (Nexus restoreSessionChips after previewSession).
+            restore_session_chips(&mut st);
+        }
         self.publish(BusEvent::StructureChanged);
     }
 
@@ -551,6 +595,56 @@ impl Engine {
                             session_id: acp_session_id,
                             text,
                         });
+                    }
+                } else {
+                    // Lazy-resumed CLI session (Nexus §2.2): the first
+                    // prompt wakes the agent — `session/load` replays
+                    // the history, then the prompt goes. The recorded
+                    // last config is re-applied inside the wake (Nexus
+                    // `applyConfig`), before the prompt.
+                    let cwd = st
+                        .current_session()
+                        .map(|s| s.working_directory.clone())
+                        .unwrap_or_else(|| self.workdir());
+                    drop(st);
+                    self.ensure_slot(
+                        &key,
+                        SlotPurpose::LoadBackend {
+                            session_id: acp_session_id.clone(),
+                            cwd,
+                        },
+                    );
+                    let mut st = self.state.lock().unwrap();
+                    if let Some(slot_id) = st.slot_of_session(&key) {
+                        if let Some(slot) = st.slots.get_mut(&slot_id) {
+                            slot.busy = true;
+                            slot.pending_prompt = Some(text);
+                            slot.load_progress = Some(vibedeck_core::snapshot::SessionLoadProgress {
+                                session_id: acp_session_id.clone(),
+                                count: 0,
+                            });
+                        }
+                    }
+                    // lastModel/lastMode/lastThinking re-apply (Nexus
+                    // `loadSession(…, applyConfig)` — v0.10.2 "config
+                    // applied INSIDE session/load, before the prompt").
+                    let pending: Vec<(String, String)> = st
+                        .sessions
+                        .iter()
+                        .find(|s| s.id == key)
+                        .map(|session| {
+                            [
+                                ("model", session.last_model.clone()),
+                                ("mode", session.last_mode.clone()),
+                                ("thinking", session.last_thinking.clone()),
+                            ]
+                            .into_iter()
+                            .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+                            .collect()
+                        })
+                        .unwrap_or_default();
+                    if !pending.is_empty() {
+                        st.pending_options.insert(key.clone(), pending);
                     }
                 }
             }
@@ -818,9 +912,26 @@ impl Engine {
         }
         let slot_session = st.session_of_slot(slot_id);
         let global_model = self.config().preferred_model.clone();
+        // Nexus §2.2 fallback: session/load failed — the pending prompt
+        // moves to a fresh session in the same cwd (newSession + resend).
+        let mut respawn: Option<(String, String)> = None;
         {
             let Some(slot) = st.slots.get_mut(&slot_id) else { return };
             let _ = slot.usage.apply(&event);
+            // Mirror live usage onto the session (direct field access:
+            // disjoint from the `slot` borrow of `st.slots`; runs before
+            // the match partially moves `event`). The mirror survives
+            // slot death and feeds the UsageBar of lazy-resumed sessions
+            // whose preview usage came from disk (Nexus `session.usage`).
+            if let AcpEvent::UsageUpdate { session_id, .. } = &event {
+                if let Some(session) = st
+                    .sessions
+                    .iter_mut()
+                    .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                {
+                    let _ = session.usage.apply(&event);
+                }
+            }
             match event {
                 AcpEvent::Initialized { .. } => {
                     slot.status = AcpStatus::Connected;
@@ -860,6 +971,7 @@ impl Engine {
                     slot.status = AcpStatus::Disconnected;
                     slot.busy = false;
                     slot.pending_prompt = None;
+                    slot.load_progress = None;
                     if let Some(i) = slot_session {
                         if let Some(session) = st.sessions.get_mut(i) {
                             for msg in &mut session.messages {
@@ -880,6 +992,8 @@ impl Engine {
                 } => {
                     slot.status = AcpStatus::Connected;
                     slot.error.clear();
+                    // The wake finished: the resuming overlay disappears.
+                    slot.load_progress = None;
                     slot.modes = modes;
                     slot.config_options = config_options.clone();
                     if let Some(i) = slot_session {
@@ -990,21 +1104,47 @@ impl Engine {
                     }
                 }
                 AcpEvent::UserMessageChunk { .. } => {}
+                // Replay progress while a lazy session wakes (Nexus
+                // `SessionLoadProgress`, every 25 buffered updates).
+                AcpEvent::SessionLoadProgress { session_id, count } => {
+                    slot.load_progress = Some(SessionLoadProgress {
+                        session_id,
+                        count,
+                    });
+                }
                 AcpEvent::SessionError { context, message } => {
                     slot.status = AcpStatus::Error;
                     slot.error = format!("{context}: {message}");
                     slot.busy = false;
-                    slot.pending_prompt = None;
-                    if let Some(i) = slot_session {
-                        if let Some(session) = st.sessions.get_mut(i) {
-                            for msg in &mut session.messages {
-                                if msg.sender == MessageSender::Ai {
-                                    msg.is_complete = true;
+                    slot.load_progress = None;
+                    // Nexus §2.2: session/load failed (CLI session gone
+                    // from disk) — silently fall back to a fresh session
+                    // in the same cwd; the pending prompt resends there.
+                    if context == "load_session" {
+                        if let Some(prompt) = slot.pending_prompt.take() {
+                            match &slot.purpose {
+                                SlotPurpose::LoadBackend { cwd, .. }
+                                | SlotPurpose::LoadRemote { cwd, .. } => {
+                                    respawn = Some((prompt, cwd.clone()));
                                 }
+                                _ => {}
                             }
-                            session.messages.push(Message::new_system(&format!(
-                                "WARNING {context}: {message}"
-                            )));
+                        }
+                    } else {
+                        slot.pending_prompt = None;
+                    }
+                    if respawn.is_none() {
+                        if let Some(i) = slot_session {
+                            if let Some(session) = st.sessions.get_mut(i) {
+                                for msg in &mut session.messages {
+                                    if msg.sender == MessageSender::Ai {
+                                        msg.is_complete = true;
+                                    }
+                                }
+                                session.messages.push(Message::new_system(&format!(
+                                    "WARNING {context}: {message}"
+                                )));
+                            }
                         }
                     }
                 }
@@ -1169,12 +1309,33 @@ impl Engine {
                     }
                 }
                 AcpEvent::UsageUpdate { .. } => { /* handled above */ }
-                AcpEvent::DebugLog(line) => {
-                    let _ = line;
-                }
+                // Wildcard: must not move out of `event` (the usage
+                // mirror borrows it after the match).
+                AcpEvent::DebugLog(_) => {}
             }
         }
         drop(guard);
+        // Nexus §2.2 fallback: the lazy wake failed — start a fresh
+        // session in the same cwd and send the pending prompt there.
+        if let Some((prompt, cwd)) = respawn {
+            let key = {
+                let mut st = self.state.lock().unwrap();
+                let mut session = ChatSession::new("CLI session", &cwd);
+                session.working_directory = cwd.clone();
+                let key = session.id.clone();
+                st.sessions.insert(0, session);
+                st.current = Some(0);
+                key
+            };
+            self.ensure_slot(&key, SlotPurpose::NewLocal { cwd });
+            let mut st = self.state.lock().unwrap();
+            if let Some(slot_id) = st.slot_of_session(&key) {
+                if let Some(slot) = st.slots.get_mut(&slot_id) {
+                    slot.busy = true;
+                    slot.pending_prompt = Some(prompt);
+                }
+            }
+        }
         // Forward the raw event so streaming clients update in place.
         self.publish(BusEvent::Acp(event_out));
         // Anything structural (status, approvals, ready) -> refetch hint.
@@ -1192,6 +1353,60 @@ pub fn ensure_ai_message(session: &mut ChatSession) -> &mut Message {
         session.messages.push(Message::new_ai());
     }
     session.messages.last_mut().expect("just pushed")
+}
+
+/// Convert a lazy-resume disk preview into chat messages (Nexus
+/// `applySessionHistory`): user/ai text, thinking blocks and tool-call
+/// lines — everything complete, nothing streaming.
+fn preview_to_messages(messages: &[vibedeck_vibe::PreviewMessage]) -> Vec<Message> {
+    messages
+        .iter()
+        .map(|m| {
+            let mut msg = if m.role == "user" {
+                Message::new_user(&m.content)
+            } else {
+                let mut ai = Message::new_ai();
+                ai.content = m.content.clone();
+                ai
+            };
+            msg.is_complete = true;
+            msg.thinking = m
+                .thinking
+                .iter()
+                .map(|t| ThinkingBlock {
+                    id: t.id.clone(),
+                    content: t.content.clone(),
+                    is_complete: true,
+                    started_at: 0,
+                    completed_at: 0,
+                })
+                .collect();
+            msg.tool_calls = m
+                .tool_calls
+                .iter()
+                .map(|tc| ToolCall {
+                    id: new_id(),
+                    title: tc.title.clone(),
+                    kind: "tool".to_string(),
+                    status: if tc.status == "error" {
+                        ToolStatus::Error
+                    } else {
+                        ToolStatus::Done
+                    },
+                    input_json: None,
+                    output: None,
+                    file_changes: Vec::new(),
+                    diffs: Vec::new(),
+                    tool_name: String::new(),
+                    previous_content: None,
+                    raw_output_json: None,
+                    subagent: None,
+                    started_at: 0,
+                })
+                .collect();
+            msg
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

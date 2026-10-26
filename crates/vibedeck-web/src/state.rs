@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 use vibedeck_core::proto::AcpEvent;
-use vibedeck_core::snapshot::{BusEvent, Snapshot};
+use vibedeck_core::snapshot::{BusEvent, SessionLoadProgress, Snapshot};
 use vibedeck_core::types::{Message, MessageSender};
 
 /// Top-level application views (like Nexus AppView).
@@ -125,6 +125,19 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         if is_current(session_id) {
             let mut s = state.write();
             let _ = s.snapshot.usage.apply(&e);
+        }
+        return false;
+    }
+    // Lazy-resume replay progress (Nexus SessionLoadProgress): update the
+    // "Resuming session… (N)" overlay count in place, no refetch. The
+    // wake finishing (SessionReady) refetches and clears it.
+    if let AcpEvent::SessionLoadProgress { session_id, count } = &e {
+        if is_current(session_id) {
+            let mut s = state.write();
+            s.snapshot.session_load_progress = Some(SessionLoadProgress {
+                session_id: session_id.clone(),
+                count: *count,
+            });
         }
         return false;
     }

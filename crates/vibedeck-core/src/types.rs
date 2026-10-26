@@ -278,6 +278,12 @@ pub struct ChatSession {
     pub last_mode: Option<String>,
     #[serde(default)]
     pub last_thinking: Option<String>,
+    /// Usage mirrored onto the session (every `usage_update` is applied
+    /// here too): survives slot death and feeds the UsageBar for
+    /// lazy-resumed sessions whose preview came from disk (Nexus
+    /// `setUsage` in `previewSession`).
+    #[serde(default)]
+    pub usage: crate::snapshot::UsageStats,
 }
 
 impl ChatSession {
@@ -297,6 +303,7 @@ impl ChatSession {
             last_model: None,
             last_mode: None,
             last_thinking: None,
+            usage: crate::snapshot::UsageStats::default(),
         }
     }
 }

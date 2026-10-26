@@ -659,7 +659,7 @@ pub fn load_session_preview(session_id: &str) -> Option<Vec<PreviewMessage>> {
 /// the newest generation of `unified/<id>/generations/*/runtime-state.json`
 /// carrying `session_metadata.active_model` wins; `agent_name` is the
 /// mode, `reasoning_effort` the thinking level.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionLastConfig {
     pub model: Option<String>,
     pub mode: Option<String>,
@@ -708,6 +708,198 @@ pub fn load_session_last_config(session_id: &str) -> Option<SessionLastConfig> {
         });
     }
     None
+}
+
+// --- v0.12 lazy resume preview (Nexus buildSessionPreview, §2.2) -----------
+
+/// One entry of the session plan recovered from the unified store
+/// (`vibe.todo` effects — the last write wins).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PreviewPlanEntry {
+    pub content: String,
+    pub status: String,
+    #[serde(default)]
+    pub priority: Option<String>,
+}
+
+/// Usage snapshot recovered from `.session-index.json` (Nexus
+/// `readSessionIndexEntry.usage`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PreviewUsage {
+    pub context_used: f64,
+    pub prompt_tokens: f64,
+    pub completion_tokens: f64,
+    pub cached_tokens: f64,
+    pub total_tokens: f64,
+}
+
+impl PreviewUsage {
+    /// True when any token figure exists (Nexus: `usage` only when the
+    /// index entry carries token totals).
+    pub fn is_known(&self) -> bool {
+        self.total_tokens > 0.0
+            || self.prompt_tokens > 0.0
+            || self.completion_tokens > 0.0
+            || self.cached_tokens > 0.0
+            || self.context_used > 0.0
+    }
+}
+
+/// Everything the lazy-resume preview needs (Nexus `SessionPreview`):
+/// transcript + plan + title + usage + last config — all read from
+/// disk, no agent process involved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionPreviewData {
+    pub messages: Vec<PreviewMessage>,
+    pub title: Option<String>,
+    pub cwd: Option<String>,
+    pub updated_at: Option<i64>,
+    pub config: Option<SessionLastConfig>,
+    pub usage: PreviewUsage,
+    pub plan: Vec<PreviewPlanEntry>,
+}
+
+/// Read one entry from `unified/.session-index.json` (Nexus
+/// `readSessionIndexEntry`): title/updatedAt from the session block,
+/// cwd + config from the metadata block, usage from the token totals.
+fn read_session_index_entry_at(
+    index_path: &Path,
+    session_id: &str,
+) -> Option<(Option<String>, Option<String>, Option<i64>, Option<SessionLastConfig>, PreviewUsage)> {
+    let raw = std::fs::read_to_string(index_path).ok()?;
+    let idx: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let entries = idx.get("entries")?.as_array()?;
+    let entry = entries.iter().find(|e| {
+        e.pointer("/identity/session_id").and_then(|v| v.as_str()) == Some(session_id)
+            || e.get("session_id").and_then(|v| v.as_str()) == Some(session_id)
+    })?;
+    let sess = entry.get("session");
+    let meta = entry.get("metadata");
+    let title = sess
+        .and_then(|s| s.get("title"))
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+    let updated_at = sess
+        .and_then(|s| s.get("updatedAt"))
+        .and_then(|v| v.as_i64())
+        .or_else(|| {
+            sess.and_then(|s| s.get("updatedAt"))
+                .and_then(|v| v.as_f64())
+                .map(|f| f as i64)
+        });
+    let config = meta.and_then(|m| {
+        let model = m.get("active_model").and_then(|v| v.as_str());
+        if model.is_none() {
+            return None;
+        }
+        Some(SessionLastConfig {
+            model: model.map(str::to_string),
+            mode: m.get("agent_name").and_then(|v| v.as_str()).map(str::to_string),
+            thinking: m
+                .get("reasoning_effort")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        })
+    });
+    let num = |v: Option<&serde_json::Value>| v.and_then(|x| x.as_f64()).unwrap_or(0.0);
+    let tok = || sess.and_then(|s| s.get("tokenUsage"));
+    let usage = PreviewUsage {
+        context_used: num(sess.and_then(|s| s.get("contextUsage")).and_then(|c| c.get("totalTokens"))),
+        prompt_tokens: num(tok().and_then(|t| t.get("inputTokens"))),
+        completion_tokens: num(tok().and_then(|t| t.get("outputTokens"))),
+        cached_tokens: num(tok().and_then(|t| t.get("cachedInputTokens"))),
+        total_tokens: num(tok().and_then(|t| t.get("totalTokens"))),
+    };
+    let cwd = meta
+        .and_then(|m| m.get("cwd"))
+        .and_then(|v| v.as_str())
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
+    Some((title, cwd, updated_at, config, if usage.is_known() { usage } else { PreviewUsage::default() }))
+}
+
+/// The todo list recovered from the last `vibe.todo` effect in the
+/// projection entries (Nexus `buildSessionPreview.plan`): todos come
+/// from the tool input first, then from the structured output.
+fn build_preview_plan(entries: &[serde_json::Value]) -> Vec<PreviewPlanEntry> {
+    let mut plan: Vec<PreviewPlanEntry> = Vec::new();
+    for e in entries {
+        if e.get("type").and_then(|t| t.as_str()) != Some("effect") {
+            continue;
+        }
+        let Some(det) = e.get("detail") else { continue };
+        if det.get("toolName").and_then(|t| t.as_str()) != Some("vibe.todo") {
+            continue;
+        }
+        // A cancelled/rejected write must not clobber the last good list.
+        let decision = e
+            .pointer("/state/decision")
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        if matches!(decision, "reject" | "cancelled" | "cancel") {
+            continue;
+        }
+        let todos = det
+            .get("input")
+            .and_then(|i| i.get("todos"))
+            .and_then(|t| t.as_array())
+            .or_else(|| {
+                e.pointer("/state/output/structured_content/todos")
+                    .and_then(|t| t.as_array())
+            });
+        let Some(todos) = todos else { continue };
+        let parsed: Vec<PreviewPlanEntry> = todos
+            .iter()
+            .filter_map(|t| {
+                let content = t.get("content").and_then(|c| c.as_str())?;
+                if content.is_empty() {
+                    return None;
+                }
+                Some(PreviewPlanEntry {
+                    content: content.to_string(),
+                    status: t
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("pending")
+                        .to_string(),
+                    priority: t
+                        .get("priority")
+                        .and_then(|p| p.as_str())
+                        .map(str::to_string),
+                })
+            })
+            .collect();
+        if !parsed.is_empty() {
+            plan = parsed; // the last write wins
+        }
+    }
+    plan
+}
+
+/// Lazy-resume session preview (Nexus `previewSession`): the full
+/// transcript, plan, title and usage read straight from the unified
+/// store — no agent process spawned. `None` when the session (or its
+/// chunks) cannot be found on disk.
+pub fn load_full_session_preview(session_id: &str) -> Option<SessionPreviewData> {
+    let dir = find_preview_dir(session_id)?;
+    let entries = read_preview_entries(&dir)?;
+    let (title, cwd, updated_at, config, usage) = read_session_index_entry_at(
+        &sessions_log_dir().join("unified").join(".session-index.json"),
+        session_id,
+    )
+    .unwrap_or((None, None, None, None, PreviewUsage::default()));
+    let mut messages = build_preview_messages(&entries);
+    messages.truncate(PREVIEW_MAX_MESSAGES);
+    Some(SessionPreviewData {
+        messages,
+        title,
+        cwd,
+        updated_at,
+        config: config.or_else(|| load_session_last_config(session_id)),
+        usage,
+        plan: build_preview_plan(&entries),
+    })
 }
 
 #[cfg(test)]
@@ -842,5 +1034,102 @@ mod tests {
         assert_eq!(msgs[1].tool_calls[1].status, "error");
         assert_eq!(msgs[2].content, "done");
         assert!(msgs[2].thinking.is_empty());
+    }
+
+    #[test]
+    fn reads_session_index_entry() {
+        let dir = std::env::temp_dir().join(format!("vd-idx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let index = r#"{
+            "catalog_version": 1,
+            "entries": [
+              {
+                "identity": { "session_id": "s-77", "kind": "root" },
+                "metadata": {
+                  "active_model": "glm-5-3-flash",
+                  "agent_name": "auto-approve",
+                  "cwd": "/home/k/proj",
+                  "reasoning_effort": "low"
+                },
+                "session": {
+                  "id": "s-77",
+                  "title": "Inboxora security audit",
+                  "updatedAt": 1792865238183,
+                  "contextUsage": { "cachedInputTokens": 82944, "inputTokens": 87592, "outputTokens": 290, "totalTokens": 87882 },
+                  "tokenUsage": { "cachedInputTokens": 1889280, "inputTokens": 2150303, "outputTokens": 9548, "totalTokens": 2159851 }
+                },
+                "session_id": "s-77"
+              }
+            ]
+        }"#;
+        let path = dir.join(".session-index.json");
+        std::fs::write(&path, index).unwrap();
+        let (title, cwd, updated_at, config, usage) =
+            read_session_index_entry_at(&path, "s-77").expect("entry exists");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(title.as_deref(), Some("Inboxora security audit"));
+        assert_eq!(cwd.as_deref(), Some("/home/k/proj"));
+        assert_eq!(updated_at, Some(1792865238183));
+        let config = config.expect("config present");
+        assert_eq!(config.model.as_deref(), Some("glm-5-3-flash"));
+        assert_eq!(config.mode.as_deref(), Some("auto-approve"));
+        assert_eq!(config.thinking.as_deref(), Some("low"));
+        assert_eq!(usage.prompt_tokens, 2150303.0);
+        assert_eq!(usage.completion_tokens, 9548.0);
+        assert_eq!(usage.cached_tokens, 1889280.0);
+        assert_eq!(usage.total_tokens, 2159851.0);
+        assert_eq!(usage.context_used, 87882.0);
+    }
+
+    #[test]
+    fn index_entry_without_tokens_gives_unknown_usage() {
+        let dir = std::env::temp_dir().join(format!("vd-idx2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".session-index.json");
+        std::fs::write(
+            &path,
+            r#"{ "entries": [ { "identity": { "session_id": "s-1" },
+                "session": { "id": "s-1", "title": "T" } } ] }"#,
+        )
+        .unwrap();
+        let (_, _, _, config, usage) =
+            read_session_index_entry_at(&path, "s-1").expect("entry exists");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(config.is_none());
+        assert!(!usage.is_known());
+    }
+
+    #[test]
+    fn preview_plan_last_todo_write_wins() {
+        let entries: Vec<serde_json::Value> = serde_json::json!([
+            { "type": "effect", "detail": { "toolName": "bash", "kind": "tool" } },
+            { "type": "effect", "detail": { "toolName": "vibe.todo", "kind": "tool",
+                "input": { "action": "write", "todos": [
+                    { "content": "first", "status": "completed", "priority": "high" },
+                    { "content": "second", "status": "in_progress" }
+                ] } },
+              "state": { "decision": "execute" } },
+            { "type": "effect", "detail": { "toolName": "vibe.todo", "kind": "tool",
+                "input": { "action": "write", "todos": [
+                    { "content": "third", "status": "pending" }
+                ] } },
+              "state": { "decision": "reject" } },
+            { "type": "effect", "detail": { "toolName": "vibe.todo", "kind": "tool",
+                "input": { "action": "write", "todos": [
+                    { "content": "final", "status": "pending", "priority": "medium" },
+                    { "content": "", "status": "pending" }
+                ] } },
+              "state": { "decision": "execute" } }
+        ])
+        .as_array()
+        .unwrap()
+        .clone();
+        let plan = build_preview_plan(&entries);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].content, "final");
+        assert_eq!(plan[0].status, "pending");
+        assert_eq!(plan[0].priority.as_deref(), Some("medium"));
     }
 }
