@@ -4870,6 +4870,32 @@ code {
     color: var(--text);
     max-width: 720px;
 }
+.preview-docx ul,
+.preview-docx ol {
+    margin: 8px 0;
+    padding-left: 24px;
+}
+.preview-docx li {
+    margin: 4px 0;
+}
+.preview-docx blockquote {
+    border-left: 3px solid var(--border-subtle);
+    margin: 8px 0;
+    padding-left: 16px;
+    color: var(--text-muted);
+}
+.preview-docx a {
+    color: var(--accent);
+    text-decoration: none;
+}
+.preview-docx .docx-indent-1 { margin-left: 16px; }
+.preview-docx .docx-indent-2 { margin-left: 32px; }
+.preview-docx .docx-indent-3 { margin-left: 48px; }
+.preview-docx .docx-indent-4 { margin-left: 64px; }
+.preview-docx .docx-indent-5 { margin-left: 80px; }
+.preview-docx .docx-indent-6 { margin-left: 96px; }
+.preview-docx .docx-indent-7 { margin-left: 112px; }
+.preview-docx .docx-indent-8 { margin-left: 128px; }
 .preview-docx h1,
 .preview-docx h2,
 .preview-docx h3 {

@@ -194,6 +194,27 @@ function MermaidView({ code }: { code: string }): React.JSX.Element {
   )
 }
 
+const previewMarkdownComponents = {
+  a: ({
+    href,
+    children,
+    ...props
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+    children?: React.ReactNode
+  }) => (
+    <a
+      {...props}
+      href={href}
+      onClick={(e) => {
+        e.preventDefault()
+        if (href) window.api.shell.openPath(href).catch(console.error)
+      }}
+    >
+      {children}
+    </a>
+  ),
+}
+
 function MarkdownView({ content }: { content: string }): React.JSX.Element {
 
   // Split out ```mermaid blocks and render them with the mermaid engine
@@ -214,13 +235,13 @@ function MarkdownView({ content }: { content: string }): React.JSX.Element {
   }, [content])
 
   return (
-    <div className="preview-markdown">
+    <div className="preview-markdown markdown-content">
       <React.Suspense fallback={<div className="preview-loading">…</div>}>
         {segments.map((seg, i) =>
           seg.type === 'mermaid' ? (
             <MermaidView key={i} code={seg.text} />
           ) : (
-            <ReactMarkdown key={i} remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown key={i} remarkPlugins={[remarkGfm]} components={previewMarkdownComponents}>
               {seg.text}
             </ReactMarkdown>
           ),
@@ -396,6 +417,20 @@ function SheetView({ base64, ext }: { base64: string; ext: string }): React.JSX.
 // DOCX
 // ---------------------------------------------------------------------------
 
+// DOCX: mammoth drops paragraph indentation (w:ind), so indented paragraphs
+// (e.g. TOC levels) get a synthetic style name that the style map turns into
+// margin classes. List items keep their numbering and are skipped.
+const DOCX_INDENT_LEVELS = 8
+const DOCX_INDENT_MIN_TWIPS = 240
+
+function docxIndentStyleMap(): string[] {
+  const map: string[] = []
+  for (let lvl = 1; lvl <= DOCX_INDENT_LEVELS; lvl++) {
+    map.push("p[style-name^='DocxIndent" + lvl + "'] => p.docx-indent-" + lvl + ":fresh")
+  }
+  return map
+}
+
 function DocxView({ base64 }: { base64: string }): React.JSX.Element {
   const [html, setHtml] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -405,10 +440,26 @@ function DocxView({ base64 }: { base64: string }): React.JSX.Element {
     ;(async () => {
       try {
         const mammoth = await import('mammoth')
+        // The bundled mammoth types omit transforms, so reach it structurally.
+        const mammothT = mammoth as unknown as {
+          transforms: { paragraph: (fn: (p: any) => any) => (element: any) => any }
+        }
         const buf = base64ToBytes(base64)
-        const result = await mammoth.convertToHtml({
-          arrayBuffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
-        })
+        const result = await mammoth.convertToHtml(
+          {
+            arrayBuffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+          },
+          {
+            styleMap: docxIndentStyleMap(),
+            transformDocument: mammothT.transforms.paragraph((p: any) => {
+              if (p.numbering) return p
+              const start = p.indent?.start ?? 0
+              if (start < DOCX_INDENT_MIN_TWIPS) return p
+              const level = Math.min(DOCX_INDENT_LEVELS, Math.max(1, Math.round(start / DOCX_INDENT_MIN_TWIPS)))
+              return { ...p, styleName: 'DocxIndent' + level }
+            }),
+          },
+        )
         if (alive) setHtml(result.value)
       } catch (err) {
         if (alive) setError((err as Error).message)
