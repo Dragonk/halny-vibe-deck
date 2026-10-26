@@ -593,7 +593,17 @@ pub fn InputBar() -> Element {
                                 let mut at_idx = at_idx.clone();
                                 let mut at_items = at_items.clone();
                                 spawn(async move {
-                                    let res = crate::fsgit::api_search_files(token(&state), q).await;
+                                    // remote sessions search the remote session
+                                    // root over SSH (Nexus remoteSearchFiles)
+                                    let (froot, frid) =
+                                        crate::state::session_git_ctx(&state);
+                                    let res = crate::fsgit::api_search_files(
+                                        token(&state),
+                                        q,
+                                        frid,
+                                        froot,
+                                    )
+                                    .await;
                                     match res {
                                         Ok(items) => {
                                             at_items.set(items);

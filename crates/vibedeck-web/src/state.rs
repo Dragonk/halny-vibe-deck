@@ -471,7 +471,14 @@ pub fn resolve_session_path(cwd: &str, raw: &str) -> String {
 /// like the Nexus `fs.stat` → `listDir` → `openFilePreviewTab` chain).
 /// The dock picks the request up through `preview_open_seq`.
 pub async fn open_path(mut state: Signal<ClientState>, raw: &str) {
-    let cwd = state.read().snapshot.working_directory.clone();
+    // remote sessions resolve and list paths against the remote session
+    // root over SSH (Nexus fs.stat/listDir with remoteId)
+    let (sess_wd, sess_rid) = session_git_ctx(&state);
+    let cwd = if sess_rid.is_some() && !sess_wd.is_empty() {
+        sess_wd
+    } else {
+        state.read().snapshot.working_directory.clone()
+    };
     let mut path = resolve_session_path(&cwd, raw);
     if path.is_empty() {
         return;
@@ -491,9 +498,14 @@ pub async fn open_path(mut state: Signal<ClientState>, raw: &str) {
     // A successful listing means the path is a directory inside the root
     // → reveal in the Files tab. api_list_dir confines paths to the root
     // and errors on plain files, mirroring the Nexus isDir check.
-    let reveal = crate::fsgit::api_list_dir(token(&state), path.clone())
-        .await
-        .is_ok();
+    let reveal = crate::fsgit::api_list_dir(
+        token(&state),
+        path.clone(),
+        sess_rid.clone(),
+        cwd.clone(),
+    )
+    .await
+    .is_ok();
     // Nexus `ensureDockOpen`: open the dock and persist the pref.
     if !state.read().snapshot.config.dock_open {
         let (language, theme, limit) = {

@@ -138,7 +138,7 @@ fn icon_png() -> &'static [u8] {
 }
 
 /// Minimal standard-alphabet base64 decoder (same as the build script).
-fn decode_base64(input: &str) -> Vec<u8> {
+pub(crate) fn decode_base64(input: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(input.len() / 4 * 3);
     let mut buf: u32 = 0;
     let mut bits = 0u32;

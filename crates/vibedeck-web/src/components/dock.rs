@@ -65,6 +65,10 @@ struct PreviewTab {
     kind: String,
     name: String,
     path: String,
+    /// remote context (v0.7.0 remoteFs parity): which SSH connection the
+    /// file lives on and the session root its browse paths are relative to
+    remote_id: Option<String>,
+    root: String,
     staged: bool,
     data: Option<PreviewData>,
     diff: String,
@@ -88,11 +92,13 @@ fn open_file_tab(
     mut next_id: Signal<u64>,
     path: String,
     name: String,
+    remote_id: Option<String>,
+    root: String,
 ) {
     let existing = tabs
         .read()
         .iter()
-        .find(|t| t.kind == "file" && t.path == path)
+        .find(|t| t.kind == "file" && t.path == path && t.remote_id == remote_id)
         .map(|t| t.id);
     if let Some(id) = existing {
         active.set(Some(id));
@@ -107,6 +113,8 @@ fn open_file_tab(
             kind: "file".into(),
             name: name.clone(),
             path: path.clone(),
+            remote_id: remote_id.clone(),
+            root: root.clone(),
             staged: false,
             data: None,
             diff: String::new(),
@@ -115,7 +123,7 @@ fn open_file_tab(
     }
     active.set(Some(id));
     spawn(async move {
-        let data = match api_read_file(token(&state), path.clone()).await {
+        let data = match api_read_file(token(&state), path.clone(), remote_id, root).await {
             Ok(d) => d,
             Err(e) => PreviewData {
                 kind: "error".into(),
@@ -159,6 +167,8 @@ fn open_diff_tab(
             kind: "diff".into(),
             name,
             path: path.clone(),
+            remote_id: None,
+            root: String::new(),
             staged,
             data: None,
             diff: String::new(),
@@ -288,14 +298,23 @@ pub fn Dock() -> Element {
     let git_commit_msg = use_signal(String::new);
     let git_busy = use_signal(|| false);
     let git_error = use_signal(String::new);
-    let mut boot = use_signal(|| false);
+    let mut boot = use_signal(String::new);
 
     let s = state.read();
     let lang = lang(&state);
     let open = s.snapshot.config.dock_open;
     let view = s.view;
-    let wd = s.snapshot.working_directory.clone();
     drop(s);
+
+    // Files tab context (Nexus Dock cwd/remoteId): the *session* working
+    // directory — a remote path over SSH for remote sessions. The root
+    // crumb label and every list/preview/save call carry it.
+    let (mut fs_root, fs_rid) = session_git_ctx(&state);
+    if fs_root.trim().is_empty() {
+        let s = state.read();
+        fs_root = s.snapshot.working_directory.clone();
+    }
+    let wd = fs_root.clone();
 
     if !open || view != View::Chat {
         return VNode::empty();
@@ -327,13 +346,25 @@ pub fn Dock() -> Element {
                 if req.reveal {
                     tab_w.set("files".to_string());
                     active_w.set(None);
-                    cwd_w.set(req.path.clone());
+                    // remote reveal paths are absolute on the remote host;
+                    // the breadcrumb works relative to the session root
+                    let target_rel = if fs_rid.is_some()
+                        && !fs_root.is_empty()
+                        && req.path.starts_with(&fs_root)
+                    {
+                        req.path[fs_root.len()..].trim_start_matches('/').to_string()
+                    } else {
+                        req.path.clone()
+                    };
+                    cwd_w.set(target_rel.clone());
                     let st = state.clone();
                     let mut entries_w = entries.clone();
                     let mut files_msg_w = files_msg.clone();
-                    let target = req.path.clone();
+                    let target = target_rel;
+                    let rid = fs_rid.clone();
+                    let root = fs_root.clone();
                     spawn(async move {
-                        match api_list_dir(token(&st), target).await {
+                        match api_list_dir(token(&st), target, rid, root).await {
                             Ok(v) => entries_w.set(v),
                             Err(e) => files_msg_w.set(e.to_string()),
                         }
@@ -346,20 +377,31 @@ pub fn Dock() -> Element {
                         next_id.clone(),
                         req.path.clone(),
                         basename_or(&req.path),
+                        fs_rid.clone(),
+                        fs_root.clone(),
                     );
                 }
             }
         }
     }
 
-    // one-shot bootstrap: fetch the root listing when the dock first shows
-    if !*boot.read() {
-        boot.set(true);
+    // one-shot bootstrap: fetch the root listing when the dock first
+    // shows, and refetch it whenever the session context changes — browse
+    // state is per-session (Nexus fileTreeKey namespaces entries as
+    // `r:<rid>:<dir>`, so switching sessions must never keep the previous
+    // session's file listing).
+    let ctx_key = format!("{}|{}", fs_root, fs_rid.as_deref().unwrap_or(""));
+    if *boot.read() != ctx_key {
+        boot.set(ctx_key);
+        let mut cwd_r = cwd.clone();
+        cwd_r.set(String::new());
         let st = state.clone();
         let mut entries = entries.clone();
         let mut files_msg = files_msg.clone();
+        let rid = fs_rid.clone();
+        let root = fs_root.clone();
         spawn(async move {
-            match api_list_dir(token(&st), String::new()).await {
+            match api_list_dir(token(&st), String::new(), rid, root).await {
                 Ok(v) => entries.set(v),
                 Err(e) => files_msg.set(e.to_string()),
             }
@@ -435,6 +477,8 @@ pub fn Dock() -> Element {
             state.clone(),
             lang.clone(),
             wd,
+            fs_rid.clone(),
+            fs_root.clone(),
             cwd,
             entries,
             files_msg,
@@ -462,6 +506,8 @@ pub fn Dock() -> Element {
     let state_f = state.clone();
     let mut entries_f = entries.clone();
     let mut files_msg_f = files_msg.clone();
+    let fs_rid_f = fs_rid.clone();
+    let fs_root_f = fs_root.clone();
     let git_g = git.clone();
     let git_log_g = git_log.clone();
     let state_g = state.clone();
@@ -491,8 +537,10 @@ pub fn Dock() -> Element {
                     onclick: move |_| {
                         tab.set("files".into());
                         active.set(None);
+                        let rid = fs_rid_f.clone();
+                        let root = fs_root_f.clone();
                         spawn(async move {
-                            match api_list_dir(token(&state_f), String::new()).await {
+                            match api_list_dir(token(&state_f), String::new(), rid, root).await {
                                 Ok(v) => entries_f.set(v),
                                 Err(e) => files_msg_f.set(e.to_string()),
                             }
@@ -530,6 +578,8 @@ fn files_panel(
     state: Signal<ClientState>,
     lang: String,
     wd: String,
+    remote_id: Option<String>,
+    root: String,
     cwd: Signal<String>,
     entries: Signal<Vec<FileEntry>>,
     files_msg: Signal<String>,
@@ -551,10 +601,14 @@ fn files_panel(
                 let mut cwd = cwd.clone();
                 let mut entries = entries.clone();
                 let mut files_msg = files_msg.clone();
+                let remote_id = remote_id.clone();
+                let root = root.clone();
                 move |_| {
                     cwd.set(String::new());
+                    let rid = remote_id.clone();
+                    let root = root.clone();
                     spawn(async move {
-                        match api_list_dir(token(&state), String::new()).await {
+                        match api_list_dir(token(&state), String::new(), rid, root).await {
                             Ok(v) => entries.set(v),
                             Err(e) => files_msg.set(e.to_string()),
                         }
@@ -581,11 +635,15 @@ fn files_panel(
                         let mut entries = entries.clone();
                         let mut files_msg = files_msg.clone();
                         let target = acc.clone();
+                        let remote_id = remote_id.clone();
+                        let root = root.clone();
                         move |_| {
                             cwd.set(target.clone());
                             let target = target.clone();
+                            let rid = remote_id.clone();
+                            let root = root.clone();
                             spawn(async move {
-                                match api_list_dir(token(&state), target).await {
+                                match api_list_dir(token(&state), target, rid, root).await {
                                     Ok(v) => entries.set(v),
                                     Err(e) => files_msg.set(e.to_string()),
                                 }
@@ -605,6 +663,8 @@ fn files_panel(
             file_row(
                 state.clone(),
                 e,
+                remote_id.clone(),
+                root.clone(),
                 cwd.clone(),
                 entries.clone(),
                 files_msg.clone(),
@@ -644,6 +704,8 @@ fn files_panel(
 fn file_row(
     state: Signal<ClientState>,
     e: &FileEntry,
+    remote_id: Option<String>,
+    root: String,
     cwd: Signal<String>,
     entries: Signal<Vec<FileEntry>>,
     files_msg: Signal<String>,
@@ -674,14 +736,25 @@ fn file_row(
                     if is_dir {
                         let path = path.clone();
                         cwd.set(path.clone());
+                        let rid = remote_id.clone();
+                        let root = root.clone();
                         spawn(async move {
-                            match api_list_dir(token(&state), path).await {
+                            match api_list_dir(token(&state), path, rid, root).await {
                                 Ok(v) => entries.set(v),
                                 Err(e) => files_msg.set(e.to_string()),
                             }
                         });
                     } else {
-                        open_file_tab(state, tabs, active, next_id, path.clone(), name.clone());
+                        open_file_tab(
+                            state,
+                            tabs,
+                            active,
+                            next_id,
+                            path.clone(),
+                            name.clone(),
+                            remote_id.clone(),
+                            root.clone(),
+                        );
                     }
                 }
             },
@@ -901,8 +974,14 @@ fn FilePreviewTab(
                             let tid = tab.id;
                             let content = content.clone();
                             let tabs2 = tabs.clone();
+                            let rid = tab.remote_id.clone();
+                            let root = tab.root.clone();
+                            // FnMut body: re-clone per click before the move
+                            // into the async task (E0507 otherwise)
                             move |_| {
                                 let c = content.read().clone();
+                                let rid = rid.clone();
+                                let root = root.clone();
                                 let mut saving = saving.clone();
                                 saving.set(true);
                                 let st = st.clone();
@@ -912,7 +991,7 @@ fn FilePreviewTab(
                                 let mut saving2 = saving.clone();
                                 let mut tabs3 = tabs2.clone();
                                 spawn(async move {
-                                    match api_save_file(token(&st), p.clone(), c.clone()).await {
+                                    match api_save_file(token(&st), p.clone(), c.clone(), rid, root).await {
                                         Ok(()) => {
                                             saved.set(true);
                                             save_err.set(String::new());

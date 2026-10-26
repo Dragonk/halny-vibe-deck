@@ -181,6 +181,62 @@ pub fn parse_git_status(out: &str) -> GitStatus {
 }
 
 // ---------------------------------------------------------------------------
+// remote path helpers (Nexus remoteFs.ts)
+// ---------------------------------------------------------------------------
+
+/// Resolve a browse path against the remote session root: empty = the
+/// root itself, a leading `/` (chat path clicks) passes through as an
+/// absolute remote path, anything else is joined; `..` is rejected.
+pub fn remote_abs(root: &str, rel: &str) -> Result<String, String> {
+    let raw = root.trim();
+    if raw.is_empty() {
+        return Err("no remote working directory".into());
+    }
+    // normalize one trailing slash ("/" itself stays intact)
+    let root = if raw.len() > 1 && raw.ends_with('/') {
+        &raw[..raw.len() - 1]
+    } else {
+        raw
+    };
+    let rel = rel.trim();
+    if rel.is_empty() {
+        return Ok(root.to_string());
+    }
+    if rel.starts_with('/') {
+        return Ok(rel.to_string());
+    }
+    for c in rel.split('/') {
+        if c == ".." {
+            return Err("path escapes working directory".into());
+        }
+    }
+    if root == "/" {
+        Ok(format!("/{rel}"))
+    } else {
+        Ok(format!("{root}/{rel}"))
+    }
+}
+
+/// Parse `find -printf '%y|%s|%T@|%f'` lines into (type, size, mtime_s, name).
+pub fn parse_find_ls(out: &str) -> Vec<(char, u64, u64, String)> {
+    let mut v = Vec::new();
+    for line in out.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() != 4 {
+            continue;
+        }
+        let y = parts[0].chars().next().unwrap_or('f');
+        let size = parts[1].parse().unwrap_or(0);
+        let mtime = parts[2].parse::<f64>().unwrap_or(0.0).max(0.0) as u64;
+        v.push((y, size, mtime, parts[3].to_string()));
+    }
+    v
+}
+
+// ---------------------------------------------------------------------------
 // server implementation
 // ---------------------------------------------------------------------------
 
@@ -241,7 +297,17 @@ mod imp {
         Ok(target)
     }
 
-    pub fn list_dir(path: &str) -> Result<Vec<FileEntry>, ServerFnError> {
+    pub fn list_dir(
+        path: &str,
+        remote_id: Option<&str>,
+        remote_root: &str,
+    ) -> Result<Vec<FileEntry>, ServerFnError> {
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            return Ok(remote_list_dir(&conn, remote_root, path));
+        }
         let dir = confine(path)?;
         let mut out: Vec<FileEntry> = Vec::new();
         let display_root = Engine::global().workdir();
@@ -297,11 +363,25 @@ mod imp {
         fs::read(path).map_err(|e| ServerFnError::new(e.to_string()))
     }
 
-    pub fn read_file(path: &str) -> PreviewData {
+    pub fn read_file(path: &str, remote_id: Option<&str>, remote_root: &str) -> PreviewData {
         let name = Path::new(path)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = match Engine::global().remote_connection(rid) {
+                Some(c) => c,
+                None => {
+                    return PreviewData {
+                        kind: "error".into(),
+                        text: "remote connection not found".into(),
+                        file_name: name,
+                        ..PreviewData::empty()
+                    }
+                }
+            };
+            return remote_read_file(&conn, remote_root, path, name);
+        }
         let full = match confine(path) {
             Ok(p) => p,
             Err(e) => {
@@ -314,6 +394,12 @@ mod imp {
             }
         };
         let size = fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
+        preview_from_path(&full, name, size)
+    }
+
+    /// The preview pipeline shared by local and remote reads (Nexus
+    /// FilePreview kinds): the sniffers run on an existing file.
+    fn preview_from_path(full: &Path, name: String, size: u64) -> PreviewData {
         let err = |msg: String| PreviewData {
             kind: "error".into(),
             text: msg,
@@ -475,7 +561,18 @@ mod imp {
         }
     }
 
-    pub fn save_file(path: &str, content: &str) -> Result<(), ServerFnError> {
+    pub fn save_file(
+        path: &str,
+        content: &str,
+        remote_id: Option<&str>,
+        remote_root: &str,
+    ) -> Result<(), ServerFnError> {
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            return remote_save_file(&conn, remote_root, path, content);
+        }
         let full = confine(path)?;
         if content.len() > 1024 * 1024 {
             return Err(ServerFnError::new("content too large (limit 1 MB)".to_string()));
@@ -516,6 +613,188 @@ mod imp {
             out.truncate(512 * 1024);
         }
         Ok(out)
+    }
+
+    // ---- remote fs over SSH (Nexus remoteFs.ts) ----
+
+    /// Nexus BINARY_CAP: the largest file pulled over SSH for a preview.
+    const REMOTE_BINARY_CAP: u64 = 48 * 1024 * 1024;
+
+    fn remote_stat(
+        conn: &vibedeck_core::snapshot::RemoteConnection,
+        path: &str,
+    ) -> Option<(bool, u64)> {
+        let cmd = format!(
+            "stat -c '%F|%s' {} 2>/dev/null",
+            vibedeck_engine::remote::shq(path)
+        );
+        let res = vibedeck_engine::remote::ssh_run(conn, &cmd, 15_000, None);
+        if res.code != 0 || res.stdout.trim().is_empty() {
+            return None;
+        }
+        let mut it = res.stdout.trim().splitn(2, '|');
+        let ty = it.next().unwrap_or("");
+        let size = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        Some((ty == "directory", size))
+    }
+
+    fn remote_list_dir(
+        conn: &vibedeck_core::snapshot::RemoteConnection,
+        root: &str,
+        rel: &str,
+    ) -> Vec<FileEntry> {
+        let Ok(abs) = remote_abs(root, rel) else {
+            return Vec::new();
+        };
+        let cmd = format!(
+            "find {} -mindepth 1 -maxdepth 1 -printf '%y|%s|%T@|%f\\n' 2>/dev/null",
+            vibedeck_engine::remote::shq(&abs)
+        );
+        let res = vibedeck_engine::remote::ssh_run(conn, &cmd, 20_000, None);
+        if res.code != 0 {
+            return Vec::new();
+        }
+        let mut out: Vec<FileEntry> = Vec::new();
+        for (y, size, mtime_s, name) in parse_find_ls(&res.stdout) {
+            let is_dir = y == 'd';
+            if is_dir && name == ".git" {
+                continue;
+            }
+            if name == "." || name == ".." || name.is_empty() {
+                continue;
+            }
+            let path = if rel.trim().is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", rel.trim_end_matches('/'), name)
+            };
+            out.push(FileEntry {
+                name,
+                path,
+                is_dir,
+                size,
+                modified_ms: mtime_s.saturating_mul(1000),
+            });
+        }
+        out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+        out
+    }
+
+    fn remote_read_file(
+        conn: &vibedeck_core::snapshot::RemoteConnection,
+        root: &str,
+        path: &str,
+        name: String,
+    ) -> PreviewData {
+        let err = |msg: String| PreviewData {
+            kind: "error".into(),
+            text: msg,
+            file_name: name.clone(),
+            ..PreviewData::empty()
+        };
+        let Ok(abs) = remote_abs(root, path) else {
+            return err("no remote working directory".into());
+        };
+        let Some((_, size)) = remote_stat(conn, &abs) else {
+            return err(format!("File not found: {abs}"));
+        };
+        if size > REMOTE_BINARY_CAP {
+            return err("file too large (limit 48 MB)".into());
+        }
+        let cmd = format!(
+            "base64 -w0 {} 2>/dev/null",
+            vibedeck_engine::remote::shq(&abs)
+        );
+        let res = vibedeck_engine::remote::ssh_run(conn, &cmd, 120_000, None);
+        if res.code != 0 {
+            let msg = if res.stderr.trim().is_empty() {
+                "Read failed".to_string()
+            } else {
+                res.stderr.trim().to_string()
+            };
+            return err(msg);
+        }
+        let bytes = crate::pwa::decode_base64(res.stdout.trim());
+        // stage the bytes in a temp file and run the local preview
+        // pipeline on them (all kinds: xlsx/docx/pdf/zip/images/text)
+        static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir()
+            .join(format!("vibedeck-remote-preview-{}-{seq}.bin", std::process::id()));
+        if let Err(e) = fs::write(&tmp, &bytes) {
+            return err(e.to_string());
+        }
+        let data = preview_from_path(&tmp, name, size);
+        let _ = fs::remove_file(&tmp);
+        data
+    }
+
+    fn remote_save_file(
+        conn: &vibedeck_core::snapshot::RemoteConnection,
+        root: &str,
+        path: &str,
+        content: &str,
+    ) -> Result<(), ServerFnError> {
+        let abs = remote_abs(root, path).map_err(ServerFnError::new)?;
+        if content.len() > 1024 * 1024 {
+            return Err(ServerFnError::new(
+                "content too large (limit 1 MB)".to_string(),
+            ));
+        }
+        let b64 = b64_encode(content.as_bytes());
+        let cmd = format!("base64 -d > {}", vibedeck_engine::remote::shq(&abs));
+        let res = vibedeck_engine::remote::ssh_run(conn, &cmd, 60_000, Some(&b64));
+        if res.code != 0 {
+            let msg = if res.stderr.trim().is_empty() {
+                "Write failed".to_string()
+            } else {
+                res.stderr.trim().to_string()
+            };
+            return Err(ServerFnError::new(msg));
+        }
+        Ok(())
+    }
+
+    fn remote_search_files(
+        conn: &vibedeck_core::snapshot::RemoteConnection,
+        root: &str,
+        query: &str,
+    ) -> Vec<FileEntry> {
+        // port 1:1 of the Nexus remoteSearchFiles find (pruned, capped)
+        let cmd = format!(
+            "cd {} 2>/dev/null && find . -maxdepth 4 \\( -name .git -o -name node_modules -o -name .venv -o -name venv -o -name __pycache__ -o -name dist -o -name build -o -name out -o -name target -o -name .next -o -name .cache \\) -prune -o -printf '%y|%P\\n' 2>/dev/null | head -2000",
+            vibedeck_engine::remote::shq(root)
+        );
+        let res = vibedeck_engine::remote::ssh_run(conn, &cmd, 30_000, None);
+        let q = query.to_lowercase();
+        let mut results: Vec<FileEntry> = Vec::new();
+        for line in res.stdout.lines() {
+            let Some((y, rel)) = line.split_once('|') else {
+                continue;
+            };
+            if rel.is_empty() || rel == "." {
+                continue;
+            }
+            if !q.is_empty() && !rel.to_lowercase().contains(&q) {
+                continue;
+            }
+            let name = rel.rsplit('/').next().unwrap_or(rel).to_string();
+            results.push(FileEntry {
+                name,
+                path: rel.to_string(),
+                is_dir: y.trim() == "d",
+                size: 0,
+                modified_ms: 0,
+            });
+            if results.len() >= 50 {
+                break;
+            }
+        }
+        results
     }
 
     // ---- git ----
@@ -738,7 +1017,13 @@ mod imp {
     /// Fuzzy file search under the working directory for the `@` picker
     /// (Nexus `fs.searchFiles`): BFS with depth and result caps, skipping
     /// heavy directories. An empty query returns the top-level entries.
-    pub fn search_files(query: &str) -> Vec<FileEntry> {
+    pub fn search_files(query: &str, remote_id: Option<&str>, remote_root: &str) -> Vec<FileEntry> {
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let Some(conn) = Engine::global().remote_connection(rid) else {
+                return Vec::new();
+            };
+            return remote_search_files(&conn, remote_root, query);
+        }
         const MAX_DEPTH: usize = 6;
         const MAX_VISITED: usize = 4000;
         const MAX_RESULTS: usize = 60;
@@ -813,22 +1098,45 @@ mod imp {
 // server functions
 // ---------------------------------------------------------------------------
 
+/// List a directory. Local sessions list the engine working directory
+/// (paths relative to it); remote sessions list the remote session root
+/// over SSH, paths relative to that root (Nexus remoteFs.remoteListDir).
 #[server]
-pub async fn api_list_dir(token: String, path: String) -> Result<Vec<FileEntry>, ServerFnError> {
+pub async fn api_list_dir(
+    token: String,
+    path: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<Vec<FileEntry>, ServerFnError> {
     imp::check(&token)?;
-    imp::list_dir(&path)
+    imp::list_dir(&path, remote_id.as_deref(), &remote_root)
 }
 
+/// Preview one file (text/markdown/csv/image/xlsx/doc/slides/pdf/zip).
+/// Remote sessions pull the file over SSH first (Nexus remoteFs).
 #[server]
-pub async fn api_read_file(token: String, path: String) -> Result<PreviewData, ServerFnError> {
+pub async fn api_read_file(
+    token: String,
+    path: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<PreviewData, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::read_file(&path))
+    Ok(imp::read_file(&path, remote_id.as_deref(), &remote_root))
 }
 
+/// Save a text file (dock editor). Remote sessions write through SSH
+/// with `base64 -d` on stdin (Nexus remoteFs.remoteWriteText).
 #[server]
-pub async fn api_save_file(token: String, path: String, content: String) -> Result<(), ServerFnError> {
+pub async fn api_save_file(
+    token: String,
+    path: String,
+    content: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<(), ServerFnError> {
     imp::check(&token)?;
-    imp::save_file(&path, &content)
+    imp::save_file(&path, &content, remote_id.as_deref(), &remote_root)
 }
 
 #[server]
@@ -854,10 +1162,17 @@ pub async fn api_git_diff(
 }
 
 /// Fuzzy file search under the working directory (the `@` picker).
+/// Remote sessions run the same pruned `find` on the remote root over
+/// SSH (Nexus remoteFs.remoteSearchFiles, cap 50).
 #[server]
-pub async fn api_search_files(token: String, query: String) -> Result<Vec<FileEntry>, ServerFnError> {
+pub async fn api_search_files(
+    token: String,
+    query: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<Vec<FileEntry>, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::search_files(&query))
+    Ok(imp::search_files(&query, remote_id.as_deref(), &remote_root))
 }
 
 /// Whole working-tree diff for the "branch diff" attach action.
@@ -975,5 +1290,35 @@ mod tests {
         assert!(st.repo);
         assert_eq!(st.branch, "HEAD");
         assert!(st.entries.is_empty());
+    }
+
+    #[test]
+    fn remote_abs_join_and_escape() {
+        assert_eq!(remote_abs("/home/x/proj", "").unwrap(), "/home/x/proj");
+        assert_eq!(remote_abs("/home/x/proj/", "").unwrap(), "/home/x/proj");
+        assert_eq!(
+            remote_abs("/home/x/proj", "src/a.rs").unwrap(),
+            "/home/x/proj/src/a.rs"
+        );
+        assert_eq!(
+            remote_abs("/home/x/proj", "/etc/passwd").unwrap(),
+            "/etc/passwd"
+        );
+        assert!(remote_abs("/home/x/proj", "../escape").is_err());
+        assert!(remote_abs("", "a").is_err());
+    }
+
+    #[test]
+    fn parse_find_ls_fields() {
+        let out = "d|4096|1729938000.5000000|src\n-|1234|1729938001.2500000|main.rs\nbad\n";
+        let v = parse_find_ls(out);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].0, 'd');
+        assert_eq!(v[0].1, 4096);
+        assert_eq!(v[0].2, 1729938000);
+        assert_eq!(v[0].3, "src");
+        assert_eq!(v[1].0, '-');
+        assert_eq!(v[1].1, 1234);
+        assert_eq!(v[1].3, "main.rs");
     }
 }
