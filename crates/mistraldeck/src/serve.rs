@@ -2,7 +2,7 @@
 //!
 //! Security model:
 //! - the local app server ALWAYS binds 127.0.0.1 and never asks for a
-//!   login — starting Mistral Deck locally goes straight into the UI;
+//!   login — starting Halny Vibe Deck locally goes straight into the UI;
 //! - remote access is a SEPARATE HTTPS listener (self-signed certificate,
 //!   generated per-install and cached in the config directory) with a
 //!   styled `/login` page, HttpOnly+Secure cookie sessions and a per-IP
@@ -190,11 +190,11 @@ fn login_page_html() -> String {
     let mut s = String::with_capacity(12 * 1024);
     s.push_str("<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n");
     s.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n");
-    s.push_str("<title>Mistral Deck</title>\n<style>");
+    s.push_str("<title>Halny Vibe Deck</title>\n<style>");
     s.push_str(LOGIN_CSS);
     s.push_str("\n</style>\n</head>\n<body>\n<div class=\"card\">\n");
     s.push_str("  <div class=\"lock\">&#128274;</div>\n");
-    s.push_str("  <h1><span class=\"flame\">M</span> Mistral Deck</h1>\n");
+    s.push_str("  <h1>Halny Vibe Deck</h1>\n");
     s.push_str("  <div class=\"sub\" id=\"sub\"></div>\n");
     s.push_str("  <form id=\"f\" autocomplete=\"off\">\n");
     s.push_str("    <label for=\"u\" id=\"lu\"></label>\n");
@@ -356,7 +356,7 @@ fn ensure_certificate() -> Result<(String, String), String> {
     // Generate a fresh self-signed certificate (SANs: localhost + loopback
     // IPs; LAN access by IP still shows the usual self-signed warning).
     let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec![
-        "Mistral Deck".to_string(),
+        "Halny Vibe Deck".to_string(),
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),

@@ -3,12 +3,12 @@ name = "mistraldeck-appserver"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mistral Deck headless app server — the same axum server + engine as the desktop app, without the webview (console binary)"
+description = "Halny Vibe Deck headless app server — the same axum server + engine as the desktop app, without the webview (console binary)"
 publish = false
 
 [dependencies]
 mistraldeck = { path = "../mistraldeck", features = ["server"] }
 
 [[bin]]
-name = "mistraldeck-appserver"
+name = "halny-vibe-deck-appserver"
 path = "src/main.rs"

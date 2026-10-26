@@ -273,10 +273,10 @@ pub struct Str {
 }
 
 pub const EN: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "Unofficial community app — not affiliated with Mistral AI",
-    disclaimer_long: "Mistral Deck is an unofficial, community-made desktop GUI for the Mistral Vibe CLI. It is not an official Mistral AI product and is not affiliated with, endorsed by, or supported by Mistral AI. \\\"Mistral\\\" and \\\"Vibe\\\" belong to their respective owners.",
-    about: "About Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck is an unofficial, community-made desktop GUI for the Mistral Vibe CLI. It is not an official Mistral AI product and is not affiliated with, endorsed by, or supported by Mistral AI. \\\"Mistral\\\" and \\\"Vibe\\\" belong to their respective owners.",
+    about: "About Halny Vibe Deck",
     close: "Close",
     save: "Save",
     reload: "Reload",
@@ -427,7 +427,7 @@ pub const EN: Str = Str {
     setup_found: "found",
     setup_missing: "not found",
     setup_done: "Ready — vibe-acp located. You can start chatting.",
-    setup_hint: "Mistral Deck talks to the Mistral Vibe CLI (vibe-acp). The CLI is installed with uv (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck talks to the Mistral Vibe CLI (vibe-acp). The CLI is installed with uv (`uv tool install mistral-vibe`).",
     new_chat: "New chat",
     start_conversation: "Start a conversation",
     agent_ready: "Agent is ready. Type a message to begin.",
@@ -464,10 +464,10 @@ pub const EN: Str = Str {
 };
 
 pub const PL: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "Nieoficjalna aplikacja społecznościowa — niezwiązana z Mistral AI",
-    disclaimer_long: "Mistral Deck to nieoficjalny, tworzony przez społeczność desktopowy GUI dla Mistral Vibe CLI. Nie jest oficjalnym produktem Mistral AI i nie jest powiązany, wspierany ani zatwierdzony przez Mistral AI. „Mistral” i „Vibe” należą do ich właścicieli.",
-    about: "O aplikacji Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck to nieoficjalny, tworzony przez społeczność desktopowy GUI dla Mistral Vibe CLI. Nie jest oficjalnym produktem Mistral AI i nie jest powiązany, wspierany ani zatwierdzony przez Mistral AI. „Mistral” i „Vibe” należą do ich właścicieli.",
+    about: "O aplikacji Halny Vibe Deck",
     close: "Zamknij",
     save: "Zapisz",
     reload: "Odśwież",
@@ -618,7 +618,7 @@ pub const PL: Str = Str {
     setup_found: "znaleziono",
     setup_missing: "nie znaleziono",
     setup_done: "Gotowe — vibe-acp dostępny. Możesz zacząć czat.",
-    setup_hint: "Mistral Deck komunikuje się z Mistral Vibe CLI (vibe-acp). CLI instaluje się przez uv (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck komunikuje się z Mistral Vibe CLI (vibe-acp). CLI instaluje się przez uv (`uv tool install mistral-vibe`).",
     new_chat: "Nowy czat",
     start_conversation: "Rozpocznij rozmowę",
     agent_ready: "Agent gotowy. Napisz wiadomość, aby rozpocząć.",
@@ -655,10 +655,10 @@ pub const PL: Str = Str {
 };
 
 pub const DE: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "Inoffizielle Community-App — nicht mit Mistral AI verbunden",
-    disclaimer_long: "Mistral Deck ist eine inoffizielle, von der Community entwickelte Desktop-GUI für die Mistral Vibe CLI. Es ist kein offizielles Mistral-AI-Produkt und weder mit Mistral AI verbunden noch von Mistral AI unterstützt oder gebilligt. „Mistral“ und „Vibe“ gehören ihren jeweiligen Eigentümern.",
-    about: "Über Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck ist eine inoffizielle, von der Community entwickelte Desktop-GUI für die Mistral Vibe CLI. Es ist kein offizielles Mistral-AI-Produkt und weder mit Mistral AI verbunden noch von Mistral AI unterstützt oder gebilligt. „Mistral“ und „Vibe“ gehören ihren jeweiligen Eigentümern.",
+    about: "Über Halny Vibe Deck",
     close: "Schließen",
     save: "Speichern",
     reload: "Neu laden",
@@ -809,7 +809,7 @@ pub const DE: Str = Str {
     setup_found: "gefunden",
     setup_missing: "nicht gefunden",
     setup_done: "Bereit — vibe-acp gefunden. Sie können loslegen.",
-    setup_hint: "Mistral Deck spricht mit der Mistral Vibe CLI (vibe-acp). Die CLI wird mit uv installiert (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck spricht mit der Mistral Vibe CLI (vibe-acp). Die CLI wird mit uv installiert (`uv tool install mistral-vibe`).",
     new_chat: "Neuer Chat",
     start_conversation: "Konversation beginnen",
     agent_ready: "Der Agent ist bereit. Schreiben Sie eine Nachricht.",
@@ -846,10 +846,10 @@ pub const DE: Str = Str {
 };
 
 pub const FR: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "Application communautaire non officielle — sans lien avec Mistral AI",
-    disclaimer_long: "Mistral Deck est une interface graphique de bureau communautaire et non officielle pour la CLI Mistral Vibe. Ce n'est pas un produit officiel de Mistral AI et elle n'est ni affiliée à, ni approuvée ni soutenue par Mistral AI. « Mistral » et « Vibe » appartiennent à leurs propriétaires respectifs.",
-    about: "À propos de Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck est une interface graphique de bureau communautaire et non officielle pour la CLI Mistral Vibe. Ce n'est pas un produit officiel de Mistral AI et elle n'est ni affiliée à, ni approuvée ni soutenue par Mistral AI. « Mistral » et « Vibe » appartiennent à leurs propriétaires respectifs.",
+    about: "À propos de Halny Vibe Deck",
     close: "Fermer",
     save: "Enregistrer",
     reload: "Recharger",
@@ -1000,7 +1000,7 @@ pub const FR: Str = Str {
     setup_found: "trouvé",
     setup_missing: "introuvable",
     setup_done: "Prêt — vibe-acp trouvé. Vous pouvez discuter.",
-    setup_hint: "Mistral Deck communique avec la CLI Mistral Vibe (vibe-acp). La CLI s'installe avec uv (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck communique avec la CLI Mistral Vibe (vibe-acp). La CLI s'installe avec uv (`uv tool install mistral-vibe`).",
     new_chat: "Nouvelle discussion",
     start_conversation: "Commencer une discussion",
     agent_ready: "L'agent est prêt. Écrivez un message pour commencer.",
@@ -1037,10 +1037,10 @@ pub const FR: Str = Str {
 };
 
 pub const ES: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "Aplicación comunitaria no oficial — sin afiliación con Mistral AI",
-    disclaimer_long: "Mistral Deck es una GUI de escritorio no oficial creada por la comunidad para la CLI de Mistral Vibe. No es un producto oficial de Mistral AI y no está afiliada, respaldada ni apoyada por Mistral AI. «Mistral» y «Vibe» pertenecen a sus respectivos propietarios.",
-    about: "Acerca de Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck es una GUI de escritorio no oficial creada por la comunidad para la CLI de Mistral Vibe. No es un producto oficial de Mistral AI y no está afiliada, respaldada ni apoyada por Mistral AI. «Mistral» y «Vibe» pertenecen a sus respectivos propietarios.",
+    about: "Acerca de Halny Vibe Deck",
     close: "Cerrar",
     save: "Guardar",
     reload: "Recargar",
@@ -1191,7 +1191,7 @@ pub const ES: Str = Str {
     setup_found: "encontrado",
     setup_missing: "no encontrado",
     setup_done: "Listo — vibe-acp localizado. Puedes empezar a chatear.",
-    setup_hint: "Mistral Deck se comunica con la CLI de Mistral Vibe (vibe-acp). La CLI se instala con uv (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck se comunica con la CLI de Mistral Vibe (vibe-acp). La CLI se instala con uv (`uv tool install mistral-vibe`).",
     new_chat: "Nuevo chat",
     start_conversation: "Inicia una conversación",
     agent_ready: "El agente está listo. Escribe un mensaje para empezar.",
@@ -1228,10 +1228,10 @@ pub const ES: Str = Str {
 };
 
 pub const IT: Str = Str {
-    app_name: "Mistral Deck",
+    app_name: "Halny Vibe Deck",
     disclaimer_short: "App community non ufficiale — non affiliata a Mistral AI",
-    disclaimer_long: "Mistral Deck è una GUI desktop non ufficiale, creata dalla community, per la CLI Mistral Vibe. Non è un prodotto ufficiale di Mistral AI e non è affiliata, approvata né supportata da Mistral AI. «Mistral» e «Vibe» appartengono ai rispettivi proprietari.",
-    about: "Informazioni su Mistral Deck",
+    disclaimer_long: "Halny Vibe Deck è una GUI desktop non ufficiale, creata dalla community, per la CLI Mistral Vibe. Non è un prodotto ufficiale di Mistral AI e non è affiliata, approvata né supportata da Mistral AI. «Mistral» e «Vibe» appartengono ai rispettivi proprietari.",
+    about: "Informazioni su Halny Vibe Deck",
     close: "Chiudi",
     save: "Salva",
     reload: "Ricarica",
@@ -1382,7 +1382,7 @@ pub const IT: Str = Str {
     setup_found: "trovato",
     setup_missing: "non trovato",
     setup_done: "Pronto — vibe-acp trovato. Puoi iniziare a chattare.",
-    setup_hint: "Mistral Deck comunica con la CLI Mistral Vibe (vibe-acp). La CLI si installa con uv (`uv tool install mistral-vibe`).",
+    setup_hint: "Halny Vibe Deck comunica con la CLI Mistral Vibe (vibe-acp). La CLI si installa con uv (`uv tool install mistral-vibe`).",
     new_chat: "Nuova chat",
     start_conversation: "Avvia una conversazione",
     agent_ready: "L'agente è pronto. Scrivi un messaggio per iniziare.",

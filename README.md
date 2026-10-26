@@ -1,142 +1,117 @@
-# Mistral Deck — an unofficial desktop GUI for Mistral Vibe CLI
+# Halny Vibe Deck (Rust edition) — an unofficial desktop GUI for Mistral Vibe CLI
 
-> **⚠️ Unofficial community project.** Mistral Deck is **not** an official Mistral AI
+> **⚠️ Unofficial community project.** Halny Vibe Deck is **not** an official Mistral AI
 > product and is **not** affiliated with, endorsed by, or supported by Mistral AI.
 > "Mistral" and "Vibe" are trademarks of their respective owners.
-> Mistral Deck is an independent desktop GUI (nakładka) for the open-source
+> Halny Vibe Deck is an independent desktop GUI (nakładka) for the open-source
 > **Mistral Vibe CLI** (`vibe-acp`).
 
-**Mistral Deck — fast, native desktop GUI for the Mistral Vibe CLI.**
+**Halny Vibe Deck (Rust edition) — fast GUI for the Mistral Vibe CLI, built with Rust.**
 
-A Rust rewrite of [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus)
-(Electron/TypeScript, Apache-2.0) with the same goal: chat with the Mistral Vibe
-coding agent from your desktop — but with **no Electron, no Chromium, no webview**.
-Built with [egui](https://github.com/emilk/egui) + [wgpu](https://wgpu.rs) for
-instant startup and a tiny memory footprint, in the spirit of the
-[ArtCraft](https://getartcraft.com/apps) native apps.
+This is the **Rust edition** of [Dragonk/halny-vibe-deck](https://github.com/Dragonk/halny-vibe-deck),
+developed on the **`next`** branch as the future replacement of the Electron/TypeScript
+edition on `main`. It is built with **Dioxus 0.7 (fullstack)** — a native desktop webview
+on Linux/Windows plus an optional headless server mode you can reach from any browser.
 
-| | mistral-vibe-nexus | Mistral Deck |
-|---|---|---|
-| Runtime | Electron + Chromium | native Rust binary |
-| Renderer | React / DOM | egui / wgpu (GPU-first) |
-| Language | TypeScript | Rust |
-| RAM | hundreds of MB | tens of MB |
-| UI language | English | Automatic (System) + English / Polski / Deutsch / Français / Español / Italiano |
+> ℹ️ **Status: prerelease (1.99.x).** Until the Rust edition matures, official Halny Vibe
+> Deck releases come from the Electron edition on `main`. Builds from this branch are
+> published as **prereleases tagged v1.99.x** — usable, but expect rough edges.
+
+## Why the rewrite?
+
+The Electron edition ships a whole Chromium per window; the Rust edition is a single
+binary plus the OS webview (WebView2 / webkit2gtk), with the UI compiled to WASM and a
+Rust server (Axum) in one process. Lower RAM, faster startup, one binary to update —
+and when it reaches parity, only this edition will be maintained.
+
+## Download
+
+Grab the latest **v1.99.x prerelease** from the
+[releases page](https://github.com/Dragonk/halny-vibe-deck/releases):
+
+| Platform | File |
+|---|---|
+| Linux (x86_64, glibc) | `halny-vibe-deck-vX.Y.Z-linux-x64.tar.gz` |
+| Windows (x86_64) | `halny-vibe-deck-vX.Y.Z-windows-x64.zip` |
+| Linux headless server | `halny-vibe-deck-appserver-vX.Y.Z-linux-x64.tar.gz` |
+| Windows headless server | `halny-vibe-deck-appserver-vX.Y.Z-windows-x64.zip` |
+
+The Windows zip contains `HalnyVibeDeck.exe` (+ `WebView2Loader.dll`, `pdfium.dll`, `public/`);
+the Linux tarball contains `halny-vibe-deck` (+ `libpdfium.so`, `public/`). No installer —
+unpack anywhere and run.
+
+## Requirements
+
+- **Linux:** webkit2gtk 4.1 runtime — Debian/Ubuntu:
+  `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0`; glibc-based distro.
+- **Windows:** 10/11 with WebView2 (preinstalled on current systems; otherwise
+  install it from Microsoft).
+- **Vibe CLI / `vibe-acp`** — see the first-run Setup in the app.
+
+## Usage
+
+- `./halny-vibe-deck` (`HalnyVibeDeck.exe`) — auto: opens the desktop window
+  (on Windows always; on Linux when a display is available), otherwise starts a headless server.
+- `./halny-vibe-deck --mode gui` — force the desktop window.
+- `./halny-vibe-deck --mode headless` — headless server; the UI is at
+  `http://127.0.0.1:8080` (login required).
+- `./halny-vibe-deck-appserver` — the same headless server as a dedicated console
+  binary (no webview code compiled in; GUI always disabled).
+- `--port 1234` / `--set-login user pass` — configure the remote server.
+- `HALNY_VIBE_DECK_PORT` env var overrides the port (legacy `MISTRALDECK_PORT` still works).
+
+Configuration lives in `~/.config/halny-vibe-deck/config.json`; existing
+`mistraldeck` / `vibedeck` configs are migrated automatically on first run.
 
 ## Features
 
-- **1:1 Nexus look** — the original Mistral Vibe Nexus palette (dark & light, or follow the OS theme),
-  frameless window with a custom titlebar (drag / ─ □ ✕, edge resize), header
-  with agent status, a permanent collapsible sidebar (icon rail when collapsed),
-  AI messages with the accent flame avatar and user bubbles with the original
-  rounding, and the pixel-flame empty state.
-- **Projects** — recent folders list in the sidebar; add or switch the working
-  directory of a session in one click.
-- **Session history** — sessions recorded by the CLI (`session/list`) with
-  name, date and folder, resumable with one click — the full conversation
-  (messages, thinking, tool calls) is replayed into the UI.
-- **Fast startup** — dependency probing and file indexing happen lazily, never
-  blocking the first frame. The original window icon is embedded (Linux &
-  Windows), and no stray console window opens on Windows.
-- **Model / mode / thinking pickers** — the toolbar reads live
-  `configOptions` from vibe-acp ≥ 3.0 (`session/new`): switch the model,
-  session mode (ask / accept-edits / …) and thinking level (low / high / max)
-  per session — plus a working-directory chip and `@file` / `/command`
-  autocomplete in the input bar.
-- **Workspace dock** — a right panel with a lazy project file tree with
-  previews and a Git tab (branch, changed files, per-file diffs), refreshed
-  after every completed turn (in the spirit of Claude Cowork). Previews are
-  real renders, not text dumps: **PDF** pages are rasterized with the bundled
-  [pdfium](https://github.com/bblanchon/pdfium-binaries) library, **DOCX**
-  renders as a styled document (headings, emphasis, lists, tables), **XLSX**
-  opens with sheet tabs and an Excel-style grid, **PPTX** shows actual slides
-  with shape geometry and embedded pictures, and Markdown supports
-  **Mermaid** diagrams — flowcharts, sequence diagrams and pie charts are
-  rendered by a **built-in offline renderer** (no internet, no external
-  services; unsupported diagram types fall back to the source code).
-- **Full ACP protocol** — JSON-RPC 2.0 over stdio to `vibe-acp` on a worker
-  thread: `initialize`, `session/new | load | prompt | cancel`,
-  `session/set_config_option` (model/mode/thinking), streaming
-  `agent_message_chunk` / `agent_thought_chunk` / `tool_call` updates,
-  `usage_update` live token counters, tool-approval and agent-question modals.
-- **Latest CLI config** — a round-trip-safe editor for `~/.vibe/config.toml`:
-  `active_model`, `default_agent`, `theme`, `[[providers]]`, `[[models]]`,
-  `[[mcp_servers]]` (http / streamable-http / stdio, auth headers, timeouts),
-  `enabled_tools` / `disabled_tools`, `[tools.<name>] permission`,
-  `skill_paths` / skills, `enable_telemetry` / OTel, update checks,
-  notifications, system trust store, `[session_logging]`, and the read-only
-  project-level `.vibe/config.toml`. **Unknown keys written by newer CLI
-  versions always survive a save.**
-- **Agents, prompts, skills** — manage `~/.vibe/agents/*.toml` (incl.
-  subagents), `~/.vibe/prompts/*.md` and inspect discovered skills.
-- **Stats dashboard** — totals and per-session cost/token/tool-call usage from
-  `~/.vibe/logs/session/` (including the new `unified/` layout), with message
-  drill-down, subagent sessions, **cached-token cost and cache hit rate**, and
-  a live usage panel for the current session (tokens, tok/s, context, cost
-  estimate from the CLI price table).
-- **Setup pane** — detects/installs the CLI chain
-  (`uv tool install mistral-vibe`) with one click.
-- **i18n** — Automatic (System) + English, Polski, Deutsch, Français, Español and Italiano, runtime switchable.
-- **Zero native dependencies** — in-app folder picker and `@file` /
-  `/command` autocomplete instead of heavy dialog crates.
+- Real-time chat with the Mistral Vibe coding agent (ACP): streaming responses,
+  tool calls color-coded (green done / amber running / red error) with collapsible bodies.
+- Project sidebar with collapsible groups, busy spinner + cancel, context menu.
+- File and diff previews as tabs (incl. PDF via pdfium), resizable panels.
+- Settings with Global/Project scope for skills and prompts; auto UI language
+  (follows browser/OS) and auto color mode; English / Polski / Deutsch / Français /
+  Español / Italiano.
+- Frameless desktop window with custom title bar (minimize / maximize / close).
+- PWA-ready headless mode (installable from the browser), HTTPS-optional login page.
+- Built-in updater checking the latest GitHub release.
 
-## Prerequisites
-
-- Rust 1.75+ (rustup recommended)
-- The Mistral Vibe CLI — Mistral Deck's Setup pane can install it for you, or:
+## Development
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh   # uv
-uv tool install mistral-vibe                        # vibe + vibe-acp
+git clone https://github.com/Dragonk/halny-vibe-deck
+cd halny-vibe-deck
+git checkout next
+
+cargo check --workspace
+cargo test --workspace
+cargo test -p mistraldeck --features server
+
+# Desktop/web bundle via dioxus-cli (dx):
+cd crates/mistraldeck && dx build --fullstack --web --release
+
+# Server binary profile used by CI bundles:
+cargo build --profile server-release -p mistraldeck --features server,gui
 ```
 
-## Build & run
+Workspace layout (crate names are historical; the project is Halny Vibe Deck):
 
-```bash
-cargo run            # dev build
-cargo build --release # optimized (LTO, stripped) → target/release/mistraldeck
-```
+- `crates/mistraldeck` — the app itself: Dioxus 0.7 fullstack UI (server feature:
+  Axum server + login + PWA; gui feature: desktop webview).
+- `crates/mistraldeck-appserver` — dedicated headless-server binary (`halny-vibe-deck-appserver`).
+- `crates/mistraldeck-app` — egui frontend (legacy GUI shell).
+- `crates/mistraldeck-engine` — chat/session engine, config, in-app updater.
+- `crates/mistraldeck-acp` — ACP client for the Mistral Vibe CLI.
+- `crates/mistraldeck-vibe` — bindings to the `vibe` CLI/agent protocol.
+- `crates/mistraldeck-core` — shared types and utilities.
+- `crates/mistraldeck-setup` — first-run setup / login flows.
 
-Linux: `libgtk-3-dev`/wayland/x11 system libs required by winit/wgpu
-(Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libgtk-3-dev`).
+## Versioning
 
-## Architecture
+- `main` — the Electron edition (official releases, 1.x).
+- `next` — this Rust edition; **prereleases on the 1.99.x line** (v1.99.0, v1.99.1, …)
+  until it reaches parity, at which point it replaces the Electron edition on `main`.
 
-```
-crates/
-├── mistraldeck-core    # shared domain types (messages, tool calls) + ACP protocol types
-├── mistraldeck-acp     # JSON-RPC 2.0 client over stdio: worker thread owns the
-│                    # vibe-acp process; mpsc command/event channels to the UI
-├── mistraldeck-vibe    # ~/.vibe layer: round-trip-safe config.toml, agents,
-│                    # prompts, skills, session-log stats
-├── mistraldeck-setup   # dependency detection (uv / mistral-vibe / vibe-acp)
-│                    # and guided install
-└── mistraldeck-app     # egui/eframe UI (wgpu renderer)
-```
+## License
 
-Mirrors the Electron main/renderer split of the original: the worker thread is
-the "main process", the egui loop is the "renderer", and events are drained
-non-blocking each frame.
-
-## Status & roadmap
-
-- [x] ACP client, chat, approvals, questions, modes/models
-- [x] Config editor (full current CLI schema), agents/prompts/skills
-- [x] Stats dashboard (time ranges, charts, cache), setup pane, 6-language i18n
-- [ ] Packaging (`.deb`, `.AppImage`, Windows/macOS bundles)
-- [ ] Session resume/branching UI polish
-
-## Credits & license
-
-- Original project: [Dragonk/mistral-vibe-nexus](https://github.com/Dragonk/mistral-vibe-nexus) (Apache-2.0)
-- Window move/resize behaviour follows [storytold/photocraft](https://github.com/storytold/photocraft)'s approach to frameless egui windows.
-- Bundled [Noto Sans Symbols 2](https://fonts.google.com/noto/specimen/Noto+Sans+Symbols+2) for interface glyphs — SIL OFL 1.1, see `crates/mistraldeck-app/assets/NotoSansSymbols2-OFL.txt`.
-- File previews use the open-source crates [calamine](https://crates.io/crates/calamine) (Excel), [quick-xml](https://crates.io/crates/quick-xml) (docx/pptx parsing), [zip](https://crates.io/crates/zip) (OOXML containers), [pdfium-render](https://crates.io/crates/pdfium-render) (PDF rendering) and [pdf-extract](https://crates.io/crates/pdf-extract) (text-only PDF fallback).
-- Bundled [pdfium](https://github.com/bblanchon/pdfium-binaries) binaries (Apache-2.0 / BSD) ship inside the release archives so PDF previews work out of the box; pdfium is loaded from the executable directory first.
-- Mistral Deck is licensed under **Apache-2.0** — see [LICENSE](LICENSE).
-
----
-
-*Mistral Deck is an unofficial, community-made project. It is not an official
-Mistral AI product and is not affiliated with, endorsed by, or supported by
-Mistral AI.*
+Apache-2.0 — same as the upstream project.

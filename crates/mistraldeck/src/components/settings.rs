@@ -747,7 +747,7 @@ pub fn SettingsView() -> Element {
                         oninput: move |e| r_port.set(e.value()),
                     }
                     div { class: "field-hint",
-                        "{loc(&lang, \"Zmiana portu/interfejsu wchodzi w życie po restarcie serwera Mistral Deck.\", \"Port/interface changes take effect after a Mistral Deck server restart.\")}"
+                        "{loc(&lang, \"Zmiana portu/interfejsu wchodzi w życie po restarcie serwera Halny Vibe Deck.\", \"Port/interface changes take effect after a Halny Vibe Deck server restart.\")}"
                     }
                 }
                 div { class: "field",

@@ -1,4 +1,4 @@
-//! Mistral Deck engine - the headless core between ACP workers and any UI
+//! Halny Vibe Deck engine - the headless core between ACP workers and any UI
 //! (desktop webview, remote browser, mobile). Every session that talks
 //! to an agent owns a **dedicated vibe-acp process** (a "slot"), so any
 //! number of sessions can stream in parallel. A separate lightweight

@@ -1,4 +1,4 @@
-//! Mistral Deck — one codebase, three deployment modes:
+//! Halny Vibe Deck — one codebase, three deployment modes:
 //! - server: axum serves the app + engine (headless / remote access)
 //! - web: the same client compiled to wasm (served by the server)
 //! - desktop: the client inside a webview window (points at a local server)
@@ -89,7 +89,9 @@ pub fn run() {
     #[cfg(all(not(feature = "server"), feature = "desktop"))]
     {
         // Desktop webview: talk to the local engine server.
-        let port = std::env::var("MISTRALDECK_PORT").unwrap_or_else(|_| "8080".to_string());
+        let port = std::env::var("HALNY_VIBE_DECK_PORT")
+            .or_else(|_| std::env::var("MISTRALDECK_PORT"))
+            .unwrap_or_else(|_| "8080".to_string());
         dioxus::fullstack::set_server_url(format!("http://127.0.0.1:{port}"));
         dioxus::launch(app::App);
     }

@@ -14,21 +14,21 @@ use crate::remote::{
     extract_version, http_get_json, is_newer_version, pypi_latest, PYPI_PACKAGE,
 };
 
-/// GitHub repo hosting Mistral Deck releases (Nexus GITHUB_REPO).
-const GITHUB_REPO: &str = "Dragonk/mistraldeck";
+/// GitHub repo hosting Halny Vibe Deck releases (Nexus GITHUB_REPO).
+const GITHUB_REPO: &str = "Dragonk/halny-vibe-deck";
 
 /// Version of this build: release builds embed the release tag through
-/// `MISTRALDECK_BUILD_VERSION` (see release-dioxus.yml); dev builds fall back
+/// `HALNY_VIBE_DECK_BUILD_VERSION` (see release-dioxus.yml); dev builds fall back
 /// to the crate version.
 pub fn app_version() -> String {
-    option_env!("MISTRALDECK_BUILD_VERSION")
+    option_env!("HALNY_VIBE_DECK_BUILD_VERSION").or(option_env!("MISTRALDECK_BUILD_VERSION"))
         .unwrap_or(env!("CARGO_PKG_VERSION"))
         .trim_start_matches('v')
         .to_string()
 }
 
 /// How this app was deployed (Nexus `appFlavor`): release bundles ship the
-/// binary as `mistraldeck` (Linux) / `MistralDeck.exe` (Windows) next to a
+/// binary as `halny-vibe-deck` (Linux) / `HalnyVibeDeck.exe` (Windows) next to a
 /// `public/` directory. A `cargo run` development build has the same exe
 /// name on Linux, so the `public/` directory is what actually tells a
 /// bundled build from a dev build; dev builds cannot self-update.
@@ -37,7 +37,9 @@ pub fn app_flavor() -> &'static str {
         p.file_name().map(|n| n.to_string_lossy().to_string())
     });
     match exe.as_deref() {
-        Some("mistraldeck") | Some("mistraldeck.exe") | Some("MistralDeck")
+        Some("halny-vibe-deck") | Some("halny-vibe-deck.exe") | Some("HalnyVibeDeck")
+        | Some("HalnyVibeDeck.exe")
+        | Some("mistraldeck") | Some("mistraldeck.exe") | Some("MistralDeck")
         | Some("MistralDeck.exe") => {
             let has_public = std::env::current_exe()
                 .ok()

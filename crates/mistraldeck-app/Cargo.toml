@@ -1,6 +1,6 @@
 [package]
 name = "mistraldeck-app"
-description = "Mistral Deck (legacy egui) — native desktop GUI for the Mistral Vibe CLI (egui/wgpu, no Electron)"
+description = "Halny Vibe Deck (legacy egui) — native desktop GUI for the Mistral Vibe CLI (egui/wgpu, no Electron)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,9 +1,9 @@
 name: release-dioxus
 
 # Two ways to start a release:
-#   1. Push a tag matching v*-dioxus* (classic).
+#   1. Push a tag matching v*-dioxus* or v1.99.* (classic).
 #   2. Push a commit to next whose message contains a marker
-#      `[release vX.Y.Z]` — the "tag" job resolves the version, creates the
+#      "[release vX.Y.Z]" — the "tag" job resolves the version, creates the
 #      tag (or moves it to the pushed commit) and the pipeline continues.
 #      (workflows started by GITHUB_TOKEN never trigger other workflows, so
 #      tag-on-marker-created tags cannot start this workflow — hence marker #2.)
@@ -12,19 +12,20 @@ on:
   push:
     tags:
       - "v*-dioxus*"
+      - "v1.99.*"
     branches:
       - next
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.8.3-dioxus.5)"
+        description: "Release tag (e.g. v1.99.0)"
         required: true
 
 permissions:
   contents: write
 
 env:
-  VERSION: 0.8.3
+  VERSION: v1.99.0
   PDFIUM_TAG: chromium/7881
 
 jobs:
@@ -103,11 +104,15 @@ jobs:
     steps:
       - name: Export build version (release tag) to env
         # Embed the release tag in the binary so the in-app updater can tell
-        # releases apart (option_env!("MISTRALDECK_BUILD_VERSION") in the engine).
-        # Step-level: job-level env referencing needs.tag.outputs made every
-        # non-release push fail at workflow compile time (outputs of a skipped
-        # needed job are not addressable).
-        run: echo "MISTRALDECK_BUILD_VERSION=${{ needs.tag.outputs.tag }}" >> "$GITHUB_ENV"
+        # releases apart (option_env!("HALNY_VIBE_DECK_BUILD_VERSION") in the
+        # engine) and name the bundle assets after it. Step-level: job-level
+        # env referencing needs.tag.outputs made every non-release push fail
+        # at workflow compile time (outputs of a skipped needed job are not
+        # addressable).
+        run: |
+          echo "HALNY_VIBE_DECK_BUILD_VERSION=${{ needs.tag.outputs.tag }}" >> "$GITHUB_ENV"
+          echo "MISTRALDECK_BUILD_VERSION=${{ needs.tag.outputs.tag }}" >> "$GITHUB_ENV"
+          echo "VERSION=${{ needs.tag.outputs.tag }}" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@v4
 
@@ -137,21 +142,20 @@ jobs:
       - name: Build linux server binary (gui + headless)
         run: |
           cargo build --profile server-release -p mistraldeck --features server,gui --locked
-          strip --strip-all "$CARGO_TARGET_DIR/server-release/mistraldeck"
+          strip --strip-all "$CARGO_TARGET_DIR/server-release/halny-vibe-deck"
 
       - name: Build windows server binary (x86_64-pc-windows-gnu)
         run: |
           cargo build --profile server-release -p mistraldeck --features server,gui --target x86_64-pc-windows-gnu --locked
-          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe"
-          x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
-
+          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck.exe"
+          x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
 
       - name: Build appserver binaries (headless)
         run: |
           cargo build --profile server-release -p mistraldeck-appserver --locked
-          strip --strip-all "$CARGO_TARGET_DIR/server-release/mistraldeck-appserver"
+          strip --strip-all "$CARGO_TARGET_DIR/server-release/halny-vibe-deck-appserver"
           cargo build --profile server-release -p mistraldeck-appserver --target x86_64-pc-windows-gnu --locked
-          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck-appserver.exe"
+          x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck-appserver.exe"
 
       - name: Fetch pdfium binaries
         run: |
@@ -161,43 +165,43 @@ jobs:
 
       - name: Assemble linux bundle
         run: |
-          mkdir -p dist/mistraldeck-linux
-          cp "$CARGO_TARGET_DIR/server-release/mistraldeck" dist/mistraldeck-linux/mistraldeck
-          cp pdfium/lib/libpdfium.so dist/mistraldeck-linux/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-linux/public
-          tar -czf "mistraldeck-${VERSION}-linux-x64.tar.gz" -C dist/mistraldeck-linux .
+          mkdir -p dist/halny-vibe-deck-linux
+          cp "$CARGO_TARGET_DIR/server-release/halny-vibe-deck" dist/halny-vibe-deck-linux/halny-vibe-deck
+          cp pdfium/lib/libpdfium.so dist/halny-vibe-deck-linux/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-linux/public
+          tar -czf "halny-vibe-deck-${VERSION}-linux-x64.tar.gz" -C dist/halny-vibe-deck-linux .
 
       - name: Assemble windows bundle
         run: |
-          mkdir -p dist/mistraldeck-win
-          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck.exe" dist/mistraldeck-win/MistralDeck.exe
+          mkdir -p dist/halny-vibe-deck-win
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck.exe" dist/halny-vibe-deck-win/HalnyVibeDeck.exe
           WEBVIEW2_LOADER=$(find "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/build" -path '*webview2-com-sys*/out/x64/WebView2Loader.dll' -print -quit)
-          test -n "$WEBVIEW2_LOADER" || { echo 'WebView2Loader.dll not found'; exit 1; }
-          cp "$WEBVIEW2_LOADER" dist/mistraldeck-win/
-          cp pdfium/bin/pdfium.dll dist/mistraldeck-win/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-win/public
-          cd dist/mistraldeck-win && zip -q -r "../../mistraldeck-${VERSION}-windows-x64.zip" .
+          test -n "$WEBVIEW2_LOADER" || { echo "WebView2Loader.dll not found"; exit 1; }
+          cp "$WEBVIEW2_LOADER" dist/halny-vibe-deck-win/
+          cp pdfium/bin/pdfium.dll dist/halny-vibe-deck-win/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-win/public
+          cd dist/halny-vibe-deck-win && zip -q -r "../../halny-vibe-deck-${VERSION}-windows-x64.zip" .
 
       - name: Assemble appserver bundles
         run: |
-          mkdir -p dist/mistraldeck-appserver-linux
-          cp "$CARGO_TARGET_DIR/server-release/mistraldeck-appserver" dist/mistraldeck-appserver-linux/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-appserver-linux/public
-          tar -czf "mistraldeck-appserver-${VERSION}-linux-x64.tar.gz" -C dist/mistraldeck-appserver-linux .
-          mkdir -p dist/mistraldeck-appserver-win
-          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/mistraldeck-appserver.exe" dist/mistraldeck-appserver-win/
-          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/mistraldeck-appserver-win/public
-          cd dist/mistraldeck-appserver-win && zip -q -r "../../mistraldeck-appserver-${VERSION}-windows-x64.zip" .
+          mkdir -p dist/halny-vibe-deck-appserver-linux
+          cp "$CARGO_TARGET_DIR/server-release/halny-vibe-deck-appserver" dist/halny-vibe-deck-appserver-linux/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-appserver-linux/public
+          tar -czf "halny-vibe-deck-appserver-${VERSION}-linux-x64.tar.gz" -C dist/halny-vibe-deck-appserver-linux .
+          mkdir -p dist/halny-vibe-deck-appserver-win
+          cp "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck-appserver.exe" dist/halny-vibe-deck-appserver-win/
+          cp -r "$CARGO_TARGET_DIR/dx/mistraldeck/release/web/public" dist/halny-vibe-deck-appserver-win/public
+          cd dist/halny-vibe-deck-appserver-win && zip -q -r "../../halny-vibe-deck-appserver-${VERSION}-windows-x64.zip" .
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
           name: bundles
           path: |
-            mistraldeck-*-linux-x64.tar.gz
-            mistraldeck-*-windows-x64.zip
-            mistraldeck-appserver-*-linux-x64.tar.gz
-            mistraldeck-appserver-*-windows-x64.zip
+            halny-vibe-deck-*-linux-x64.tar.gz
+            halny-vibe-deck-*-windows-x64.zip
+            halny-vibe-deck-appserver-*-linux-x64.tar.gz
+            halny-vibe-deck-appserver-*-windows-x64.zip
           if-no-files-found: error
 
   release:
@@ -215,47 +219,39 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.tag.outputs.tag }}
-          name: Mistral Deck ${{ needs.tag.outputs.tag }}
+          name: Halny Vibe Deck (Rust) ${{ needs.tag.outputs.tag }}
           prerelease: true
           files: dist/*
           body: |
-            **Mistral Deck — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
+            **Halny Vibe Deck (Rust edition) — unofficial desktop + remote GUI (Rust · Dioxus 0.7 fullstack) for the Mistral Vibe CLI.**
 
-            > ⚠️ Mistral Deck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
+            > ⚠️ Halny Vibe Deck is an **unofficial community project** and is not affiliated with, endorsed by, or supported by Mistral AI.
+
+            > ℹ️ This is the **Rust edition** built from the `next` branch — a **prerelease** on the 1.99.x line. The official Halny Vibe Deck releases live on `main` (Electron edition) and stay the default until this Rust edition matures and replaces them.
 
             ## Binaries
 
             | Platform | File |
             |---|---|
-            | Linux (x86_64, glibc) | `mistraldeck-0.8.3-linux-x64.tar.gz` |
-            | Windows (x86_64) | `mistraldeck-0.8.3-windows-x64.zip` |
-            | Linux headless server | `mistraldeck-appserver-0.8.3-linux-x64.tar.gz` |
-            | Windows headless server | `mistraldeck-appserver-0.8.3-windows-x64.zip` |
+            | Linux (x86_64, glibc) | `halny-vibe-deck-${{ needs.tag.outputs.tag }}-linux-x64.tar.gz` |
+            | Windows (x86_64) | `halny-vibe-deck-${{ needs.tag.outputs.tag }}-windows-x64.zip` |
+            | Linux headless server | `halny-vibe-deck-appserver-${{ needs.tag.outputs.tag }}-linux-x64.tar.gz` |
+            | Windows headless server | `halny-vibe-deck-appserver-${{ needs.tag.outputs.tag }}-windows-x64.zip` |
 
-            ## What's new (M9.4 — Nexus 0.7.1 parity, v0.8.3-dioxus.6)
+            ## What's new (v1.99.0 — Halny Vibe Deck rebrand)
 
-            - Resizable panels: drag the sidebar and dock edges; widths are remembered.
-            - File and diff previews open as tabs next to Files/Git (close with X button); the dock keeps a stable width.
-            - Settings: Global/Project scope for skills and prompts, auto UI language (follows browser/OS) and auto color mode.
-            - Frameless desktop window with custom title bar buttons (minimize / maximize / close) and edge resizing.
-            - Tool calls color-coded (green done / amber running / red error) with collapsible bodies.
-            - Fixed: Stats/History tab crashed on load in the browser; model/mode/thinking dropdowns open mid-session again.
-            - Sidebar: collapsible project groups, busy spinner + cancel, right-click context menu with delete confirmation.
+            - Rebranded to **Halny Vibe Deck**: window title, login page, PWA manifest, About screen.
+            - Binaries renamed: `halny-vibe-deck` (Linux) / `HalnyVibeDeck.exe` (Windows); headless server: `halny-vibe-deck-appserver`.
+            - Application icon and logo now match the Electron edition on `main`.
+            - In-app updater tracks `Dragonk/halny-vibe-deck` releases; configuration moved to `~/.config/halny-vibe-deck` (existing mistraldeck/vibedeck configs migrate automatically).
+            - New `HALNY_VIBE_DECK_PORT` env var (legacy `MISTRALDECK_PORT` still honored).
+            - Versioning: 1.99.x prereleases until the Rust edition replaces the Electron edition on `main`.
 
-            ## What's new (M9)
+            ## Also in this build (M9/M9.4)
 
-            - Real file previews: PDF (rasterized pages via bundled pdfium), DOCX/ODT (styled document flow), PPTX/ODP (slide cards), XLSX/XLS/ODS (all sheets as clickable tabs), images, Markdown + Mermaid, code with syntax highlighting.
-            - Edit in place: text/Markdown/CSV/code previews open in the code editor (highlighting, line numbers) with Save.
-            - First Windows build (`MistralDeck.exe`, cross-compiled with MinGW; WebView2 required on Windows 10/11).
-            - No console window on double-click: on Windows the app opens the GUI window directly; `--mode headless` still runs the headless server when needed.
-            - Bundled `WebView2Loader.dll` next to `MistralDeck.exe` — required by the Windows webview (fixes the "WebView2Loader.dll not found" system error).
-            - Bundled pdfium (`libpdfium.so` / `pdfium.dll`) next to the binary — PDF previews work out of the box.
-
-            ## M9 fixes (v0.8.3-dioxus.5)
-
-            - Fixed: the Windows GUI window now actually opens — the tao event loop is created with `any_thread` (previously the gui thread panicked silently and double-clicking showed no window at all).
-            - `MistralDeck.exe` now embeds the mistral-vibe-nexus application icon (Explorer, taskbar).
-            - Closing the desktop window quits the whole app; on Windows panics are written to `mistraldeck.log` next to the exe for diagnosis.
+            - Resizable panels (sidebar, dock); file/diff previews as tabs; Global/Project scope for skills and prompts; auto UI language and auto color mode.
+            - Frameless desktop window with custom title bar buttons; color-coded tool calls; collapsible sidebar project groups with context menu.
+            - M9 fixes: the Windows GUI window opens (tao `any_thread`); icon embedded in the exe; closing the window quits the app; Windows panics logged to `halny-vibe-deck.log`.
 
             ## Requirements
 
@@ -265,8 +261,8 @@ jobs:
 
             ## Usage
 
-            - `./mistraldeck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
-            - `./mistraldeck --mode gui` — force desktop window.
-            - `./mistraldeck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
-            - `./mistraldeck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
-            - `./mistraldeck --port 1234` / `--set-login user pass` — configure the remote server.
+            - `./halny-vibe-deck` — auto: opens the desktop window (on Windows always; on Linux when a display is available), otherwise headless server.
+            - `./halny-vibe-deck --mode gui` — force desktop window.
+            - `./halny-vibe-deck --mode headless` — headless server; reach the UI at `http://127.0.0.1:8080` (login required).
+            - `./halny-vibe-deck-appserver` — the same headless server as a dedicated console binary (no webview code compiled in; GUI is always disabled).
+            - `./halny-vibe-deck --port 1234` / `--set-login user pass` — configure the remote server.

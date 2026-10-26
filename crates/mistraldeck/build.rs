@@ -1,4 +1,4 @@
-// Embed the Mistral Deck icon (the same artwork as mistral-vibe-nexus) into
+// Embed the Halny Vibe Deck icon (the same artwork as halny-vibe-deck) into
 // the Windows exe as a PE resource, so Explorer / taskbar show a proper
 // icon instead of the generic binary one.
 //

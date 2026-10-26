@@ -30,10 +30,10 @@ pub fn show(app: &mut MistraldeckApp, ui: &mut Ui) {
     }
     ui.add_space(10.0);
     ui.label(egui::RichText::new(t.vibe_dir_open).small().weak());
-    ui.hyperlink("https://github.com/Dragonk/mistral-vibe-nexus");
+    ui.hyperlink("https://github.com/Dragonk/halny-vibe-deck");
     ui.label(
         egui::RichText::new(
-            "Dragonk/mistral-vibe-nexus (Apache-2.0) — Rust rewrite, unofficial community project",
+            "Dragonk/halny-vibe-deck (Apache-2.0) — Rust rewrite, unofficial community project",
         )
         .small()
         .weak(),

@@ -314,7 +314,7 @@ pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
         "method": "initialize",
         "params": {
             "protocolVersion": 1,
-            "clientInfo": { "name": "Mistral Deck", "version": "0.8.3" }
+            "clientInfo": { "name": "Halny Vibe Deck", "version": "0.8.3" }
         },
     });
     if !write_line(&init_req.to_string(), &mut stdin) {

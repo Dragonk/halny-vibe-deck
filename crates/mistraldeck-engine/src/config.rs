@@ -1,4 +1,4 @@
-//! Engine configuration (~/.config/mistraldeck/config.json) + auth entries.
+//! Engine configuration (~/.config/halny-vibe-deck/config.json) + auth entries.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -72,7 +72,7 @@ pub fn random_hex(n_bytes: usize) -> String {
     hex::encode(buf)
 }
 
-/// The subset of ~/.config/mistraldeck/config.json the engine cares about.
+/// The subset of ~/.config/halny-vibe-deck/config.json the engine cares about.
 /// Unknown fields (egui-era settings) are preserved on save via a raw
 /// JSON round-trip.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -116,7 +116,7 @@ fn default_remote_port() -> u16 {
 
 impl EngineConfig {
     pub fn path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("mistraldeck").join("config.json"))
+        dirs::config_dir().map(|d| d.join("halny-vibe-deck").join("config.json"))
     }
 
     pub fn load() -> Self {
@@ -126,13 +126,19 @@ impl EngineConfig {
         match std::fs::read_to_string(&path) {
             Ok(raw) => serde_json::from_str(&raw).ok().unwrap_or_default(),
             Err(_) => {
-                // Migration from the pre-rebrand location
-                // (~/.config/vibedeck/config.json): read it once; saves
-                // always go to the new mistraldeck path.
-                let old = dirs::config_dir().map(|d| d.join("vibedeck").join("config.json"));
-                old.and_then(|p| std::fs::read_to_string(p).ok())
-                    .and_then(|raw| serde_json::from_str(&raw).ok())
-                    .unwrap_or_default()
+                // Migration from older locations (~/.config/mistraldeck,
+                // ~/.config/vibedeck): read once; saves always go to the
+                // new halny-vibe-deck path.
+                for legacy in ["mistraldeck", "vibedeck"] {
+                    let old = dirs::config_dir().map(|d| d.join(legacy).join("config.json"));
+                    if let Some(cfg) = old
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .and_then(|raw| serde_json::from_str(&raw).ok())
+                    {
+                        return cfg;
+                    }
+                }
+                Self::default()
             }
         }
     }

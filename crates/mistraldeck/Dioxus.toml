@@ -5,7 +5,7 @@ out_dir = "dist"
 asset_dir = "assets"
 
 [web.app]
-title = "Mistral Deck"
+title = "Halny Vibe Deck"
 
 [web.watcher]
 reload_html = true

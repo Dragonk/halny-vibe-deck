@@ -3,7 +3,11 @@ name = "mistraldeck"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Mistral Deck web UI (Dioxus fullstack) - same app for desktop webview and remote browser"
+description = "Halny Vibe Deck web UI (Dioxus fullstack) - same app for desktop webview and remote browser"
+
+[[bin]]
+name = "halny-vibe-deck"
+path = "src/main.rs"
 
 [dependencies]
 dioxus = { version = "0.7", features = ["launch", "fullstack"] }

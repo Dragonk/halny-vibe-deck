@@ -1,4 +1,4 @@
-//! Mistral Deck ACP client — spawns and drives the `vibe-acp` CLI
+//! Halny Vibe Deck ACP client — spawns and drives the `vibe-acp` CLI
 //! (Mistral Vibe Agent Client Protocol server) over JSON-RPC 2.0
 //! on stdin/stdout, without blocking the UI thread.
 

@@ -1,4 +1,4 @@
-//! Mistral Deck — desktop GUI for the Mistral Vibe CLI.
+//! Halny Vibe Deck — desktop GUI for the Mistral Vibe CLI.
 //!
 //! **Unofficial community project — not affiliated with, endorsed by, or
 //! supported by Mistral AI.** "Mistral" and "Vibe" are trademarks of
@@ -48,7 +48,7 @@ fn main() -> eframe::Result<()> {
         viewport: ViewportBuilder::default()
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([860.0, 600.0])
-            .with_title("Mistral Deck — GUI for Mistral Vibe CLI (unofficial)")
+            .with_title("Halny Vibe Deck — GUI for Mistral Vibe CLI (unofficial)")
             // Frameless window like the Nexus original: the app header is
             // the titlebar (drag / ─ □ ✕, see app/frameless.rs).
             .with_decorations(false)
@@ -57,7 +57,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Mistral Deck",
+        "Halny Vibe Deck",
         options,
         Box::new(|cc| Ok(Box::new(app::MistraldeckApp::new(cc)) as Box<dyn eframe::App>)),
     )

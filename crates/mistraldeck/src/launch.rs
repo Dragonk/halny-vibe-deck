@@ -13,7 +13,7 @@ pub fn main_dispatch(force_headless: bool) {
                 std::process::exit(2);
             }
             mistraldeck_engine::EngineConfig::set_login(&user, &pass);
-            println!("Login credentials saved (hashed) to the Mistral Deck config file.");
+            println!("Login credentials saved (hashed) to the Halny Vibe Deck config file.");
             std::process::exit(0);
         }
 
@@ -59,7 +59,7 @@ pub fn main_dispatch(force_headless: bool) {
             .unwrap_or(8080);
         // Serving model (Nexus parity):
         // - the local app server ALWAYS binds 127.0.0.1 and never asks for
-        //   a login — starting Mistral Deck locally goes straight into the UI;
+        //   a login — starting Halny Vibe Deck locally goes straight into the UI;
         // - remote browser access is a SEPARATE HTTPS listener (serve.rs)
         //   with a login page, active only when remote access is enabled
         //   AND credentials are configured.

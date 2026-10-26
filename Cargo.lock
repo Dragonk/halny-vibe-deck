@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "axum",
  "calamine",
@@ -4752,7 +4752,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-acp"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "anyhow",
  "log",
@@ -4762,7 +4762,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-app"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "anyhow",
  "calamine",
@@ -4791,14 +4791,14 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-appserver"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "mistraldeck",
 ]
 
 [[package]]
 name = "mistraldeck-core"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "js-sys",
  "serde",
@@ -4807,7 +4807,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-engine"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "dirs 5.0.1",
  "hex",
@@ -4822,7 +4822,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-setup"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -4831,7 +4831,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-vibe"
-version = "0.8.3"
+version = "1.99.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",

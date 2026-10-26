@@ -35,7 +35,7 @@ pub fn open_webview(url: &str) -> Result<(), String> {
     // buttons live in the header (IPC vd-min / vd-max / vd-close).
     let window = Rc::new(
         WindowBuilder::new()
-            .with_title("Mistral Deck")
+            .with_title("Halny Vibe Deck")
             .with_decorations(false)
             .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 820.0))
             .build(&event_loop)

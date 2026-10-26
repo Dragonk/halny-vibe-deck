@@ -1,4 +1,4 @@
-//! First-run dependency handling for Mistral Deck.
+//! First-run dependency handling for Halny Vibe Deck.
 //!
 //! The Mistral Vibe CLI is a Python tool installed with `uv`:
 //! `uv tool install mistral-vibe` provides both `vibe` and `vibe-acp`.

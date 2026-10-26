@@ -21,11 +21,11 @@ use axum::{
 use std::io::{Cursor, Write};
 use std::sync::OnceLock;
 
-const SW_JS: &str = r#"/* Mistral Deck service worker (serve mode / PWA).
+const SW_JS: &str = r#"/* Halny Vibe Deck service worker (serve mode / PWA).
  * Cache-first for assets, network-first for the app shell (a stale cached
  * index.html would pin users to the previous release forever); the API and
  * the websocket upgrade are never cached. */
-const CACHE = 'mistraldeck-shell-v1'
+const CACHE = 'halny-vibe-deck-shell-v1'
 
 self.addEventListener('install', () => {
   self.skipWaiting()
@@ -84,9 +84,9 @@ self.addEventListener('fetch', (event) => {
 "#;
 
 const MANIFEST: &str = r##"{
-  "name": "Mistral Deck",
-  "short_name": "MistralDeck",
-  "description": "Mistral Deck - client for the Mistral Vibe agent",
+  "name": "Halny Vibe Deck",
+  "short_name": "HalnyVibeDeck",
+  "description": "Halny Vibe Deck - client for the Mistral Vibe agent",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -297,7 +297,7 @@ mod tests {
     #[test]
     fn manifest_is_valid_json_with_both_purposes() {
         let v: serde_json::Value = serde_json::from_str(MANIFEST).expect("manifest json");
-        assert_eq!(v["name"], "Mistral Deck");
+        assert_eq!(v["name"], "Halny Vibe Deck");
         assert_eq!(v["theme_color"], "#111115");
         let icons = v["icons"].as_array().expect("icons array");
         assert_eq!(icons.len(), 2);
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn sw_shell_is_network_first_and_skips_api() {
-        assert!(SW_JS.contains("const CACHE = 'mistraldeck-shell-v1'"));
+        assert!(SW_JS.contains("const CACHE = 'halny-vibe-deck-shell-v1'"));
         // network-first navigation
         assert!(SW_JS.contains("url.pathname === '/' || url.pathname === '/index.html'"));
         // api / login / sw self-fetch never cached

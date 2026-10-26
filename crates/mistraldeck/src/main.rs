@@ -1,4 +1,4 @@
-//! Mistral Deck desktop/server entry — a thin wrapper over the
+//! Halny Vibe Deck desktop/server entry — a thin wrapper over the
 //! library (`mistraldeck::run`). The headless console build lives in
 //! the `mistraldeck-appserver` crate instead.
 

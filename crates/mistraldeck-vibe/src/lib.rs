@@ -1,4 +1,4 @@
-//! Mistral Deck — desktop GUI for the Mistral Vibe CLI.
+//! Halny Vibe Deck — desktop GUI for the Mistral Vibe CLI.
 //!
 //! `mistraldeck-vibe` reads and writes the Mistral Vibe CLI user
 //! configuration layer: `~/.vibe/config.toml` (latest schema,

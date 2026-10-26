@@ -16,7 +16,7 @@ use mistraldeck_core::proto::{
 };
 use mistraldeck_core::types::{Message, MessageSender, PlanEntry, ThinkingBlock};
 
-pub const CLIENT_INFO_NAME: &str = "Mistral Deck";
+pub const CLIENT_INFO_NAME: &str = "Halny Vibe Deck";
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 

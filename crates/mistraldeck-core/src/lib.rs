@@ -1,4 +1,4 @@
-//! Mistral Deck — desktop GUI for the Mistral Vibe CLI.
+//! Halny Vibe Deck — desktop GUI for the Mistral Vibe CLI.
 //!
 //! Unofficial community project. Not affiliated with Mistral AI.
 //! `mistraldeck-core` holds the shared domain types (messages, sessions,
