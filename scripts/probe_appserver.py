@@ -90,10 +90,12 @@ send({
     },
 })
 time.sleep(1.0)
+send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+time.sleep(0.3)
 cwd = tempfile.mkdtemp(prefix="probe-appsrv-")
 send({
     "jsonrpc": "2.0", "id": "c2", "method": "session/start",
-    "params": {"agentConfig": {"cwd": cwd}, "kind": "NORMAL"},
+    "params": {"agentConfig": {"cwd": cwd}, "kind": "normal"},
 })
 
 deadline = time.time() + TIMEOUT

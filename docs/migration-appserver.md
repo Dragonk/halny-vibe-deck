@@ -7,10 +7,10 @@
 ## Postęp prac (aktualizowany przez agenta)
 
 - [x] F0 — Sonda protokołu (scripts/probe_appserver.py, uruchomiona na lokalnym CLI)
-- [x] F1 — Transport + minimalny czat (crate `mistraldeck-appsrv`: conn, proto, reducer, worker)
-- [x] F2 — Callbacki: approvals + pytania (callback/call ack + callback/result)
-- [x] F3 — Watermark + resync + reconnect (event_id, events/read, resume snapshot)
-- [x] F4 — Konfiguracja runtime + chipy (runtime/read, agents/list, session/start {model, reasoningEffort})
+- [x] F1 — Transport + minimalny czat (crate `mistraldeck-appsrv`: conn, proto, patch, reducer, worker) — **E2E live OK**
+- [x] F2 — Callbacki: approvals + pytania (callback/call ack + callback/result) — testy jednostkowe
+- [x] F3 — Watermark + resync + reconnect (event_id, resume snapshot) — **E2E live: reconnect z pełnym snapshotem OK**
+- [~] F4 — Konfiguracja runtime + chipy (session/start {model, sessionOnly}, config/model/write, session/agent/update — zmapowane w worker.rs; picker UI z RuntimeSnapshot zostaje w F4-UI)
 - [x] F5 — Kolejka, steer, interrupt, kompakty (session/compacted handoff)
 - [x] F6 — Statystyki (session/statsUpdated → UsageUpdate, bez unified store w runtime)
 - [x] F7 — Feature flag transportu (`transport` w config: `appserver` default / `acp` legacy)

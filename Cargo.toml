@@ -9,6 +9,7 @@ members = [
     "crates/mistraldeck-engine",
     "crates/mistraldeck",
     "crates/mistraldeck-appserver",
+    "crates/mistraldeck-appsrv",
 ]
 
 [workspace.package]

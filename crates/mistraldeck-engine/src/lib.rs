@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
-use mistraldeck_acp::AcpHandle;
+use crate::types::TransportHandle;
 use mistraldeck_core::proto::{AcpCommand, AcpEvent};
 use mistraldeck_core::types::{
     now_ms, new_id, Attachment, ChatSession, Message, MessageSender, ThinkingBlock, ToolCall,
@@ -40,7 +40,7 @@ static ENGINE: OnceLock<Engine> = OnceLock::new();
 pub struct Engine {
     /// Lightweight worker for `session/list` (CLI history) + the global
     /// status shown when no session is open.
-    lister: AcpHandle,
+    lister: TransportHandle,
     global_status: Mutex<AcpStatus>,
     global_error: Mutex<String>,
     state: Mutex<EngineState>,
@@ -56,7 +56,7 @@ impl Engine {
     pub fn init(cfg: EngineConfig) -> &'static Engine {
         let (tx, _rx) = broadcast::channel(8192);
         let engine = Engine {
-            lister: AcpHandle::spawn(),
+            lister: TransportHandle::spawn(),
             global_status: Mutex::new(AcpStatus::Disconnected),
             global_error: Mutex::new(String::new()),
             state: Mutex::new(EngineState::default()),

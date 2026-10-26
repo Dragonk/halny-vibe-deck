@@ -4799,6 +4799,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistraldeck-appsrv"
+version = "1.99.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "mistraldeck-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mistraldeck-core"
 version = "1.99.0"
 dependencies = [
@@ -4814,6 +4825,7 @@ dependencies = [
  "dirs 5.0.1",
  "hex",
  "mistraldeck-acp",
+ "mistraldeck-appsrv",
  "mistraldeck-core",
  "mistraldeck-vibe",
  "serde",

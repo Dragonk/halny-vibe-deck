@@ -8,6 +8,7 @@ description = "Halny Vibe Deck headless engine - session state machine, event bu
 [dependencies]
 mistraldeck-core = { workspace = true }
 mistraldeck-acp = { workspace = true }
+mistraldeck-appsrv = { path = "../mistraldeck-appsrv" }
 mistraldeck-vibe = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

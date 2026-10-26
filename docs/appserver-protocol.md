@@ -375,3 +375,14 @@ entryUpdated (assistant), turn/completed; (4) `session/list` pokazuje sesję;
    kursorze — pełny resync zamiast składania na skróty.
 8. **Wersjonowanie**: app-server **nie jest stabilnym API** — w 3.x usunięto
    `tools/list`, `stats/read`, `diagnostics/list`. Pinuj wersję CLI w testach.
+9. **Handshake jest LSP-podobny**: po odpowiedzi `initialize` serwer jest w stanie
+   `INITIALIZE_RECEIVED` i dopiero notyfikacja **`initialized`** przenosi go do
+   `INITIALIZED` — bez niej każde kolejne żądanie dostaje `NOT_INITIALIZED`
+   (`server.py: _handle_notification`; zweryfikowano na 3.0.3).
+10. **`kind` w `session/start` jest lowercase**: `"normal"` / `"ephemeral"`
+    (StrEnum) — `"NORMAL"` daje INVALID_PARAMS.
+11. **Wpisy historii to `type: "message"`** z polem `role` (`user`/`assistant`/
+    `system`) — nie osobne typy `user`/`assistant`; `PublicMessageEntry`
+    ma też `generationStatus`, `createdAt`/`updatedAt` jako **int (epoch ms)**.
+    Streaming: treść przyszła w `entryAdded`, patche `entryUpdated` niosą
+    zmiany statusu/`updatedAt` (op `replace`), nie appendy treści.
