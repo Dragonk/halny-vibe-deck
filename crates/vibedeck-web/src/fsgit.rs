@@ -76,6 +76,95 @@ pub struct GitStatus {
     pub behind: u32,
     pub entries: Vec<GitFileEntry>,
     pub error: String,
+    /// False when the directory is not inside a git repository (Nexus
+    /// `GitStatus.repo`) — the panel shows "Not a git repository".
+    #[serde(default)]
+    pub repo: bool,
+}
+
+/// One commit of the git history (Nexus `GitCommit`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GitCommit {
+    pub hash: String,
+    pub short_hash: String,
+    /// Commit subject (first line).
+    pub message: String,
+    /// "Name <email>".
+    pub author: String,
+    /// ISO date.
+    pub date: String,
+}
+
+/// Parse `git status --porcelain=v1 -b` output (Nexus `gitStatus`).
+/// Pure function (no process spawn) so it can be unit-tested without
+/// the server build. `staged` follows Nexus: a file is staged when the
+/// index column carries a change (anything but ' '/'?'), and the shown
+/// status code prefers the index column.
+pub fn parse_git_status(out: &str) -> GitStatus {
+    let mut st = GitStatus {
+        branch: String::new(),
+        ahead: 0,
+        behind: 0,
+        entries: Vec::new(),
+        error: String::new(),
+        repo: true,
+    };
+    for line in out.lines() {
+        if line.starts_with("##") {
+            let header = line[2..].trim();
+            // "main...origin/main [ahead 1, behind 2]" — but an unborn
+            // branch reads "No commits yet on main" (simple-git / Nexus
+            // still reports the branch name).
+            let branch_part = if let Some(rest) = header.strip_prefix("No commits yet on ") {
+                rest
+            } else {
+                header.split("...").next().unwrap_or("").trim()
+            };
+            let branch = branch_part.split(' ').next().unwrap_or("").trim();
+            st.branch = branch.to_string();
+            if let Some(pos) = header.find("ahead ") {
+                st.ahead = header[pos + 6..]
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .parse()
+                    .unwrap_or(0);
+            }
+            if let Some(pos) = header.find("behind ") {
+                st.behind = header[pos + 7..]
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .parse()
+                    .unwrap_or(0);
+            }
+            continue;
+        }
+        if line.len() < 4 {
+            continue;
+        }
+        let x = line.as_bytes()[0];
+        let y = line.as_bytes()[1];
+        let path = line[3..].trim().to_string();
+        if path.is_empty() {
+            continue;
+        }
+        // Nexus: index !== ' ' && index !== '?' => staged. The shown code
+        // prefers the index column, falling back to the working column.
+        let (code, staged) = if x != b' ' {
+            (x as char, x != b'?')
+        } else if y != b' ' {
+            (y as char, false)
+        } else {
+            continue;
+        };
+        st.entries.push(GitFileEntry {
+            path: path.split(" -> ").last().unwrap_or(&path).to_string(),
+            code: code.to_string(),
+            staged,
+        });
+    }
+    st
 }
 
 // ---------------------------------------------------------------------------
@@ -402,87 +491,201 @@ mod imp {
     }
 
     // ---- git ----
-    fn git(args: &[&str]) -> Result<String, String> {
-        let cwd = Engine::global().workdir();
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&cwd)
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !out.status.success() && !out.stderr.is_empty() {
-            let err = String::from_utf8_lossy(&out.stderr).into_owned();
-            if err.contains("not a git repository") || err.contains("not have a repository") {
-                return Err("not a git repository".into());
-            }
-            return Err(err.trim().to_string());
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    // Git runs on the *session* working directory (Nexus parity), not the
+    // engine workdir: local sessions spawn `git -C <cwd>` in-process,
+    // remote (SSH) sessions pipe the same command through the
+    // connection's ssh command (GitPanel v0.7.0 remoteId).
+
+    enum GitCtx {
+        Local(String),
+        Remote(vibedeck_core::snapshot::RemoteConnection, String),
     }
 
-    pub fn git_status() -> GitStatus {
+    impl GitCtx {
+        /// Resolve the execution context from a session cwd + remote id.
+        fn resolve(cwd: &str, remote_id: Option<&str>) -> Result<GitCtx, String> {
+            if cwd.trim().is_empty() {
+                return Err("no working directory".into());
+            }
+            match remote_id {
+                None | Some("") => Ok(GitCtx::Local(cwd.to_string())),
+                Some(rid) => match Engine::global().remote_connection(rid) {
+                    Some(conn) => Ok(GitCtx::Remote(conn, cwd.to_string())),
+                    None => Err("remote connection not found".into()),
+                },
+            }
+        }
+    }
+
+    fn git_run(ctx: &GitCtx, args: &[String]) -> Result<String, String> {
+        fn not_a_repo(err: String) -> String {
+            if err.contains("not a git repository") || err.contains("not have a repository") {
+                "not a git repository".to_string()
+            } else {
+                err
+            }
+        }
+        match ctx {
+            GitCtx::Local(cwd) => {
+                let out = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(cwd)
+                    .args(args)
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    return Err(not_a_repo(err));
+                }
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
+            GitCtx::Remote(conn, cwd) => {
+                let mut remote_cmd = format!("git -C {}", vibedeck_engine::remote::shq(cwd));
+                for a in args {
+                    remote_cmd.push(' ');
+                    remote_cmd.push_str(&vibedeck_engine::remote::shq(a));
+                }
+                let res = vibedeck_engine::remote::ssh_run(conn, &remote_cmd, 60_000, None);
+                if res.code != 0 {
+                    let err = if !res.stderr.trim().is_empty() {
+                        res.stderr.trim().to_string()
+                    } else if !res.stdout.trim().is_empty() {
+                        res.stdout.trim().to_string()
+                    } else {
+                        format!("ssh exited with code {}", res.code)
+                    };
+                    return Err(not_a_repo(err));
+                }
+                Ok(res.stdout)
+            }
+        }
+    }
+
+    pub fn git_status(cwd: &str, remote_id: Option<&str>) -> GitStatus {
         let mut st = GitStatus {
             branch: String::new(),
             ahead: 0,
             behind: 0,
             entries: Vec::new(),
             error: String::new(),
+            repo: false,
         };
-        match git(&["status", "--porcelain=v1", "-b"]) {
-            Ok(out) => {
-                for line in out.lines() {
-                    if line.starts_with("##") {
-                        let header = line[2..].trim();
-                        // "main...origin/main [ahead 1, behind 2]"
-                        let branch = header.split("...").next().unwrap_or("").trim();
-                        let branch = branch.split(' ').next().unwrap_or("").trim();
-                        st.branch = branch.to_string();
-                        if let Some(pos) = header.find("ahead ") {
-                            st.ahead = header[pos + 6..]
-                                .split(|c: char| !c.is_ascii_digit())
-                                .next()
-                                .unwrap_or("")
-                                .parse()
-                                .unwrap_or(0);
-                        }
-                        if let Some(pos) = header.find("behind ") {
-                            st.behind = header[pos + 7..]
-                                .split(|c: char| !c.is_ascii_digit())
-                                .next()
-                                .unwrap_or("")
-                                .parse()
-                                .unwrap_or(0);
-                        }
-                        continue;
-                    }
-                    if line.len() < 4 {
-                        continue;
-                    }
-                    let x = line.as_bytes()[0];
-                    let y = line.as_bytes()[1];
-                    let path = line[3..].trim().to_string();
-                    if path.is_empty() {
-                        continue;
-                    }
-                    let (code, staged) = if y != b' ' {
-                        (y as char, false)
-                    } else if x != b' ' {
-                        (x as char, true)
-                    } else {
-                        continue;
-                    };
-                    st.entries.push(GitFileEntry {
-                        path: path.split(" -> ").last().unwrap_or(&path).to_string(),
-                        code: code.to_string(),
-                        staged,
-                    });
-                }
+        let ctx = match GitCtx::resolve(cwd, remote_id) {
+            Ok(c) => c,
+            Err(e) => {
+                st.error = e;
+                return st;
             }
+        };
+        let args = vec![
+            "status".to_string(),
+            "--porcelain=v1".to_string(),
+            "-b".to_string(),
+        ];
+        match git_run(&ctx, &args) {
+            Ok(out) => st = parse_git_status(&out),
+            // Nexus maps a missing repository to `repo: false` (the panel
+            // shows "Not a git repository", not an error banner).
+            Err(e) if e == "not a git repository" => {}
             Err(e) => st.error = e,
         }
         st
     }
 
-    pub fn git_diff(staged: bool, path: &str) -> String {
+    pub fn git_log(cwd: &str, remote_id: Option<&str>, max: u32) -> Vec<GitCommit> {
+        let Ok(ctx) = GitCtx::resolve(cwd, remote_id) else {
+            return Vec::new();
+        };
+        let args = vec![
+            "log".to_string(),
+            format!("-n{max}"),
+            // hash, subject, author name, author email, ISO date
+            "--pretty=format:%H%x1f%s%x1f%an%x1f%ae%x1f%aI".to_string(),
+        ];
+        let Ok(out) = git_run(&ctx, &args) else {
+            return Vec::new();
+        };
+        let mut commits = Vec::new();
+        for line in out.lines() {
+            let parts: Vec<&str> = line.split('\u{1f}').collect();
+            if parts.len() < 5 {
+                continue;
+            }
+            let hash = parts[0].to_string();
+            commits.push(GitCommit {
+                short_hash: hash.chars().take(7).collect(),
+                hash,
+                message: parts[1].to_string(),
+                author: if parts[3].is_empty() {
+                    parts[2].to_string()
+                } else {
+                    format!("{} <{}>", parts[2], parts[3])
+                },
+                date: parts[4].to_string(),
+            });
+        }
+        commits
+    }
+
+    /// `git add -- <paths>`; empty path list is a no-op (Nexus gitStage).
+    pub fn git_stage(cwd: &str, remote_id: Option<&str>, paths: &[String]) -> String {
+        if paths.is_empty() {
+            return String::new();
+        }
+        let ctx = match GitCtx::resolve(cwd, remote_id) {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let mut args = vec!["add".to_string(), "--".to_string()];
+        args.extend(paths.iter().cloned());
+        git_run(&ctx, &args).map(|_| String::new()).unwrap_or_else(|e| e)
+    }
+
+    /// `git reset -- <paths>`; empty path list is a no-op (Nexus gitUnstage).
+    pub fn git_unstage(cwd: &str, remote_id: Option<&str>, paths: &[String]) -> String {
+        if paths.is_empty() {
+            return String::new();
+        }
+        let ctx = match GitCtx::resolve(cwd, remote_id) {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let mut args = vec!["reset".to_string(), "--".to_string()];
+        args.extend(paths.iter().cloned());
+        git_run(&ctx, &args).map(|_| String::new()).unwrap_or_else(|e| e)
+    }
+
+    /// `git commit -m <msg>` (Nexus gitCommit).
+    pub fn git_commit(cwd: &str, remote_id: Option<&str>, message: &str) -> String {
+        if message.trim().is_empty() {
+            return "Empty commit message".to_string();
+        }
+        let ctx = match GitCtx::resolve(cwd, remote_id) {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let args = vec![
+            "commit".to_string(),
+            "-m".to_string(),
+            message.to_string(),
+        ];
+        git_run(&ctx, &args).map(|_| String::new()).unwrap_or_else(|e| e)
+    }
+
+    /// `git push` (Nexus gitPush).
+    pub fn git_push(cwd: &str, remote_id: Option<&str>) -> String {
+        let ctx = match GitCtx::resolve(cwd, remote_id) {
+            Ok(c) => c,
+            Err(e) => return e,
+        };
+        let args = vec!["push".to_string()];
+        git_run(&ctx, &args).map(|_| String::new()).unwrap_or_else(|e| e)
+    }
+
+    pub fn git_diff(cwd: &str, remote_id: Option<&str>, staged: bool, path: &str) -> String {
+        let Ok(ctx) = GitCtx::resolve(cwd, remote_id) else {
+            return String::new();
+        };
         let mut args: Vec<String> = vec!["diff".into()];
         if staged {
             args.push("--cached".into());
@@ -491,14 +694,17 @@ mod imp {
             args.push("--".into());
             args.push(path.trim().to_string());
         }
-        let owned: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        git(&owned).unwrap_or_default()
+        git_run(&ctx, &args).unwrap_or_default()
     }
 
     /// Whole working-tree diff (staged + unstaged), used by the input
     /// bar's "branch diff" attach action (Nexus `git.diffAll`).
-    pub fn git_diff_all() -> String {
-        git(&["diff", "HEAD"]).unwrap_or_default()
+    pub fn git_diff_all(cwd: &str, remote_id: Option<&str>) -> String {
+        let Ok(ctx) = GitCtx::resolve(cwd, remote_id) else {
+            return String::new();
+        };
+        let args = vec!["diff".to_string(), "HEAD".to_string()];
+        git_run(&ctx, &args).unwrap_or_default()
     }
 
     /// Fuzzy file search under the working directory for the `@` picker
@@ -598,15 +804,25 @@ pub async fn api_save_file(token: String, path: String, content: String) -> Resu
 }
 
 #[server]
-pub async fn api_git_status(token: String) -> Result<GitStatus, ServerFnError> {
+pub async fn api_git_status(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+) -> Result<GitStatus, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::git_status())
+    Ok(imp::git_status(&cwd, remote_id.as_deref()))
 }
 
 #[server]
-pub async fn api_git_diff(token: String, staged: bool, path: String) -> Result<String, ServerFnError> {
+pub async fn api_git_diff(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+    staged: bool,
+    path: String,
+) -> Result<String, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::git_diff(staged, &path))
+    Ok(imp::git_diff(&cwd, remote_id.as_deref(), staged, &path))
 }
 
 /// Fuzzy file search under the working directory (the `@` picker).
@@ -618,7 +834,118 @@ pub async fn api_search_files(token: String, query: String) -> Result<Vec<FileEn
 
 /// Whole working-tree diff for the "branch diff" attach action.
 #[server]
-pub async fn api_git_diff_all(token: String) -> Result<String, ServerFnError> {
+pub async fn api_git_diff_all(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+) -> Result<String, ServerFnError> {
     imp::check(&token)?;
-    Ok(imp::git_diff_all())
+    Ok(imp::git_diff_all(&cwd, remote_id.as_deref()))
+}
+
+/// Stage paths (`git add -- …`, Nexus gitStage). Ok("") = success.
+#[server]
+pub async fn api_git_stage(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+    paths: Vec<String>,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_stage(&cwd, remote_id.as_deref(), &paths))
+}
+
+/// Unstage paths (`git reset -- …`, Nexus gitUnstage). Ok("") = success.
+#[server]
+pub async fn api_git_unstage(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+    paths: Vec<String>,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_unstage(&cwd, remote_id.as_deref(), &paths))
+}
+
+/// Commit staged changes (Nexus gitCommit). Ok("") = success.
+#[server]
+pub async fn api_git_commit(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+    message: String,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_commit(&cwd, remote_id.as_deref(), &message))
+}
+
+/// Push to the remote (Nexus gitPush). Ok("") = success.
+#[server]
+pub async fn api_git_push(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_push(&cwd, remote_id.as_deref()))
+}
+
+/// Recent commits of the session cwd (Nexus gitLog, max 30 in the panel).
+#[server]
+pub async fn api_git_log(
+    token: String,
+    cwd: String,
+    remote_id: Option<String>,
+    max: u32,
+) -> Result<Vec<GitCommit>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::git_log(&cwd, remote_id.as_deref(), max))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_git_status_branch_and_counts() {
+        // NB: no `\` line continuations here — they would eat the leading
+        // status-column spaces of the porcelain lines.
+        let out = "## main...origin/main [ahead 2, behind 1]\nM  src/a.rs\n M src/b.rs\nMM src/c.rs\n?? new.txt\nR  old.rs -> new.rs\n";
+        let st = parse_git_status(out);
+        assert!(st.repo);
+        assert_eq!(st.branch, "main");
+        assert_eq!(st.ahead, 2);
+        assert_eq!(st.behind, 1);
+        assert_eq!(st.entries.len(), 5);
+        // index column decides staging (Nexus: index !== ' ' && !== '?')
+        assert_eq!(st.entries[0].code, "M");
+        assert!(st.entries[0].staged);
+        assert_eq!(st.entries[1].code, "M");
+        assert!(!st.entries[1].staged);
+        // "MM" has a staged index change — staged like Nexus
+        assert_eq!(st.entries[2].code, "M");
+        assert!(st.entries[2].staged);
+        assert_eq!(st.entries[3].code, "?");
+        assert!(!st.entries[3].staged);
+        // renames keep the post-" -> " path
+        assert_eq!(st.entries[4].path, "new.rs");
+        assert!(st.entries[4].staged);
+    }
+
+    #[test]
+    fn parse_git_status_fresh_repo() {
+        let st = parse_git_status("## No commits yet on main\n?? a.txt\n");
+        assert!(st.repo);
+        assert_eq!(st.branch, "main");
+        assert_eq!(st.entries.len(), 1);
+        assert_eq!(st.entries[0].code, "?");
+    }
+
+    #[test]
+    fn parse_git_status_detached_head() {
+        let st = parse_git_status("## HEAD (no branch)\n");
+        assert!(st.repo);
+        assert_eq!(st.branch, "HEAD");
+        assert!(st.entries.is_empty());
+    }
 }

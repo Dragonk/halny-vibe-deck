@@ -813,7 +813,15 @@ pub fn InputBar() -> Element {
                                                 let mut draft = draft.clone();
                                                 async move {
                                                     attach_open.set(false);
-                                                    match crate::fsgit::api_git_diff_all(token(&state)).await {
+                                                    let (g_cwd, g_rid) =
+                                                        crate::state::session_git_ctx(&state);
+                                                    match crate::fsgit::api_git_diff_all(
+                                                        token(&state),
+                                                        g_cwd,
+                                                        g_rid,
+                                                    )
+                                                    .await
+                                                    {
                                                         Ok(diff) if !diff.trim().is_empty() => {
                                                             let capped = if diff.len() > 100_000 {
                                                                 format!("{}\n… (truncated)", &diff[..100_000])

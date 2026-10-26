@@ -274,6 +274,19 @@ pub fn token(state: &Signal<ClientState>) -> String {
     state.read().token.clone().unwrap_or_default()
 }
 
+/// Git context of the current session: (working directory, remote
+/// connection id). Nexus runs git on the *session* cwd — remote SSH
+/// sessions pipe the git command through the connection (GitPanel
+/// v0.7.0 `remoteId`); local sessions run `git -C <cwd>` in-process.
+pub fn session_git_ctx(state: &Signal<ClientState>) -> (String, Option<String>) {
+    let s = state.read();
+    s.snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| (m.working_directory.clone(), m.remote_id.clone()))
+        .unwrap_or_else(|| (s.snapshot.working_directory.clone(), None))
+}
+
 /// The OS/browser language ("pl" out of "pl-PL"), mapped to a supported
 /// UI language code. Sync-safe: a tiny JS interop call on wasm only.
 pub fn os_lang() -> String {

@@ -9,11 +9,12 @@ use dioxus::prelude::*;
 
 use crate::components::code_editor::CodeEditor;
 use crate::fsgit::{
-    api_git_diff, api_git_status, api_list_dir, api_read_file, api_save_file, FileEntry,
-    GitStatus, PreviewData,
+    api_git_commit, api_git_diff, api_git_log, api_git_push, api_git_stage, api_git_status,
+    api_git_unstage, api_list_dir, api_read_file, api_save_file, FileEntry, GitCommit, GitStatus,
+    PreviewData,
 };
 use crate::i18n::tr;
-use crate::state::{lang, token, ClientState, View};
+use crate::state::{lang, session_git_ctx, token, ClientState, View};
 
 fn fmt_size(n: u64) -> String {
     if n >= 1024 * 1024 {
@@ -166,7 +167,10 @@ fn open_diff_tab(
     }
     active.set(Some(id));
     spawn(async move {
-        let d = api_git_diff(token(&state), staged, path.clone())
+        // git runs on the session cwd (Nexus openDiff), over SSH for
+        // remote sessions
+        let (gwd, grid) = session_git_ctx(&state);
+        let d = api_git_diff(token(&state), gwd, grid, staged, path.clone())
             .await
             .unwrap_or_default();
         let mut v = tabs.write();
@@ -177,12 +181,113 @@ fn open_diff_tab(
     });
 }
 
+// ---------------------------------------------------------------------------
+// Git panel actions (Nexus GitPanel refresh/stage/unstage/commit/push).
+// Git runs on the current session's cwd — remote SSH sessions pipe the
+// command through the connection's ssh command.
+// ---------------------------------------------------------------------------
+
+/// Fetch status + log for the current session (Nexus `refresh`).
+async fn git_refresh(
+    state: Signal<ClientState>,
+    mut git: Signal<Option<GitStatus>>,
+    mut git_log: Signal<Vec<GitCommit>>,
+) {
+    let (cwd, rid) = session_git_ctx(&state);
+    let tok = token(&state);
+    if let Ok(s) = api_git_status(tok.clone(), cwd.clone(), rid.clone()).await {
+        git.set(Some(s));
+    }
+    if let Ok(l) = api_git_log(tok, cwd, rid, 30).await {
+        git_log.set(l);
+    }
+}
+
+/// Stage (or unstage) paths, then refresh (Nexus stagePaths/unstagePaths).
+async fn git_stage_action(
+    state: Signal<ClientState>,
+    git: Signal<Option<GitStatus>>,
+    git_log: Signal<Vec<GitCommit>>,
+    mut git_error: Signal<String>,
+    paths: Vec<String>,
+    unstage: bool,
+) {
+    let (cwd, rid) = session_git_ctx(&state);
+    let tok = token(&state);
+    let res = if unstage {
+        api_git_unstage(tok, cwd, rid, paths).await
+    } else {
+        api_git_stage(tok, cwd, rid, paths).await
+    };
+    match res {
+        Ok(e) if !e.is_empty() => git_error.set(e),
+        Err(e) => git_error.set(e.to_string()),
+        _ => {}
+    }
+    git_refresh(state, git, git_log).await;
+}
+
+/// Commit the staged changes with the drafted message (Nexus handleCommit).
+async fn git_commit_action(
+    state: Signal<ClientState>,
+    git: Signal<Option<GitStatus>>,
+    git_log: Signal<Vec<GitCommit>>,
+    mut git_error: Signal<String>,
+    mut commit_msg: Signal<String>,
+    mut git_busy: Signal<bool>,
+) {
+    let msg = commit_msg.read().trim().to_string();
+    if msg.is_empty() || *git_busy.read() {
+        return;
+    }
+    git_busy.set(true);
+    let (cwd, rid) = session_git_ctx(&state);
+    let tok = token(&state);
+    match api_git_commit(tok, cwd, rid, msg).await {
+        Ok(e) if !e.is_empty() => git_error.set(e),
+        Err(e) => git_error.set(e.to_string()),
+        Ok(_) => {
+            commit_msg.set(String::new());
+            git_error.set(String::new());
+        }
+    }
+    git_refresh(state, git, git_log).await;
+    git_busy.set(false);
+}
+
+/// Push to the remote (Nexus handlePush).
+async fn git_push_action(
+    state: Signal<ClientState>,
+    git: Signal<Option<GitStatus>>,
+    git_log: Signal<Vec<GitCommit>>,
+    mut git_error: Signal<String>,
+    mut git_busy: Signal<bool>,
+) {
+    if *git_busy.read() {
+        return;
+    }
+    git_busy.set(true);
+    let (cwd, rid) = session_git_ctx(&state);
+    let tok = token(&state);
+    match api_git_push(tok, cwd, rid).await {
+        Ok(e) if !e.is_empty() => git_error.set(e),
+        Err(e) => git_error.set(e.to_string()),
+        _ => {}
+    }
+    git_refresh(state, git, git_log).await;
+    git_busy.set(false);
+}
+
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
     let tab = use_signal(|| "files".to_string());
     let entries = use_signal(Vec::<FileEntry>::new);
     let git = use_signal(|| None::<GitStatus>);
+    let git_log = use_signal(Vec::<GitCommit>::new);
+    let git_commit_msg = use_signal(String::new);
+    let git_busy = use_signal(|| false);
+    let git_error = use_signal(String::new);
     let mut boot = use_signal(|| false);
 
     let s = state.read();
@@ -338,7 +443,18 @@ pub fn Dock() -> Element {
             next_id,
         )
     } else {
-        git_panel(state.clone(), lang.clone(), git, tabs, active, next_id)
+        git_panel(
+            state.clone(),
+            lang.clone(),
+            git,
+            git_log,
+            git_commit_msg,
+            git_busy,
+            git_error,
+            tabs,
+            active,
+            next_id,
+        )
     };
 
     let mut tab = tab.clone();
@@ -346,7 +462,8 @@ pub fn Dock() -> Element {
     let state_f = state.clone();
     let mut entries_f = entries.clone();
     let mut files_msg_f = files_msg.clone();
-    let mut git_f = git.clone();
+    let git_g = git.clone();
+    let git_log_g = git_log.clone();
     let state_g = state.clone();
     let mut tab_g = tab.clone();
     let mut active_g = active.clone();
@@ -375,9 +492,7 @@ pub fn Dock() -> Element {
                         tab_g.set("git".into());
                         active_g.set(None);
                         spawn(async move {
-                            if let Ok(s) = api_git_status(token(&state_g)).await {
-                                git_f.set(Some(s));
-                            }
+                            git_refresh(state_g, git_g, git_log_g).await;
                         });
                     },
                     "{tr(&lang, \"gitTab\")}"
@@ -905,29 +1020,104 @@ fn DiffPanel(
 // Git panel
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn git_panel(
     state: Signal<ClientState>,
     lang: String,
     git: Signal<Option<GitStatus>>,
+    git_log: Signal<Vec<GitCommit>>,
+    commit_msg: Signal<String>,
+    git_busy: Signal<bool>,
+    git_error: Signal<String>,
     tabs: Signal<Vec<PreviewTab>>,
     active: Signal<Option<u64>>,
     next_id: Signal<u64>,
 ) -> Element {
     let st = git.read().clone();
+    let log = git_log.read().clone();
+    let busy = *git_busy.read();
+    let msg_val = commit_msg.read().clone();
+    let extra_err = git_error.read().clone();
 
-    let (branch, ahead, behind, entries, err) = match &st {
-        Some(s) => (
-            s.branch.clone(),
-            s.ahead,
-            s.behind,
-            s.entries.clone(),
-            s.error.clone(),
-        ),
-        None => (String::new(), 0, 0, Vec::new(), String::new()),
+    // Nexus: null status -> loading placeholder with a lone refresh button
+    let Some(status) = st else {
+        return rsx! {
+            div { class: "git-panel",
+                div { class: "git-toolbar",
+                    button {
+                        class: "git-refresh-btn",
+                        title: "{tr(&lang, \"gitRefresh\")}",
+                        onclick: move |_| {
+                            spawn(git_refresh(state, git, git_log));
+                        },
+                        "⟳"
+                    }
+                }
+                div { class: "dock-empty", "{tr(&lang, \"gitLoading\")}" }
+            }
+        };
     };
 
-    let ab_el: Element = if ahead > 0 || behind > 0 {
-        rsx! { span { class: "git-ahead-behind", "↑{ahead} ↓{behind}" } }
+    // Nexus: !repo -> "Not a git repository" (no error banner)
+    if !status.repo {
+        return rsx! { div { class: "dock-empty", "{tr(&lang, \"notAGitRepo\")}" } };
+    }
+
+    let entries = status.entries.clone();
+    let entries_len = entries.len();
+    let has_unstaged = entries.iter().any(|e| !e.staged);
+
+    // error banner: action error wins over the status error (Nexus
+    // `{gitError ?? status.error}`)
+    let shown_err = if extra_err.is_empty() {
+        status.error.clone()
+    } else {
+        extra_err.clone()
+    };
+    let error_el: Element = if shown_err.is_empty() {
+        VNode::empty()
+    } else {
+        rsx! { div { class: "git-error", "{shown_err}" } }
+    };
+
+    let ab_el: Element = if status.ahead > 0 || status.behind > 0 {
+        rsx! { span { class: "git-ahead-behind", "↑{status.ahead} ↓{status.behind}" } }
+    } else {
+        VNode::empty()
+    };
+
+    let push_el: Element = if status.ahead > 0 {
+        rsx! {
+            button {
+                class: "git-stage-all-btn",
+                title: "{tr(&lang, \"pushHint\")}",
+                disabled: busy,
+                onclick: move |_| {
+                    spawn(git_push_action(state, git, git_log, git_error, git_busy));
+                },
+                "{tr(&lang, \"pushLabel\")} ↑{status.ahead}"
+            }
+        }
+    } else {
+        VNode::empty()
+    };
+
+    let stage_all_el: Element = if has_unstaged {
+        let unstaged: Vec<String> = entries
+            .iter()
+            .filter(|e| !e.staged)
+            .map(|e| e.path.clone())
+            .collect();
+        rsx! {
+            button {
+                class: "git-stage-all-btn",
+                title: "{tr(&lang, \"stageLabel\")}",
+                onclick: move |_| {
+                    spawn(git_stage_action(state, git, git_log, git_error, unstaged.clone(), false));
+                },
+                "+ {tr(&lang, \"stageLabel\")}"
+            }
+        }
     } else {
         VNode::empty()
     };
@@ -951,68 +1141,141 @@ fn git_panel(
                 "?" => "git-status-code git-status-\\?",
                 _ => "git-status-code",
             };
+            let btn_title = if staged {
+                tr(&lang, "unstageLabel").to_string()
+            } else {
+                tr(&lang, "stageLabel").to_string()
+            };
+            // dedicated clones — move closures take ownership of `path`
+            let row_title = path.clone();
+            let diff_path = path.clone();
+            let stage_path = path;
             rsx! {
-                div {
-                    class: "git-file",
-                    onclick: {
-                        let state = state.clone();
-                        let tabs = tabs.clone();
-                        let active = active.clone();
-                        let next_id = next_id.clone();
-                        let path = path.clone();
-                        move |_| {
-                            open_diff_tab(state, tabs, active, next_id, path.clone(), staged);
-                        }
-                    },
-                    span { class: "{cls}", "{code}" }
-                    span { class: "git-file-name", "{dir}" }
-                    span { class: "git-file-dir", "{dir_part}" }
+                div { class: "git-file-row",
+                    button {
+                        class: "git-file",
+                        title: "{row_title}",
+                        onclick: move |_| {
+                            open_diff_tab(state, tabs, active, next_id, diff_path.clone(), staged);
+                        },
+                        span { class: "{cls}", "{code}" }
+                        span { class: "git-file-name", "{dir}" }
+                        span { class: "git-file-dir", "{dir_part}" }
+                    }
+                    button {
+                        class: "git-stage-btn",
+                        title: "{btn_title}",
+                        onclick: move |_| {
+                            spawn(git_stage_action(
+                                state,
+                                git,
+                                git_log,
+                                git_error,
+                                vec![stage_path.clone()],
+                                staged,
+                            ));
+                        },
+                        {if staged { "−" } else { "+" }}
+                    }
                 }
             }
         })
         .collect();
 
-    let list_el: Element = if entries.is_empty() {
-        if err.is_empty() {
-            rsx! { div { class: "git-empty", "{tr(&lang, \"gitNoChanges\")}" } }
-        } else {
-            rsx! { div { class: "git-error", "{err}" } }
-        }
+    let changes_el: Element = if entries.is_empty() {
+        rsx! { div { class: "git-empty", "{tr(&lang, \"gitNoChanges\")}" } }
     } else {
-        rsx! { div { class: "git-files", {entry_els.iter().cloned()} } }
+        rsx! { {entry_els.iter().cloned()} }
     };
 
-    let branch_label = if branch.is_empty() {
-        tr(&lang, "noProject").to_string()
+    let log_els: Vec<Element> = log
+        .iter()
+        .map(|c| {
+            let author_first = c.author.split(' ').next().unwrap_or("").to_string();
+            // ISO date -> "MM-DD" (Nexus toLocaleDateString 2-digit)
+            let mmdd = if c.date.len() >= 10 {
+                format!("{}-{}", &c.date[5..7], &c.date[8..10])
+            } else {
+                c.date.clone()
+            };
+            let row_title = format!("{}\n{}", c.hash, c.author);
+            rsx! {
+                div { class: "git-commit", title: "{row_title}",
+                    span { class: "git-commit-hash", "{c.short_hash}" }
+                    span { class: "git-commit-msg", "{c.message}" }
+                    span { class: "git-commit-meta", "{author_first} · {mmdd}" }
+                }
+            }
+        })
+        .collect();
+
+    let history_el: Element = if log.is_empty() {
+        rsx! { div { class: "git-empty", "{tr(&lang, \"gitNoCommits\")}" } }
     } else {
-        branch.clone()
+        rsx! { {log_els.iter().cloned()} }
     };
+
+    let commit_disabled = busy || msg_val.trim().is_empty();
 
     rsx! {
         div { class: "git-panel",
             div { class: "git-toolbar",
-                span { class: "git-branch",
+                span { class: "git-branch", title: "{status.branch}",
                     span { class: "git-branch-icon", "⎇" }
-                    "{branch_label}"
+                    "{status.branch}"
+                    {ab_el}
                 }
-                {ab_el}
+                {push_el}
                 button {
                     class: "git-refresh-btn",
-                    onclick: {
-                        let state = state.clone();
-                        let mut git = git.clone();
-                        move |_| {
-                            spawn(async move {
-                                if let Ok(s) = api_git_status(token(&state)).await {
-                                    git.set(Some(s));
-                                }
-                            });
-                        }
+                    title: "{tr(&lang, \"gitRefresh\")}",
+                    onclick: move |_| {
+                        spawn(git_refresh(state, git, git_log));
                     },
-                    "⟳"
+                    {if busy { "…" } else { "⟳" }}
                 }
             }
-            {list_el}
+            {error_el}
+            div { class: "git-section-label",
+                "{tr(&lang, \"gitChanges\")} ({entries_len})"
+                {stage_all_el}
+            }
+            div { class: "git-files",
+                {changes_el}
+            }
+            div { class: "git-commit-box",
+                input {
+                    class: "git-commit-input",
+                    r#type: "text",
+                    value: "{msg_val}",
+                    placeholder: "{tr(&lang, \"commitMessagePlaceholder\")}",
+                    oninput: {
+                        let mut commit_msg = commit_msg.clone();
+                        let mut git_error = git_error.clone();
+                        move |e| {
+                            commit_msg.set(e.value());
+                            git_error.set(String::new());
+                        }
+                    },
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Enter {
+                            spawn(git_commit_action(state, git, git_log, git_error, commit_msg, git_busy));
+                        }
+                    },
+                }
+                button {
+                    class: "git-commit-btn",
+                    disabled: commit_disabled,
+                    onclick: move |_| {
+                        spawn(git_commit_action(state, git, git_log, git_error, commit_msg, git_busy));
+                    },
+                    "{tr(&lang, \"commitLabel\")}"
+                }
+            }
+            div { class: "git-section-label", "{tr(&lang, \"gitHistory\")}" }
+            div { class: "git-log",
+                {history_el}
+            }
         }
     }
 }
