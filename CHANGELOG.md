@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.6 — 2026-10-26
+
+### Fixed
+- **Auto-approval now follows the session's built-in mode.** The permission
+  gating was wired to agent profile files (which the UI never writes — the
+  GUI's "Autozatwierdzanie" selection was silently dropped on save), so the
+  CLI kept asking for every tool call. The manager now tracks the session's
+  active mode (from `session/new|load`, `current_mode_update` events and
+  confirmed `set_config_option('mode')` calls) and, when the active mode is
+  the built-in auto-approve mode ('yolo' or a localized equivalent),
+  approves permission requests itself without surfacing them.
+
 ## 1.0.5 — 2026-10-26
 
 ### Fixed

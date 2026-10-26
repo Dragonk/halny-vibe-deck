@@ -3,8 +3,6 @@ import { BrowserWindow } from 'electron'
 import * as readline from 'readline'
 import { randomUUID } from 'crypto'
 import { broadcastToWeb } from './bus'
-import { loadConfig } from './config'
-import { loadAgentFiles } from './vibeConfig'
 
 export interface AcpConfigOptionChoice {
   value: string
@@ -145,21 +143,27 @@ export class AcpManager {
   }
 
   /**
-   * v1.0.2: the safety mode of the agent currently driving this worker
-   * (the default agent, or the first enabled one). 'yolo' auto-approves
-   * tool permission requests without a UI round-trip - with any other
-   * mode the request is surfaced so the user can decide.
+   * v1.0.6: the session's active permission mode. Built-in CLI modes
+   * (surfaced as the mode chips in the UI) decide tool approvals: when
+   * the active mode is auto-approve ('yolo'), permission requests are
+   * approved without a UI round-trip. Tracked from session/new|load
+   * (parseModes), current_mode_update events and confirmed
+   * set_config_option('mode') calls.
    */
-  private activeAgentSafety(): string | null {
-    try {
-      const cfg = loadConfig()
-      const id = cfg.default_agent ?? cfg.agents.find((a) => a.enabled)?.id ?? null
-      if (!id) return null
-      const file = loadAgentFiles().find((a) => a.name === id)
-      return file?.safety ?? null
-    } catch {
-      return null
-    }
+  private currentModeId: string | null = null
+  private lastModes: AcpMode[] = []
+
+  private trackModes(modes: AcpMode[], currentModeId: string | null): void {
+    this.lastModes = modes
+    this.currentModeId = currentModeId
+  }
+
+  private modeIsAutoApprove(): boolean {
+    if (!this.currentModeId) return false
+    const name =
+      this.lastModes.find((m) => m.id === this.currentModeId)?.name ?? ''
+    const hay = (this.currentModeId + ' ' + name).toLowerCase()
+    return /yolo|auto.?approv|autozatwierdz/.test(hay)
   }
 
   private sendRequest(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
@@ -556,6 +560,7 @@ export class AcpManager {
       case 'current_mode_update': {
         const modeId = (update.currentModeId as string) ?? undefined
         if (modeId) {
+          this.currentModeId = modeId
           this.emit({ type: 'ConfigOptionsUpdate', data: { sessionId, modeChanged: modeId } })
         }
         break
@@ -798,9 +803,10 @@ export class AcpManager {
     const needsApproval = method.includes('approv') || method.includes('permission') || method === 'tool/call'
     if (needsApproval) {
       const reqParams = params as Record<string, unknown>
-      // v1.0.2: 'yolo' (Autozatwierdzanie) approves permission requests
-      // without surfacing them - the GUI must not ask for every tool call.
-      if (this.activeAgentSafety() === 'yolo') {
+      // v1.0.6: when the session's built-in mode is auto-approve ('yolo'
+      // or localized equivalent), approve permission requests without
+      // surfacing them - the GUI must not ask for every tool call.
+      if (this.modeIsAutoApprove()) {
         const options = ((reqParams?.options ?? []) as Array<Record<string, unknown>>)
         const allow = options.find((o) => String(o?.kind ?? '').startsWith('allow')) ?? options[0]
         if (allow && allow.optionId) this.approveToolRequest(id, String(allow.optionId))
@@ -960,6 +966,7 @@ export class AcpManager {
 
     this.currentSessionId = result.sessionId as string
     const { modes, currentModeId } = this.parseModes(result)
+    this.trackModes(modes, currentModeId)
     const configOptions = this.parseConfigOptions(result.configOptions)
     // v0.10.2: apply the recorded config inside session/new - a
     // set_config_option racing the first prompt hangs the CLI turn.
@@ -1009,6 +1016,7 @@ export class AcpManager {
       const { messages, title, plan } = this.assembleHistory(buffered)
 
       const { modes, currentModeId } = this.parseModes(result)
+    this.trackModes(modes, currentModeId)
       const configOptions = this.parseConfigOptions(result.configOptions)
       // v0.10.2: deterministic config apply before any prompt can race it.
       await this.applyRecordedConfig(applyConfig, configOptions)
@@ -1119,6 +1127,9 @@ export class AcpManager {
       configId: key,
       value
     })) as Record<string, unknown> | null
+    // v1.0.6: a confirmed mode change updates the tracked permission mode
+    // (the CLI does not emit current_mode_update for set_config_option).
+    if (key === 'mode') this.currentModeId = value
     // v0.10.6: the CLI confirms the new configuration in the response but
     // never emits a config_option_update notification (verified against CLI
     // 3.0.2), so every other connected surface - the desktop window and all

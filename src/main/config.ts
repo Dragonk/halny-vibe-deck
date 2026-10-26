@@ -87,8 +87,6 @@ export interface AppConfig {
   autoCloseIdleMinutes?: number
   hiddenSessions: string[]
   hiddenProjects: string[]
-  /** v1.0.2: id of the agent profile used as the app-wide default. */
-  default_agent?: string
   serve: ServeConfig
   remoteConnections: RemoteConnection[]
 }
