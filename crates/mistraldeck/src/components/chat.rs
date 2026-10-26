@@ -42,6 +42,20 @@ pub fn ChatView() -> Element {
         .and_then(|i| s.snapshot.sessions.get(i))
         .and_then(|m| m.acp_session_id.clone());
     let load_progress = s.snapshot.session_load_progress.clone();
+    // CLI notice translation (Nexus translateCliNotice): technical
+    // model names resolve to display names from the model option.
+    let model_names: std::collections::HashMap<String, String> = s
+        .snapshot
+        .config_options
+        .iter()
+        .find(|o| o.id == "model")
+        .map(|o| {
+            o.choices
+                .iter()
+                .map(|c| (c.value.clone(), c.name.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     drop(s);
     let is_resuming = current_acp_id
         .as_deref()
@@ -113,7 +127,7 @@ pub fn ChatView() -> Element {
                     } else {
                         div { class: "message-list",
                             for (idx, msg) in messages.iter().enumerate() {
-                                MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1 }
+                                MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1, lang: lang.clone(), model_names: model_names.clone() }
                             }
                             if !plan.is_empty() {
                                 PlanCard { entries: plan.clone() }
@@ -281,7 +295,12 @@ fn msg_time(ms: i64) -> String {
 }
 
 #[component]
-pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
+pub fn MessageBubble(
+    msg: Message,
+    streaming: bool,
+    lang: String,
+    model_names: std::collections::HashMap<String, String>,
+) -> Element {
     let time_str = msg_time(msg.timestamp_ms);
     match msg.sender {
         MessageSender::User => {
@@ -360,11 +379,17 @@ pub fn MessageBubble(msg: Message, streaming: bool) -> Element {
                 }
             }
         }
-        MessageSender::System => rsx! {
-            div { class: "msg-row msg-notice",
-                div { class: "msg-content", "{msg.content}" }
+        MessageSender::System => {
+            // CLI checkpoints ("Model changed to ...", "Compacting context",
+            // ...) render as subtle notice rows - localized like Nexus
+            // translateCliNotice; unknown notices pass through unchanged.
+            let text = translate_cli_notice(&lang, &msg.content, &model_names);
+            rsx! {
+                div { class: "msg-row msg-notice",
+                    div { class: "msg-content", "{text}" }
+                }
             }
-        },
+        }
     }
 }
 
@@ -2884,5 +2909,76 @@ fn PlanRow(entry: PlanEntry) -> Element {
             span { class: "plan-icon", "{icon}" }
             span { class: "plan-content", "{entry.content}" }
         }
+    }
+}
+
+/// Localize a CLI checkpoint notice (Nexus translateCliNotice):
+/// "Model changed to <tech>" resolves the technical model name to its
+/// display name via the model config option choices.
+fn translate_cli_notice(
+    lang: &str,
+    text: &str,
+    model_names: &std::collections::HashMap<String, String>,
+) -> String {
+    let t = text.trim();
+    if let Some(tech) = t.strip_prefix("Model changed to ") {
+        let tech = tech.trim();
+        let name = model_names
+            .get(tech)
+            .cloned()
+            .unwrap_or_else(|| tech.to_string());
+        return tf(lang, "modelChangedTo", &[("model", &name)]);
+    }
+    if let Some(agent) = t.strip_prefix("Agent changed to ") {
+        return tf(lang, "agentChangedTo", &[("agent", agent.trim())]);
+    }
+    match t {
+        "Compacting context" => tr(lang, "compactingContext").to_string(),
+        "Context compacted" => tr(lang, "contextCompacted").to_string(),
+        "Compaction failed" => tr(lang, "compactionFailed").to_string(),
+        "Compacting conversation history..." => tr(lang, "compactingHistory").to_string(),
+        "Compacted conversation history" => tr(lang, "compactedHistory").to_string(),
+        "Session title updated" => tr(lang, "sessionTitleUpdated").to_string(),
+        _ => text.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod cli_notice_tests {
+    use super::*;
+
+    #[test]
+    fn translates_model_change_with_display_name() {
+        let mut models = std::collections::HashMap::new();
+        models.insert(
+            "mistral-large-latest".to_string(),
+            "Mistral Large".to_string(),
+        );
+        assert_eq!(
+            translate_cli_notice("pl", "Model changed to mistral-large-latest", &models),
+            "Zmieniono model na: Mistral Large"
+        );
+        // Unknown technical model falls back to the raw name.
+        assert_eq!(
+            translate_cli_notice("pl", "Model changed to mystery-model", &models),
+            "Zmieniono model na: mystery-model"
+        );
+    }
+
+    #[test]
+    fn translates_known_phrases_and_passes_through_unknown() {
+        let models = std::collections::HashMap::new();
+        assert_eq!(
+            translate_cli_notice("pl", "Compacting context", &models),
+            "Kompaktowanie kontekstu"
+        );
+        assert_eq!(
+            translate_cli_notice("pl", "Session title updated", &models),
+            "Zaktualizowano tytuł sesji"
+        );
+        assert_eq!(
+            translate_cli_notice("en", "Some other system notice", &models),
+            "Some other system notice"
+        );
     }
 }

@@ -949,6 +949,19 @@ fn config_chip(
             items.push((c.value.clone(), c.name.clone(), c.description.clone()));
         }
     }
+    // Localized mode/thinking names + descriptions (Nexus terms.ts):
+    // CLI values like "accept-edits" or "medium" display in the UI
+    // language; custom agent modes keep their own names/descriptions.
+    if id == "mode" || id == "thinking" {
+        for it in items.iter_mut() {
+            if let Some(n) = crate::i18n::option_term(&lang, id, &it.0) {
+                it.1 = n.to_string();
+            }
+            if let Some(d) = crate::i18n::option_term_desc(&lang, id, &it.0) {
+                it.2 = d.to_string();
+            }
+        }
+    }
     if id == "mode" {
         let badge = tr(&lang, "projectAgentBadge").to_string();
         let mut values: std::collections::HashSet<String> =
