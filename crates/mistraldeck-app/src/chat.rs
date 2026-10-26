@@ -1,10 +1,10 @@
 //! The chat view, 1:1 with the Nexus ChatView:
-//! - empty state: pixel-art flame + "New chat" / "Start a conversation"
+//! - empty state: Halny mark + "New chat" / "Start a conversation"
 //!   + agent status subtitle,
 //! - **user messages**: right-aligned bubble, panel background, radius
 //!   18/18/4/18, padding 10×18,
 //! - **AI messages**: no bubble — a 28×28 accent avatar with the white
-//!   pixel flame + markdown on the app background, with thinking blocks
+//!   Halny mark + markdown on the app background, with thinking blocks
 //!   and rich tool calls inline (bash blocks, file chips, edit diffs,
 //!   subagent transcripts, question chips).
 
@@ -55,14 +55,14 @@ pub fn show(app: &mut MistraldeckApp, ui: &mut Ui) {
         });
 }
 
-/// The Nexus empty state: flame + title + status subtitle.
+/// The Nexus empty state: Halny mark + title + status subtitle.
 fn empty_state(app: &mut MistraldeckApp, ui: &mut Ui, has_session: bool) {
     let p = app.palette();
     let t = app.tr();
 
     ui.vertical_centered(|ui| {
         ui.add_space(40.0);
-        theme::paint_flame(ui, &p, 0.45);
+        theme::paint_mark(ui, &p, 0.62);
         ui.add_space(14.0);
 
         // title — mirrors Nexus: newChat / startConversation / appName
@@ -158,7 +158,7 @@ fn user_bubble(ui: &mut Ui, msg: &Message, p: &Palette) {
     });
 }
 
-/// AI message: 28×28 accent avatar with the white flame + plain text —
+/// AI message: 28×28 accent avatar with the white Halny mark + plain text —
 /// no bubble, exactly like `.msg-ai` in the Nexus stylesheet.
 fn ai_row(
     app: &mut MistraldeckApp,
@@ -178,7 +178,7 @@ fn ai_row(
                     ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(rect, egui::Rounding::same(6.0), p.accent);
-                theme::paint_flame_mono_at(&painter, rect, egui::Color32::WHITE);
+                theme::paint_mark_mono_at(&painter, rect, egui::Color32::WHITE);
                 if busy && !msg.is_complete {
                     let anchor = rect.right_bottom() + egui::vec2(-7.0, -7.0);
                     egui::Spinner::new()

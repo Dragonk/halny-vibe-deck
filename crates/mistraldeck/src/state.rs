@@ -378,7 +378,7 @@ pub async fn start_app_update(mut state: Signal<ClientState>) {
                         return;
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                sleep_ms(500).await;
             }
         }
         Err(e) => {
@@ -413,6 +413,21 @@ pub async fn upgrade_local_cli(mut state: Signal<ClientState>) {
         }
     }
     state.write().update_busy = false;
+}
+
+/// Client-safe sleep: `tokio::time::sleep` panics on wasm
+/// (`std::time::Instant` is unimplemented there) — that panic used to kill
+/// the whole WASM module ~4s after load (update-check timer) and on every
+/// event-stream reconnect, leaving the UI permanently dead.
+pub async fn sleep_ms(ms: u64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        gloo_timers::future::TimeoutFuture::new(ms as u32).await;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
 }
 
 pub fn token(state: &Signal<ClientState>) -> String {

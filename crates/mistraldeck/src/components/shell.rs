@@ -38,7 +38,7 @@ pub fn Shell() -> Element {
                 }
                 Err(_) => {
                     // Stream dropped (server restart, token expiry).
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    crate::state::sleep_ms(2_000).await;
                     refresh(state).await;
                 }
             }
@@ -49,7 +49,7 @@ pub fn Shell() -> Element {
     // banner appears without opening Settings (Nexus: 4s, silent - failures
     // keep the banner hidden).
     use_future(move || async move {
-        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        crate::state::sleep_ms(4_000).await;
         crate::state::check_updates(state).await;
     });
 

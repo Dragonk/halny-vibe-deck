@@ -46,6 +46,14 @@ pub fn set_force_headless() {
 /// Entry point shared by the desktop/server binary (`mistraldeck`) and
 /// the headless appserver (`mistraldeck-appserver`).
 pub fn run() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // A panic in wasm is a trap: the module instance dies and every
+        // later JS→WASM call (all event handlers) throws `unreachable` —
+        // the UI renders once and then goes completely dead. Route panics
+        // to the console with a symbolized Rust backtrace instead.
+        std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+    }
     #[cfg(target_os = "windows")]
     {
         // With windows_subsystem = "windows" there is no console, so a

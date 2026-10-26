@@ -35,12 +35,6 @@ pub struct Palette {
     pub green: Color32,
     pub red: Color32,
     pub yellow: Color32,
-    /// Pixel-flame colors (ChatView.tsx SVG).
-    pub flame_yellowbright: Color32,
-    pub flame_yellow: Color32,
-    pub flame_orangebright: Color32,
-    pub flame_orange: Color32,
-    pub flame_red: Color32,
 }
 
 impl Palette {
@@ -66,11 +60,6 @@ impl Palette {
             green: c(0x47, 0xd4, 0x7f),
             red: c(0xe1, 0x05, 0x00),
             yellow: c(0xff, 0xaf, 0x00),
-            flame_yellowbright: Color32::from_rgb(0xff, 0xd7, 0x00), // `gold`
-            flame_yellow: c(0xff, 0xaf, 0x00),
-            flame_orangebright: c(0xff, 0x82, 0x05),
-            flame_orange: c(0xfa, 0x50, 0x0f),
-            flame_red: c(0xe1, 0x05, 0x00),
         }
     }
 
@@ -96,11 +85,6 @@ impl Palette {
             green: c(0x16, 0xa3, 0x4a),
             red: c(0xdc, 0x26, 0x26),
             yellow: c(0xd9, 0x77, 0x06),
-            flame_yellowbright: Color32::from_rgb(0xff, 0xd7, 0x00),
-            flame_yellow: c(0xff, 0xaf, 0x00),
-            flame_orangebright: c(0xff, 0x82, 0x05),
-            flame_orange: c(0xfa, 0x50, 0x0f),
-            flame_red: c(0xe1, 0x05, 0x00),
         }
     }
 
@@ -207,76 +191,95 @@ pub fn apply(ctx: &egui::Context, theme: &str) {
     ctx.set_style(style);
 }
 
-/// Paint the pixel flame at `scale` (1.0 = 212×152 px; the Nexus renders it
-/// at ~0.45). Returns the total size in pixels.
-pub fn flame_size(scale: f32) -> egui::Vec2 {
-    egui::Vec2::new(212.121 * scale, 151.515 * scale)
+/// Paint the Halny brand mark at `scale` (1.0 = 96×70 px; callers render it
+/// at ~0.45–1.0). Returns the total size in pixels.
+pub fn mark_size(scale: f32) -> egui::Vec2 {
+    egui::Vec2::new(96.0 * scale, 70.0 * scale)
 }
 
-/// Paint the pixel-art flame into `ui` at the given scale (top-left anchored).
-pub fn paint_flame(ui: &mut egui::Ui, p: &Palette, scale: f32) -> egui::Response {
-    let size = flame_size(scale);
+/// Paint the Halny mark (Tatra ridge + foehn wind) into `ui` at the given
+/// scale (top-left anchored).
+pub fn paint_mark(ui: &mut egui::Ui, p: &Palette, scale: f32) -> egui::Response {
+    let size = mark_size(scale);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    let origin = rect.left_top();
-    for (color, x, y, w, h) in flame_rects(p) {
-        let px = egui::Rect::from_min_size(
-            origin + egui::vec2(x * scale, y * scale),
-            egui::vec2(w * scale, h * scale),
-        );
-        painter.rect_filled(px, 0.0, color);
-    }
+    paint_mark_full(&painter, rect, p);
     response
 }
 
-/// Paint a single-color (mono) pixel flame inside `rect` — the AI avatar
-/// glyph in the Nexus chat view (white flame on the accent background).
-pub fn paint_flame_mono_at(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-    // viewBox 212.121×151.515 — keep the aspect, center vertically.
-    let scale = (rect.width() / 212.121).min(rect.height() / 151.515);
-    let fw = 212.121 * scale;
-    let fh = 151.515 * scale;
+/// Paint a single-color (mono) Halny mark inside `rect` — the AI avatar
+/// glyph in the chat view (white mark on the accent background).
+pub fn paint_mark_mono_at(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    paint_ridge(painter, rect, color, color);
+}
+
+/// Full color mark: wind gusts + back ridge + front ridge + snow caps,
+/// geometry identical to the SVG in the Dioxus UI (viewBox 96×70).
+fn paint_mark_full(painter: &egui::Painter, rect: egui::Rect, p: &Palette) {
+    let s = (rect.width() / 96.0).min(rect.height() / 70.0);
     let origin = egui::pos2(
-        rect.left() + (rect.width() - fw) / 2.0,
-        rect.top() + (rect.height() - fh) / 2.0,
+        rect.left() + (rect.width() - 96.0 * s) / 2.0,
+        rect.top() + (rect.height() - 70.0 * s) / 2.0,
     );
-    for (_, x, y, w, h) in flame_rects_mono() {
-        let px = egui::Rect::from_min_size(
-            origin + egui::vec2(x * scale, y * scale),
-            egui::vec2(w * scale, h * scale),
-        );
-        painter.rect_filled(px, 0.0, color);
+    let pt = |x: f32, y: f32| origin + egui::vec2(x * s, y * s);
+    // foehn wind gusts above the ridge
+    let gusts: [(Color32, Vec<egui::Pos2>); 3] = [
+        (
+            Color32::from_rgb(0xff, 0xd7, 0x00), // `gold`
+            vec![pt(14.0, 12.0), pt(46.0, 12.0), pt(54.0, 7.0)],
+        ),
+        (
+            Color32::from_rgb(0xff, 0x82, 0x05), // `--orangebright-500`
+            vec![pt(6.0, 24.0), pt(60.0, 24.0), pt(70.0, 17.0)],
+        ),
+        (p.accent, vec![pt(18.0, 36.0), pt(48.0, 36.0)]),
+    ];
+    for (color, pts) in gusts {
+        painter.add(egui::Shape::line(
+            pts,
+            egui::Stroke::new(5.0 * s, color),
+        ));
+    }
+    let back = Color32::from_rgba_unmultiplied(p.red.r(), p.red.g(), p.red.b(), 217);
+    paint_ridge(painter, rect, back, p.accent);
+    // snow caps
+    let cap = Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 235);
+    for (peak_x, peak_y, half, depth) in [(30.0, 20.0, 5.0, 8.5), (62.0, 24.0, 4.5, 7.5)] {
+        painter.add(egui::Shape::convex_polygon(
+            vec![
+                pt(peak_x, peak_y),
+                pt(peak_x + half, peak_y + depth),
+                pt(peak_x - half, peak_y + depth),
+            ],
+            cap,
+            egui::Stroke::NONE,
+        ));
     }
 }
 
-/// The 10 pixel-flame rects (ChatView.tsx SVG), with palette colors.
-fn flame_rects(p: &Palette) -> [(Color32, f32, f32, f32, f32); 10] {
-    [
-        (p.flame_yellowbright, 30.303, 0.0, 30.303, 30.303),
-        (p.flame_yellowbright, 151.515, 0.0, 30.303, 30.303),
-        (p.flame_yellow, 30.303, 30.303, 60.606, 30.303),
-        (p.flame_yellow, 121.212, 30.303, 60.606, 30.303),
-        (p.flame_orangebright, 30.303, 60.606, 151.515, 30.303),
-        (p.flame_orange, 30.303, 90.909, 30.303, 30.303),
-        (p.flame_orange, 90.909, 90.909, 30.303, 30.303),
-        (p.flame_orange, 151.515, 90.909, 30.303, 30.303),
-        (p.flame_red, 0.0, 121.212, 90.909, 30.303),
-        (p.flame_red, 121.212, 121.212, 90.909, 30.303),
-    ]
-}
-
-/// The same rects, color stripped (positions only).
-fn flame_rects_mono() -> [(Color32, f32, f32, f32, f32); 10] {
-    [
-        (Color32::PLACEHOLDER, 30.303, 0.0, 30.303, 30.303),
-        (Color32::PLACEHOLDER, 151.515, 0.0, 30.303, 30.303),
-        (Color32::PLACEHOLDER, 30.303, 30.303, 60.606, 30.303),
-        (Color32::PLACEHOLDER, 121.212, 30.303, 60.606, 30.303),
-        (Color32::PLACEHOLDER, 30.303, 60.606, 151.515, 30.303),
-        (Color32::PLACEHOLDER, 30.303, 90.909, 30.303, 30.303),
-        (Color32::PLACEHOLDER, 90.909, 90.909, 30.303, 30.303),
-        (Color32::PLACEHOLDER, 151.515, 90.909, 30.303, 30.303),
-        (Color32::PLACEHOLDER, 0.0, 121.212, 90.909, 30.303),
-        (Color32::PLACEHOLDER, 121.212, 121.212, 90.909, 30.303),
-    ]
+/// The two ridge triangles (back + front peak). Shared by the color and
+/// mono variants; overlap of same-color fills is invisible.
+fn paint_ridge(painter: &egui::Painter, rect: egui::Rect, back: Color32, front: Color32) {
+    let s = (rect.width() / 96.0).min(rect.height() / 70.0);
+    let origin = egui::pos2(
+        rect.left() + (rect.width() - 96.0 * s) / 2.0,
+        rect.top() + (rect.height() - 70.0 * s) / 2.0,
+    );
+    let pt = |x: f32, y: f32| origin + egui::vec2(x * s, y * s);
+    for (pts, color) in [
+        (
+            vec![pt(34.0, 66.0), pt(62.0, 24.0), pt(94.0, 66.0)],
+            back,
+        ),
+        (
+            vec![pt(2.0, 66.0), pt(30.0, 20.0), pt(58.0, 66.0)],
+            front,
+        ),
+    ] {
+        painter.add(egui::Shape::convex_polygon(
+            pts,
+            color,
+            egui::Stroke::NONE,
+        ));
+    }
 }

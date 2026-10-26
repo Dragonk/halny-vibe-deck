@@ -4724,9 +4724,11 @@ version = "1.99.0"
 dependencies = [
  "axum",
  "calamine",
+ "console_error_panic_hook",
  "dioxus",
  "dioxus-fullstack",
  "flate2",
+ "gloo-timers",
  "image",
  "js-sys",
  "mistraldeck-core",

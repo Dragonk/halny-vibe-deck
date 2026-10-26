@@ -970,7 +970,7 @@ fn transcript_row(ui: &mut Ui, msg: &VibeMessage, p: &Palette) {
                             ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, egui::Rounding::same(6.0), p.accent);
-                        crate::theme::paint_flame_mono_at(&painter, rect, egui::Color32::WHITE);
+                        crate::theme::paint_mark_mono_at(&painter, rect, egui::Color32::WHITE);
                         ui.add_space(12.0);
                         ui.vertical(|ui| {
                             ui.set_width(ui.available_width() - 8.0);

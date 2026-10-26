@@ -758,8 +758,8 @@ impl MistraldeckApp {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.set_min_height(28.0);
-                    // brand: pixel flame + name
-                    theme::paint_flame(ui, &p, 0.13);
+                    // brand: Halny mark + name
+                    theme::paint_mark(ui, &p, 0.24);
                     ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(t.app_name)

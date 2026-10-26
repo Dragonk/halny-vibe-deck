@@ -414,7 +414,7 @@ pub fn HistoryView() -> Element {
                                 searching.set(true);
                                 let st = state.clone();
                                 spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                                    crate::state::sleep_ms(400).await;
                                     if *search_gen.read() != gen {
                                         return;
                                     }

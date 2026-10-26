@@ -93,7 +93,7 @@ pub fn SetupView() -> Element {
                                     )
                                     .await;
                                     loop {
-                                        tokio::time::sleep(std::time::Duration::from_millis(800))
+                                        crate::state::sleep_ms(800)
                                             .await;
                                         match crate::setup::api_setup_log(
                                             crate::state::token(&state),

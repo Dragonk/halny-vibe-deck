@@ -117,7 +117,7 @@ pub fn ChatView() -> Element {
                 div { class: "chat-inner",
                     if messages.is_empty() && !is_resuming {
                         div { class: "chat-empty",
-                            Flame {}
+                            HalnyMark {}
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
                             div { class: "chat-empty-subtitle", "{subtitle}" }
                             if status == "error" && !acp_error.is_empty() {
@@ -164,26 +164,23 @@ pub fn ChatView() -> Element {
     }
 }
 
-/// The pixel-art flame from the Nexus empty state.
+/// The Halny mark — Tatra ridge with the foehn-wind gusts (brand glyph of
+/// Halny Vibe Deck, matching the app icon).
 #[component]
-fn Flame() -> Element {
+fn HalnyMark() -> Element {
     rsx! {
         svg {
             class: "chat-empty-icon",
             xmlns: "http://www.w3.org/2000/svg",
             width: "95", height: "68",
-            view_box: "0 0 212.121 151.515",
-            version: "1.1",
-            rect { fill: "var(--yellowbright-500)", x: "30.303001", y: "0", width: "30.302999", height: "30.302999" }
-            rect { fill: "var(--yellowbright-500)", x: "151.515", y: "0", width: "30.302999", height: "30.302999" }
-            rect { fill: "var(--yellow-500)", x: "30.303001", y: "30.303001", width: "60.605999", height: "30.302999" }
-            rect { fill: "var(--yellow-500)", x: "121.21201", y: "30.303001", width: "60.605999", height: "30.302999" }
-            rect { fill: "var(--orangebright-500)", x: "30.303001", y: "60.606003", width: "151.515", height: "30.302999" }
-            rect { fill: "var(--orange-500)", x: "30.303001", y: "90.908997", width: "30.302999", height: "30.302999" }
-            rect { fill: "var(--orange-500)", x: "90.908997", y: "90.908997", width: "30.302999", height: "30.302999" }
-            rect { fill: "var(--orange-500)", x: "151.515", y: "90.908997", width: "30.302999", height: "30.302999" }
-            rect { fill: "var(--red-700)", x: "0", y: "121.21201", width: "90.908997", height: "30.302999" }
-            rect { fill: "var(--red-700)", x: "121.21201", y: "121.21201", width: "90.908997", height: "30.302999" }
+            view_box: "0 0 96 70",
+            path { d: "M14 12 H46 Q54 12 54 7", stroke: "var(--yellowbright-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
+            path { d: "M6 24 H60 Q70 24 70 17", stroke: "var(--orangebright-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
+            path { d: "M18 36 H48", stroke: "var(--orange-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
+            path { d: "M34 66 L62 24 L94 66 Z", fill: "var(--red-700)", opacity: "0.85" }
+            path { d: "M2 66 L30 20 L58 66 Z", fill: "var(--accent)" }
+            path { d: "M30 20 L35 28.5 H25 Z", fill: "#ffffff", opacity: "0.92" }
+            path { d: "M62 24 L66.5 31.5 H57.5 Z", fill: "#ffffff", opacity: "0.92" }
         }
     }
 }
