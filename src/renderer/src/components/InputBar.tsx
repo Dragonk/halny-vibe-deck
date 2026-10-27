@@ -773,8 +773,29 @@ export default function InputBar({ config }: Props): React.JSX.Element {
     // If the agent is busy, queue the message instead of sending
     const isCurrentSessionBusy = currentSessionId != null && busySessions.includes(currentSessionId)
     if (isCurrentSessionBusy) {
-      addToMessageQueue(expandedText)
-      return
+      // v1.0.22: the client-side busy flag can be STALE - out-of-band
+      // chunks (the CLI's MCP warm-up warning arrives as an
+      // agent_message_chunk right after session creation, BEFORE any
+      // turn) mark the session busy while no turn exists; the queue then
+      // waits for a turn end that never comes = a send deadlock (the red
+      // stop button with nothing running). The SERVER owns the truth
+      // (acp:busy-sessions tracks real in-flight turns): when it reports
+      // no turn for this session, clear the stale flag and send now.
+      const acpId = currentSess.acpSessionId
+      let serverConfirmsBusy = true
+      if (acpId) {
+        try {
+          const busy = (await window.api.acp.busySessions()) as Array<{ acpSessionId: string }>
+          serverConfirmsBusy = busy.some((b) => b.acpSessionId === acpId)
+        } catch {
+          /* unreachable server - keep the queue path */
+        }
+      }
+      if (serverConfirmsBusy) {
+        addToMessageQueue(expandedText)
+        return
+      }
+      useStore.getState().markSessionIdle(currentSess.id)
     }
 
     // v1.0.10: deterministic user-message id shared with the main-process

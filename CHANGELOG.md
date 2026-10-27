@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.22 — 2026-10-27
+
+### Fixed
+- **The MCP warning blocked ALL sends with a permanent stop button.**
+  Full audit (CLI sources + how other ACP clients behave): the CLI's
+  session warm-up emits the MCP-OAuth hint as an OUT-OF-BAND
+  agent_message_chunk - BEFORE any turn - and the app's chunk handler
+  marked the session BUSY on every chunk. With no turn there is no
+  PromptComplete, so the flag never cleared: the send button stayed a
+  stop button, sends queued up waiting for a turn end that would never
+  come, and even /mcp login could not be delivered. A client-side
+  busy flag from chunks is a HEURISTIC, not the truth.
+
+  Now - like other ACP clients - the SERVER owns the turn state:
+  - sends check acp:busy-sessions when the client thinks the session
+    is busy: no server-side turn = send immediately (the stale flag
+    is healed);
+  - chunk-driven busy flags self-verify 1.5 s after the last chunk
+    and clear when the server reports no turn;
+  - the PWA wake-up re-sync heals busy sessions whose turn ended
+    while the page was frozen (a missed PromptComplete).
+
+  After the fix the flow works end to end: the warning appears (just
+  a warning), /mcp login <alias> sends normally, the CLI streams the
+  OAuth URL, the login completes in the local browser and the same
+  session continues.
+
 ## 1.0.21 — 2026-10-27
 
 ### Fixed

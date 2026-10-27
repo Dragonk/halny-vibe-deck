@@ -906,6 +906,22 @@ export const useStore = create<AppStore>((set, get) => ({
     // histories were already loaded so every session reloads.
     set({ historyLoadedSessions: [] });
     await get().syncBusySessions();
+    // v1.0.22: a PromptComplete missed while the page was frozen leaves
+    // the session busy FOREVER (the stop button, sends queue up) - the
+    // server truth heals it: locally-busy sessions with no server-side
+    // turn go idle.
+    try {
+      const busy = (await window.api.acp.busySessions()) as Array<{ acpSessionId: string }>;
+      const serverIds = new Set(busy.map((b) => b.acpSessionId));
+      for (const localId of [...get().busySessions]) {
+        const sess = get().sessions.find((s) => s.id === localId);
+        if (sess?.acpSessionId && !serverIds.has(sess.acpSessionId)) {
+          get().markSessionIdle(localId);
+        }
+      }
+    } catch {
+      /* server unreachable - keep the state */
+    }
     const withHistory = get().sessions.filter(
       (s) => s.acpSessionId && s.messages.length > 0,
     );

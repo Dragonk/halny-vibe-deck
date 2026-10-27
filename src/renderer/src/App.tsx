@@ -109,6 +109,40 @@ export default function App(): React.JSX.Element {
 
   // Per-session streaming state: localSessionId → streaming info
   const streamingState = useRef<Map<string, StreamingState>>(new Map())
+
+  // v1.0.22: the busy flag set from streaming chunks can be STALE -
+  // out-of-band chunks (the CLI's MCP warm-up warning arrives as an
+  // agent_message_chunk right after session creation) mark a session
+  // busy while NO turn exists, and the send button then stays a stop
+  // button forever (a dead-end: the queue waits for a turn end that
+  // never comes). The SERVER owns the truth (acp:busy-sessions) -
+  // verify shortly after the last chunk and heal the flag when the
+  // server reports no turn for the session.
+  const busyVerifyTimers = useRef<Map<string, number>>(new Map())
+  const armBusyVerify = useCallback((localId: string): void => {
+    const prev = busyVerifyTimers.current.get(localId)
+    if (prev) window.clearTimeout(prev)
+    busyVerifyTimers.current.set(
+      localId,
+      window.setTimeout(() => {
+        busyVerifyTimers.current.delete(localId)
+        void (async () => {
+          const st = useStore.getState()
+          if (!st.busySessions.includes(localId)) return
+          const sess = st.sessions.find((x) => x.id === localId)
+          if (!sess?.acpSessionId) return
+          try {
+            const busy = (await window.api.acp.busySessions()) as Array<{ acpSessionId: string }>
+            if (!busy.some((b) => b.acpSessionId === sess.acpSessionId)) {
+              useStore.getState().markSessionIdle(localId)
+            }
+          } catch {
+            /* server unreachable - keep the state */
+          }
+        })()
+      }, 1500),
+    )
+  }, [])
   const [setupRequired, setSetupRequired] = useState(false)
   // v1.0.13: "press back again to exit" toast (PWA back guard)
   const [backToast, setBackToast] = useState(false)
@@ -355,7 +389,10 @@ export default function App(): React.JSX.Element {
           const local = store.getSessionByAcpId(acpSessId)
           const localId = local?.id ?? store.currentSessionId
           if (!localId) break
-          if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
+          if (store.pendingLoadSessionId !== acpSessId) {
+            markSessionBusy(localId)
+            armBusyVerify(localId)
+          }
           const text = d.text as string
           const acpMsgId = d.messageId as string | undefined
           let state = streamingState.current.get(localId)
@@ -388,7 +425,10 @@ export default function App(): React.JSX.Element {
           const localId = local?.id ?? store.currentSessionId
           const blockId = (d.blockId as string) ?? 'thinking'
           if (!localId) break
-          if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
+          if (store.pendingLoadSessionId !== acpSessId) {
+            markSessionBusy(localId)
+            armBusyVerify(localId)
+          }
           let state = streamingState.current.get(localId)
           // v0.13.7: reasoning that arrives after a streamed text segment opens
           // the NEXT agent message - finalize the current one so the thought
@@ -455,7 +495,10 @@ export default function App(): React.JSX.Element {
             const promptText = sess?.contextSummary
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
-            if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
+            if (store.pendingLoadSessionId !== acpSessId) {
+              markSessionBusy(localId)
+              armBusyVerify(localId)
+            }
             const rid = (d.remoteId as string | undefined) ?? null
             // v1.0.21: the worker may be DEAD here (a hung turn - e.g. an
             // MCP-OAuth login - was just stopped; the ssh worker died with
@@ -507,7 +550,10 @@ export default function App(): React.JSX.Element {
           // Model-change checkpoints are CLI bookkeeping, not agent activity+�u���T
           // they must never flip the session into the busy state.
           const isCheckpoint = String(d.toolCallId ?? '').startsWith('checkpoint-')
-          if (!isCheckpoint && store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
+          if (!isCheckpoint && store.pendingLoadSessionId !== acpSessId) {
+            markSessionBusy(localId)
+            armBusyVerify(localId)
+          }
           // Ensure there's an active AI message to attach tool calls to
           if (!streamingState.current.has(localId)) {
             const msgId = store.startAiMessage(localId)
