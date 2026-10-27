@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.17 — 2026-10-27
+
+### Fixed
+- **Returning to the PWA shows only stale data.** Closing the PWA
+  never stops anything server-side (the turn keeps running), but
+  the client coming back pulled nothing: a background-frozen page
+  misses streamed events (even with a live WS it is suspended),
+  and a WS reconnect only re-synced busy flags. Now every return
+  - WS reconnect OR the page becoming visible again - triggers a
+  FULL re-sync: busy/live flags, the complete on-disk history of
+  every loaded session and the SSH session lists. The agent's
+  whole story from the background period is always there; a
+  locally-streaming session is skipped so its live tail is
+  never clobbered.
+
 ## 1.0.16 — 2026-10-27
 
 ### Fixed

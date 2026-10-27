@@ -787,12 +787,29 @@ export default function App(): React.JSX.Element {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // v1.0.13: after a WS reconnect (server restart, network blip) re-sync
-  // the busy/live session state so the view is never stale.
+  // the client state so the view is never stale.
+  // v1.0.17: the resync now pulls the FULL state (busy/live flags +
+  // on-disk history of every loaded session + SSH lists).
   useEffect(() => {
     if (!isWebMode()) return
-    const onOpen = (): void => void useStore.getState().syncBusySessions()
+    const onOpen = (): void => void useStore.getState().resyncAfterReconnect()
     window.addEventListener('nexus-ws-open', onOpen)
     return () => window.removeEventListener('nexus-ws-open', onOpen)
+  }, [])
+
+  // v1.0.17: the PWA waking up from the background (page was frozen,
+  // Android kept it alive) - events streamed while away were missed
+  // even with a live WS. Every return to visibility pulls the full
+  // state again; closing the PWA never stops anything server-side.
+  useEffect(() => {
+    if (!isWebMode()) return
+    const onVis = (): void => {
+      if (document.visibilityState === 'visible') {
+        void useStore.getState().resyncAfterReconnect()
+      }
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
   }, [])
 
   // v0.9.0: auto-close idle live sessions (config.autoCloseIdleMinutes,

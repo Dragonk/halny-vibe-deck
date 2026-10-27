@@ -167,6 +167,8 @@ interface AppStore {
   loadDefaultChips: () => Promise<void>;
   /** v1.0.13: mark sessions that run a turn right now as busy + live. */
   syncBusySessions: () => Promise<void>;
+  /** v1.0.17: full re-sync after the PWA returns from the background. */
+  resyncAfterReconnect: () => Promise<void>;
   /** v0.11.1: last known configOptions per ACP session (option lists are model specific). */
   sessionConfigOptions: Record<string, ConfigOption[]>;
   setSessionConfigOptions: (acpSessionId: string, options: ConfigOption[]) => void;
@@ -891,6 +893,30 @@ export const useStore = create<AppStore>((set, get) => ({
     } catch (err) {
       console.error("[store] busy sessions sync failed:", err);
     }
+  },
+
+  // v1.0.17: the PWA coming back from the background (page frozen while
+  // the phone was away, WS dropped, server restarted) must pull EVERYTHING
+  // that happened meanwhile - busy/live flags, the full on-disk history
+  // of every loaded session and the SSH session lists. Closing the PWA
+  // never stops the session server-side; returning to it must show the
+  // whole story, not just what was fetched before it was closed.
+  resyncAfterReconnect: async () => {
+    // The disk is fresher than a background-frozen view - forget which
+    // histories were already loaded so every session reloads.
+    set({ historyLoadedSessions: [] });
+    await get().syncBusySessions();
+    const withHistory = get().sessions.filter(
+      (s) => s.acpSessionId && s.messages.length > 0,
+    );
+    // A session the user is actively streaming into (locally busy) is
+    // skipped - its live tail must not be clobbered by the disk state.
+    await Promise.allSettled(
+      withHistory
+        .filter((s) => !get().busySessions.includes(s.id) && !s.loading)
+        .map((s) => get().previewSession(s.id)),
+    );
+    void get().refreshRemoteData();
   },
 
   // v1.0.7: no session is opened at boot anymore, so the chips must come
