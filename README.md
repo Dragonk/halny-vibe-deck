@@ -3,7 +3,7 @@
 > **⚠️ Unofficial community project.** Halny Vibe Deck is **not** an official Mistral AI
 > product and is **not** affiliated with, endorsed by, or supported by Mistral AI.
 > "Mistral" and "Vibe" are trademarks of their respective owners.
-> Halny Vibe Deck is an independent desktop GUI (nakładka) for the open-source
+> Halny Vibe Deck is an independent desktop GUI for the open-source
 > **Mistral Vibe CLI** (`vibe-acp`).
 
 **Halny Vibe Deck (Rust edition) — fast GUI for the Mistral Vibe CLI, built with Rust.**

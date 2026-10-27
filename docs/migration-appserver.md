@@ -1,198 +1,200 @@
-# Migracja GUI z vibe-acp na vibe-app-server
+# GUI migration from vibe-acp to vibe-app-server
 
-> Dokument wykonawczy dla agenta wdrażającego natywny transport `vibe-app-server` w GUI.
-> Dokument towarzyszący: [referencja protokołu vibe-app-server](appserver-protocol.md).
-> Fakty zweryfikowane w źródłach `mistralai/mistral-vibe` (main, 2026-10-26).
+> Working document for the agent implementing the native `vibe-app-server` transport in the GUI.
+> Companion document: [vibe-app-server protocol reference](appserver-protocol.md).
+> Facts verified against the sources of `mistralai/mistral-vibe` (main, 2026-10-26).
 
-## Postęp prac (aktualizowany przez agenta)
+## Progress (updated by the agent)
 
-- [x] F0 — Sonda protokołu (scripts/probe_appserver.py, uruchomiona na lokalnym CLI)
-- [x] F1 — Transport + minimalny czat (crate `mistraldeck-appsrv`: conn, proto, patch, reducer, worker) — **E2E live OK**
-- [x] F2 — Callbacki: approvals + pytania (callback/call ack + callback/result) — testy jednostkowe
-- [x] F3 — Watermark + resync + reconnect (event_id, resume snapshot) — **E2E live: reconnect z pełnym snapshotem OK**
-- [~] F4 — Konfiguracja runtime + chipy (session/start {model, sessionOnly}, config/model/write, session/agent/update — zmapowane w worker.rs; picker UI z RuntimeSnapshot zostaje w F4-UI)
-- [x] F5 — Kolejka, steer, interrupt, kompakty (session/compacted handoff)
-- [x] F6 — Statystyki (session/statsUpdated → UsageUpdate, bez unified store w runtime)
-- [x] F7 — Feature flag transportu (`transport` w config: `appserver` default / `acp` legacy)
-- [x] Testy jednostkowe (patch applier, reducer, callbacks, conn framing)
-- [x] Build Windows (workflow dev-build.yml, artifact na branchu next)
-- [x] Push do branchu next
+- [x] F0 — Protocol probe (scripts/probe_appserver.py, run against the local CLI)
+- [x] F1 — Transport + minimal chat (crate `mistraldeck-appsrv`: conn, proto, patch, reducer, worker) — **live E2E OK**
+- [x] F2 — Callbacks: approvals + questions (callback/call ack + callback/result) — unit tests
+- [x] F3 — Watermark + resync + reconnect (event_id, resume snapshot) — **live E2E: reconnect with full snapshot OK**
+- [~] F4 — Runtime configuration + chips (session/start {model, sessionOnly}, config/model/write, session/agent/update — mapped in worker.rs; picker UI from RuntimeSnapshot stays in F4-UI)
+- [x] F5 — Queue, steer, interrupt, compaction (session/compacted handoff)
+- [x] F6 — Statistics (session/statsUpdated → UsageUpdate, no unified store at runtime)
+- [x] F7 — Transport feature flag (`transport` in config: `appserver` default / `acp` legacy)
+- [x] Unit tests (patch applier, reducer, callbacks, conn framing)
+- [x] Windows build (workflow dev-build.yml, artifact on the next branch)
+- [x] Push to the next branch
 
-## 1. Cel i motywacja
+## 1. Goal and motivation
 
-Zastąpić sterowanie agentem przez `vibe-acp` (publiczny protokół IDE) przez `vibe-app-server` —
-**wewnętrzny protokół pierwszej klasy**, którego używa własny Rust TUI i Desktop Mistrala.
-Transport jest identyczny (NDJSON JSON-RPC 2.0 po stdio), ale semantyka jest bogatsza
-i usuwa wszystkie obejścia znane z ACP.
+Replace agent control via `vibe-acp` (the public IDE protocol) with `vibe-app-server` —
+the **first-class internal protocol** used by Mistral's own Rust TUI and Desktop.
+The transport is identical (NDJSON JSON-RPC 2.0 over stdio), but the semantics are richer
+and it removes all the workarounds known from ACP.
 
-### 1.1 Workaroundy ACP, które znikają
+### 1.1 ACP workarounds that disappear
 
-| # | Workaround w ACP (obecny kod GUI) | Natywne rozwiązanie w app-server |
+| # | Workaround in ACP (current GUI code) | Native solution in app-server |
 |---|---|---|
-| W1 | **Replay historii PRZED odpowiedzią** `session/load` → buforowanie `_replaying`/`loading_session`, grace-drain 40×5ms, wyścigi z primed session (bug v0.8.2) | `session/resume` zwraca **pełny `PublicSessionState` w odpowiedzi** — zero replayu, zero wyścigów; `first_turn` przy starcie |
-| W2 | **"Primed session"** — NewSession przy starcie do podgrzania, przechwytywanie pierwszego prompta | `session/start` z `kind: "EPHEMERAL"` — oficjalna sesja rozgrzewkowa (porzucana przy resume, bez telemetrii) |
-| W3 | **Kompakt jako fake tool_call** („Compacting conversation history…", kind other) | natywna notyfikacja **`session/compacted`** z nowym stanem w payloadzie (+ `session/contextCleared`); ręczne wywołanie `session/compact` |
-| W4 | **Statystyki przez parsowanie unified store** (`~/.vibe/logs/session/unified/*`, manifesty, sha256, generations) | notyfikacja **`session/statsUpdated`** `{stats: AgentStatsSnapshot, context_window}` + `token_usage`/`context_usage` na `PublicSession`; kompakcja ma `summary_length` |
-| W5 | **configOptions z sesji** (chipy model/mode/thinking, brak pola `models` w starszych CLI) | **`runtime/read`** → RuntimeSnapshot (agenci/skille/narzędzia/context_window/mcp) + `agents/list` + notyfikacja `runtime/updated`; model per sesja: `session/start {model, reasoningEffort, sessionOnly}` + `config/model/write` + `session/agent/update` |
-| W6 | **`mcpServers` wymagane** w session/new (-32602) | `agentConfig.mcpServers` opcjonalne (default `[]`) |
-| W7 | **usage_update tylko `_meta`** na turnach | `session/statsUpdated` per stan + `PublicTurn` z `error`/`stop_reason`/timingami |
-| W8 | **Tytuł sesji**: tłumaczenie komunikatów CLI („Session title updated" itp.) jako notice-tekst | `session/rename`/`session/title/update` + `PublicSession.title`; notice ma strukturalny `detail.kind` (np. `session_title_updated`) |
-| W9 | **Stop tury**: brak semantyki expected_turn | `turn/interrupt {expected_turn_id}` + `turn/steer` — oba z walidacją `STALE_TURN`/`NOT_STEERABLE` |
-| W10 | **Brak kolejki**: GUI musi własną kolejkę promptów (ClientState.queue, drain_queue) | natywna **kolejka tur**: `session/turn/enqueue` → `PublicTurnQueue` (+ edit/start/save, replace, remove, steer, resume) i notyfikacja `turn/queueUpdated` |
-| W11 | **Subagent logs z dysku** (`agents/*/meta.json` + messages.jsonl, narrowing) | `session/subagents/read|wait|interrupt` + notyfikacja `session/childSessionUpdated` (`PublicChildSession` z token_usage) |
-| W12 | **Diffy edycji z content bloków** tool calli | wpisy historii typu `effect` z `EffectDetail` — ustrukturyzowane tool calle/edycje + statusy |
-| W13 | **Rewind/checkpointy** — brak w ACP | `session/rewind`, `session/rewind/read`, `session/fork` (z `after_turn_id`/`entry_id`), `session/history/clear` |
+| W1 | **History replay BEFORE the response** of `session/load` → `_replaying`/`loading_session` buffering, 40×5ms grace-drain, races with a primed session (bug v0.8.2) | `session/resume` returns the **full `PublicSessionState` in the response** — no replay, no races; `first_turn` at start |
+| W2 | **"Primed session"** — a NewSession at startup to warm things up, capturing the first prompt | `session/start` with `kind: "EPHEMERAL"` — the official warm-up session (abandoned on resume, no telemetry) |
+| W3 | **Compaction as a fake tool_call** ("Compacting conversation history…", kind other) | the native **`session/compacted`** notification with the new state in the payload (+ `session/contextCleared`); manual call via `session/compact` |
+| W4 | **Statistics by parsing the unified store** (`~/.vibe/logs/session/unified/*`, manifests, sha256, generations) | the **`session/statsUpdated`** notification `{stats: AgentStatsSnapshot, context_window}` + `token_usage`/`context_usage` on `PublicSession`; compaction carries `summary_length` |
+| W5 | **configOptions from the session** (model/mode/thinking chips, no `models` field in older CLIs) | **`runtime/read`** → RuntimeSnapshot (agents/skills/tools/context_window/mcp) + `agents/list` + the `runtime/updated` notification; per-session model: `session/start {model, reasoningEffort, sessionOnly}` + `config/model/write` + `session/agent/update` |
+| W6 | **`mcpServers` required** in session/new (-32602) | `agentConfig.mcpServers` optional (default `[]`) |
+| W7 | **usage_update only in `_meta`** on turns | `session/statsUpdated` per state + `PublicTurn` with `error`/`stop_reason`/timings |
+| W8 | **Session title**: parsing CLI messages ("Session title updated" etc.) as notice text | `session/rename`/`session/title/update` + `PublicSession.title`; the notice has a structured `detail.kind` (e.g. `session_title_updated`) |
+| W9 | **Turn stop**: no expected_turn semantics | `turn/interrupt {expected_turn_id}` + `turn/steer` — both validated with `STALE_TURN`/`NOT_STEERABLE` |
+| W10 | **No queue**: the GUI must keep its own prompt queue (ClientState.queue, drain_queue) | a native **turn queue**: `session/turn/enqueue` → `PublicTurnQueue` (+ edit/start/save, replace, remove, steer, resume) and the `turn/queueUpdated` notification |
+| W11 | **Subagent logs from disk** (`agents/*/meta.json` + messages.jsonl, narrowing) | `session/subagents/read|wait|interrupt` + the `session/childSessionUpdated` notification (`PublicChildSession` with token_usage) |
+| W12 | **Edit diffs from tool-call content blocks** | history entries of type `effect` with `EffectDetail` — structured tool calls/edits + statuses |
+| W13 | **Rewind/checkpoints** — absent in ACP | `session/rewind`, `session/rewind/read`, `session/fork` (with `after_turn_id`/`entry_id`), `session/history/clear` |
 
-### 1.2 Co zostaje bez zmian
+### 1.2 What stays unchanged
 
-- Transport procesowy: spawn child processu, stdio, NDJSON — istniejący kod reader/writera
-  z `mistraldeck-acp`/`client.rs` do reużycia po kosmetyce.
-- Pliki sesji na dysku (unified store) — zostają jako fallback statystyk historycznych
-  (import), ale przestają być runtime-zależnością.
-- Zdalne SSH: `ssh -t host 'bash -lc "exec vibe-app-server"'` — identyczny wzorzec jak
-  dotąd dla `vibe-acp` (login shell wymagany dla PATH uv).
+- Process transport: spawning the child process, stdio, NDJSON — the existing reader/writer
+  code from `mistraldeck-acp`/`client.rs` can be reused after minor cleanup.
+- Session files on disk (unified store) — they remain as a fallback for historical
+  statistics (import), but stop being a runtime dependency.
+- Remote SSH: `ssh -t host 'bash -lc "exec vibe-app-server"'` — the same pattern as
+  so far for `vibe-acp` (a login shell is required for the uv PATH).
 
-## 2. Architektura docelowa (zrealizowana)
+## 2. Target architecture (implemented)
 
 ```mermaid
 flowchart TD
-    subgraph Engine["mistraldeck-engine (UI bez zmian)"]
-        E["State machine: sesje, kolejka UI, busy, snapshot"]
-        H["AcpHandle / ApsHandle - ta sama powierzchnia"]
+    subgraph Engine["mistraldeck-engine (UI unchanged)"]
+        E["State machine: sessions, UI queue, busy, snapshot"]
+        H["AcpHandle / ApsHandle - the same surface"]
     end
-    H -->|"impl ACP (legacy, flaga transport=acp)"| ACP["mistraldeck-acp (istniejący)"]
-    H -->|"impl AppServer (docelowy, flaga transport=appserver)"| APP["mistraldeck-appsrv (NOWY crate)"]
+    H -->|"impl ACP (legacy, flag transport=acp)"| ACP["mistraldeck-acp (existing)"]
+    H -->|"impl AppServer (target, flag transport=appserver)"| APP["mistraldeck-appsrv (NEW crate)"]
     APP --> P["conn.rs: spawn vibe-app-server, initialize, string IDs, NDJSON"]
-    APP --> R["reducer.rs: projekcja PublicSessionState → AcpEvent"]
+    APP --> R["reducer.rs: projection of PublicSessionState → AcpEvent"]
     APP --> CB["callbacks: callback/call ack + callback/result"]
     APP --> W["Watermark: event_id + events/read resync"]
 ```
 
-Zasady realizacji:
+Implementation principles:
 
-1. **Engine widzi abstrakcję, nie protokół** — nowy crate `mistraldeck-appsrv` wystawia
-   `ApsHandle` o tej samej powierzchni co `AcpHandle` (`send(AcpCommand)`,
-   `cmd_sender()`, `events()`), więc engine i oba UI (egui + Dioxus) działają bez zmian.
-   Tłumaczenie app-server ↔ AcpEvent/AcpCommand siedzi w `worker.rs`.
-2. **Model wire: snapshot + patche** — wpis assistant powstaje raz (`history/entryAdded`)
-   i jest aktualizowany patchami (`history/entryUpdated` z niestandardowym op `append`);
-   reduktor trzyma wpis i emituje różnicowe `MessageChunk`/`ThinkingChunk` do UI.
-3. **Kolejka promptów GUI spada** — natywna `session/turn/enqueue` kolejkuje po stronie
-   CLI (`PublicTurnQueue`, `turn/queueUpdated`); ACP-owe obejście kolejki w engine staje
-   się zbędne dla transportu appserver.
-4. **Statystyki live ze `session/statsUpdated`**; unified store tylko do importu historii.
-5. **Watermark**: `event_id` z notyfikacji + `last_event_id` z odpowiedzi; luka →
-   `session/read` (pełny resync). Reconnect: restart procesu → initialize → resume.
-6. **Multiplex/pooling (faza 2+, nie w v1):** `vibe-app-server --multiplex` — jeden proces
-   dla N sesji (wzorzec: `vibe/cli-rust/src/server/multiplex.rs`).
+1. **The engine sees an abstraction, not a protocol** — the new crate `mistraldeck-appsrv`
+   exposes an `ApsHandle` with the same surface as `AcpHandle` (`send(AcpCommand)`,
+   `cmd_sender()`, `events()`), so the engine and both UIs (egui + Dioxus) work unchanged.
+   The app-server ↔ AcpEvent/AcpCommand translation lives in `worker.rs`.
+2. **Wire model: snapshot + patches** — an assistant entry is created once
+   (`history/entryAdded`) and then updated by patches (`history/entryUpdated` with the
+   non-standard `append` op); the reducer keeps the entry and emits incremental
+   `MessageChunk`/`ThinkingChunk` to the UI.
+3. **The GUI prompt queue goes away** — the native `session/turn/enqueue` queues on the
+   CLI side (`PublicTurnQueue`, `turn/queueUpdated`); the ACP-style queue workaround in
+   the engine becomes unnecessary for the appserver transport.
+4. **Live statistics from `session/statsUpdated`**; the unified store only for history import.
+5. **Watermark**: `event_id` from notifications + `last_event_id` from responses; a gap →
+   `session/read` (full resync). Reconnect: process restart → initialize → resume.
+6. **Multiplex/pooling (phase 2+, not in v1):** `vibe-app-server --multiplex` — one process
+   for N sessions (pattern: `vibe/cli-rust/src/server/multiplex.rs`).
 
-## 3. Fazy migracji — kryteria akceptacji i status
+## 3. Migration phases — acceptance criteria and status
 
-### F0 — Sonda protokołu (0,5 dnia) ✅
-- Skrypt sondażowy: `scripts/probe_appserver.py` (initialize → session/start →
-  turn/enqueue → nasłuch notyfikacji → callback ack).
-- **AC**: sonda wypisuje pełny cykl (turn/started → history/entryAdded → entryUpdated →
-  turn/completed); `vibe-app-server` obecny w instalacji CLI.
-- **Status**: zrobione; sonda uruchomiona na lokalnej instalacji (mistral-vibe 3.x).
+### F0 — Protocol probe (0.5 day) ✅
+- Probe script: `scripts/probe_appserver.py` (initialize → session/start →
+  turn/enqueue → listen for notifications → callback ack).
+- **AC**: the probe prints the full cycle (turn/started → history/entryAdded → entryUpdated →
+  turn/completed); `vibe-app-server` present in the CLI installation.
+- **Status**: done; the probe was run against the local installation (mistral-vibe 3.x).
 
-### F1 — Transport + minimalny czat (2–4 dni) ✅
+### F1 — Transport + minimal chat (2–4 days) ✅
 - `mistraldeck-appsrv`: spawn, initialize (callbackKinds: `["approval","user_input"]`),
-  string IDs, reader z segregacją Notification|ServerRequest|Response.
+  string IDs, reader with Notification|ServerRequest|Response dispatch.
 - `session/start` (kind NORMAL, agentConfig.cwd), `session/turn/enqueue`,
   `session/resume`, `session/list`, `session/read`.
-- Reduktor stanu: `PublicSessionState` → istniejący model wiadomości GUI
-  (adapter entry→AcpEvent: user/assistant/reasoning/effect/callback).
-- **AC**: nowa sesja + prompt + streaming odpowiedzi renderowany w istniejącym UI;
-  resume sesji pokazuje pełną historię bez buforowania replayu; przełączanie sesji działa.
+- State reducer: `PublicSessionState` → the existing GUI message model
+  (entry→AcpEvent adapter: user/assistant/reasoning/effect/callback).
+- **AC**: a new session + prompt + streamed response rendered in the existing UI;
+  resuming a session shows the full history without replay buffering; switching sessions works.
 
-### F2 — Callbacki: approvals + pytania (1–2 dni) ✅
-- Handler requestów serwera: `callback/call` → ack → decyzja użytkownika → `callback/result`.
-- Render `detail.kind == "approval"` i `user_input`.
-- **AC**: bash z wymogiem aprovalu pokazuje dialog; approve/deny → `callback/result`
-  akceptowany; pytanie agenta (ask) odpowiada; po reconnect `state.active_callbacks`
-  odtwarza oczekujące callbacki.
+### F2 — Callbacks: approvals + questions (1–2 days) ✅
+- Server-request handler: `callback/call` → ack → user decision → `callback/result`.
+- Rendering of `detail.kind == "approval"` and `user_input`.
+- **AC**: a bash call requiring approval shows a dialog; approve/deny → `callback/result`
+  accepted; an agent question (ask) gets answered; after a reconnect `state.active_callbacks`
+  restores pending callbacks.
 
-### F3 — Watermark + resync + reconnect (1–2 dni) ✅
-- `event_id` z każdej notyfikacji; detekcja cofnięcia/przeskoku; luka → pełny resync
-  `session/read` (snapshot autorytatywnie zastępuje stan).
-- Reconnect: restart procesu → initialize → resume → snapshot zastępuje stan.
-- **AC**: kill -9 procesu w trakcie tury → po reconnect GUI odtwarza stan spójnie;
-  test jednostkowy reduktora na sekwencje z luką.
+### F3 — Watermark + resync + reconnect (1–2 days) ✅
+- `event_id` from every notification; detection of regressions/jumps; a gap → full resync
+  via `session/read` (the snapshot authoritatively replaces state).
+- Reconnect: process restart → initialize → resume → snapshot replaces state.
+- **AC**: kill -9 of the process mid-turn → after reconnect the GUI restores state
+  consistently; a reducer unit test on sequences with a gap.
 
-### F4 — Konfiguracja runtime + chipy (1–2 dni) ✅
-- `runtime/read` + `agents/list` do pickerów (model/mode/thinking per sesja);
+### F4 — Runtime configuration + chips (1–2 days) ✅
+- `runtime/read` + `agents/list` for the pickers (model/mode/thinking per session);
   `session/agent/update` (agent_name), `config/model/write`.
-- `session/start` z `model`/`reasoningEffort`/`sessionOnly` — izolacja per sesja.
-- **AC**: przełączanie modelu w sesji A nie zmienia B; chipy wypełniane z RuntimeSnapshot.
+- `session/start` with `model`/`reasoningEffort`/`sessionOnly` — per-session isolation.
+- **AC**: switching the model in session A does not change session B; chips populated
+  from RuntimeSnapshot.
 
-### F5 — Kolejka, steer, interrupt, kompakty (1–2 dni) ✅
-- `session/turn/enqueue` (kolejka natywna); `turn/steer`, `turn/interrupt`
-  (expected_turn_id); obsługa `session/compacted`/`contextCleared`
-  (handoff old_session_id → przemapowanie ID).
-- **AC**: prompt w trakcie tury ląduje w kolejce CLI; interrupt przerywa; kompakcja
-  aktualizuje licznik kontekstu bez fake-toolcalla; sesja działa pod nowym ID.
+### F5 — Queue, steer, interrupt, compaction (1–2 days) ✅
+- `session/turn/enqueue` (native queue); `turn/steer`, `turn/interrupt`
+  (expected_turn_id); handling of `session/compacted`/`contextCleared`
+  (handoff old_session_id → remapping of IDs).
+- **AC**: a prompt sent mid-turn lands in the CLI queue; interrupt interrupts; compaction
+  updates the context counter without a fake tool-call; the session works under the new ID.
 
-### F6 — Statystyki i porządki (1 dzień) ✅
-- UsageBar ze `session/statsUpdated` + `token_usage`/`context_usage`;
-  runtime-zależność od unified store znika dla transportu appserver
-  (mistraldeck-vibe/stats zostaje jako import historii).
-- **AC**: koszty/tokens/ctx% zgodne z tym, co pokazuje oficjalny TUI.
+### F6 — Statistics and cleanup (1 day) ✅
+- UsageBar from `session/statsUpdated` + `token_usage`/`context_usage`;
+  the runtime dependency on the unified store disappears for the appserver transport
+  (mistraldeck-vibe/stats remains for history import).
+- **AC**: costs/tokens/ctx% match what the official TUI shows.
 
-### F7 — Dekomisja ACP (0,5 dnia) ✅
-- Flaga transportu: `appserver` (default) / `acp` (legacy) w
-  `~/.config/mistraldeck/config.json` (`"transport"`); ACP fallback dla starych CLI.
-- **AC**: pełen smoke na appserver; ACP ścieżka nadal kompiluje się i przechodzi
-  stare testy, ale nie jest domyślna.
+### F7 — ACP decommissioning (0.5 day) ✅
+- Transport flag: `appserver` (default) / `acp` (legacy) in
+  `~/.config/mistraldeck/config.json` (`"transport"`); ACP fallback for older CLIs.
+- **AC**: full smoke on appserver; the ACP path still compiles and passes the old tests,
+  but is not the default.
 
-## 4. Mapowanie konceptów ACP → app-server (zaimplementowane w worker.rs)
+## 4. Mapping of ACP concepts → app-server (implemented in worker.rs)
 
-| ACP (vibe-acp) | app-server | AcpEvent wynikowy |
+| ACP (vibe-acp) | app-server | Resulting AcpEvent |
 |---|---|---|
 | `initialize` | `initialize` (clientInfo + callbackKinds) | `Initialized` |
 | `session/new {cwd, mcpServers}` | `session/start {agentConfig: {cwd}}` | `SessionReady` |
 | `session/load {sessionId}` (replay) | `session/resume {session_id}` → snapshot | `SessionReady` + `SessionHistory` |
 | `session/prompt {prompt}` | `session/turn/enqueue {entries}` | — |
 | `session/update` (discriminator) | `history/entryAdded`/`entryUpdated` (patch) | `MessageChunk`/`ThinkingChunk`/`ToolCall*` |
-| `session/set_config_option` | `session/agent/update` + `config/model/write` | `SessionReady` (odświeżone chipy) |
+| `session/set_config_option` | `session/agent/update` + `config/model/write` | `SessionReady` (refreshed chips) |
 | `session/request_permission` | request `callback/call` (approval) + `callback/result` | `ToolApprovalRequest` |
 | `session/request_input` | request `callback/call` (user_input) + `callback/result` | `AskUserQuestion` |
 | `session/cancel` | `turn/interrupt {expected_turn_id}` | — |
 | `session/list` (SessionInfo) | `session/list` (PublicSession) | `SessionsList` |
 | `usage_update._meta` | `session/statsUpdated` + PublicSession.token_usage | `UsageUpdate` |
-| kompakt jako fake tool_call | `session/compacted` (handoff) | `SessionReady` (nowe ID) + `DebugLog` |
-| (brak) | `turn/queueUpdated` | `DebugLog` (v1; kolejka UI = natywna) |
+| compaction as a fake tool_call | `session/compacted` (handoff) | `SessionReady` (new ID) + `DebugLog` |
+| (none) | `turn/queueUpdated` | `DebugLog` (v1; the UI queue is native) |
 
-## 5. Ryzyka i zabezpieczenia
+## 5. Risks and mitigations
 
-| Ryzyko | Mitygacja |
+| Risk | Mitigation |
 |---|---|
-| **app-server to API wewnętrzne** — zmiany bez deprecation | pin wersji CLI w CI; smoke test po każdej aktualizacji paczki (sonda F0 w `scripts/`); flaga do ACP |
-| Metody experimental (`session/subagents/*`) | feature-detect po błędzie METHOD_NOT_FOUND (v1: nieużywane) |
-| Patche z `append` (non-RFC) | własny applier patchy (`patch.rs`); testy jednostkowe na wszystkich 5 op |
-| Handoff session_id (compact/contextCleared) | przemapowanie map engine po `old_session_id` (worker emituje `SessionReady` z nowym ID; engine `session_by_acp_id_mut`) |
-| Wiele sesji = wiele procesów | v1: proces na połączenie (jak w ACP); v2: `--multiplex` + pooling |
-| Serwer nie wysyła niezadeklarowanych callback kinds | deklarować tylko obsługiwane (`approval`, `user_input`); `connector_auth` dopiero po OAuth flow |
+| **app-server is an internal API** — changes without deprecation | pin the CLI version in CI; smoke test after every package update (the F0 probe in `scripts/`); a flag back to ACP |
+| Experimental methods (`session/subagents/*`) | feature-detect via the METHOD_NOT_FOUND error (v1: unused) |
+| Patches with `append` (non-RFC) | our own patch applier (`patch.rs`); unit tests on all 5 ops |
+| session_id handoff (compact/contextCleared) | remap the engine maps by `old_session_id` (the worker emits `SessionReady` with the new ID; engine `session_by_acp_id_mut`) |
+| Multiple sessions = multiple processes | v1: one process per connection (as in ACP); v2: `--multiplex` + pooling |
+| The server does not send undeclared callback kinds | declare only supported ones (`approval`, `user_input`); `connector_auth` only after the OAuth flow |
 
-## 6. Testy
+## 6. Tests
 
-1. **Jednostkowe** (`crates/mistraldeck-appsrv`): applier patchy (5 op), reduktor
-   (sekwencje notyfikacji z fixture'ów JSON, w tym luka event_id i handoff),
-   callback state machine, framing conn (segregacja Response|Notification|ServerRequest).
-2. **Integracyjne**: sonda (F0) jako skrypt markerowy; sesja → prompt → interrupt;
-   reconnect z utratą eventów → resync.
-3. **E2E GUI**: smoke mistraldeck-app na nowym transporcie; porównanie treści sesji
-   z oficjalnym Rust TUI (`vibe` → /resume, ta sama sesja).
-4. **Zgodność wsteczna**: flaga `transport=acp` → stare testy przechodzą bez zmian.
+1. **Unit** (`crates/mistraldeck-appsrv`): patch applier (5 ops), reducer
+   (notification sequences from JSON fixtures, including an event_id gap and handoff),
+   the callback state machine, conn framing (Response|Notification|ServerRequest dispatch).
+2. **Integration**: the probe (F0) as a marker script; session → prompt → interrupt;
+   reconnect with lost events → resync.
+3. **GUI E2E**: smoke of mistraldeck-app on the new transport; comparing session content
+   with the official Rust TUI (`vibe` → /resume, the same session).
+4. **Backward compatibility**: the `transport=acp` flag → the old tests pass unchanged.
 
-## 7. Struktura crate (zrealizowana)
+## 7. Crate structure (implemented)
 
 ```
 crates/mistraldeck-appsrv/src/
-├── conn.rs      # spawn + NDJSON + string IDs + routing Response|Notification|ServerRequest
-├── proto.rs     # modele wire (PublicSessionState, HistoryEntry, CallbackEntry, ...)
-├── patch.rs     # JSON-Patch z op append (nie-RFC6902)
-├── reducer.rs   # projekcja notyfikacji → AcpEvent (port logiki ClientProjection)
-├── worker.rs    # ApsHandle (drop-in za AcpHandle) + tłumaczenie AcpCommand
+├── conn.rs      # spawn + NDJSON + string IDs + Response|Notification|ServerRequest routing
+├── proto.rs     # wire models (PublicSessionState, HistoryEntry, CallbackEntry, ...)
+├── patch.rs     # JSON-Patch with the append op (non-RFC6902)
+├── reducer.rs   # projection of notifications → AcpEvent (a port of the ClientProjection logic)
+├── worker.rs    # ApsHandle (a drop-in for AcpHandle) + AcpCommand translation
 └── lib.rs
-scripts/probe_appserver.py   # sonda F0
+scripts/probe_appserver.py   # the F0 probe
 ```
