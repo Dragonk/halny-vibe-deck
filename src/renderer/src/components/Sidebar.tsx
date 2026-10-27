@@ -209,6 +209,12 @@ export default function Sidebar(): React.JSX.Element {
   }
 
   const handleSelectSession = async (id: string): Promise<void> => {
+    // v1.0.14: entering a session from the list is a navigation - the
+    // back gesture returns to the session list (the boot state), the
+    // app closes only from there (double back).
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      useStore.getState().pushBack(() => useStore.getState().setMobileSidebarOpen(true))
+    }
     setCurrentSessionId(id)
     setPendingNewSession(false)
     setCurrentView('chat')

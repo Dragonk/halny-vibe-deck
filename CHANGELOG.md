@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.14 — 2026-10-26
+
+### Fixed
+- **The back gesture skipped whole screens and could close the app.**
+  The navigation is now a strict LIFO stack (Inboxora-style): every
+  navigation pushes one layer - entering a session (back reopens the
+  session list), opening the dock (back closes it), opening a file
+  preview (back returns to the file list), entering edit mode (back
+  returns to the preview), opening Stats/History/Settings (back
+  returns to the chat). Closing a panel by any path removes its
+  layer, so the order always matches what the user sees. The app
+  closes only from the boot state - first back shows a toast,
+  a second back within 2 s confirms.
+
 ## 1.0.13 — 2026-10-26
 
 ### Fixed

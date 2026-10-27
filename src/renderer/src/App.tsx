@@ -764,13 +764,11 @@ export default function App(): React.JSX.Element {
     let lastBareBack = 0
     const onPop = (): void => {
       const st = useStore.getState()
-      const handled =
-        (st.mobileSidebarOpen && (st.setMobileSidebarOpen(false), true)) ||
-        (st.dockOpen &&
-          window.matchMedia('(max-width: 768px)').matches &&
-          (st.setDockOpen(false), true)) ||
-        (st.backStack.length > 0 && (st.popBack(), true))
-      if (handled) {
+      // v1.0.14: panels are back-stack layers themselves (managed by
+      // the store) - the LIFO order matches exactly what the user
+      // sees: edit -> preview -> file list -> dock -> session list.
+      if (st.backStack.length > 0) {
+        st.popBack()
         window.history.pushState({ nav: 'app' }, '')
         return
       }

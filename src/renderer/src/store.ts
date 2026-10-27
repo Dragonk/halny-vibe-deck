@@ -305,6 +305,15 @@ interface AppStore {
   importRemoteSessions: (remoteId: string, infos: RemoteSessionInfo[]) => void;
 }
 
+
+// v1.0.14: panel back-layers (mobile). A panel opened on the phone pushes
+// a "close it" layer onto the back stack; closing it by ANY path removes
+// that layer, so the LIFO order of previews/panels always matches what
+// the user sees. Module-level ids - not reactive state.
+const panelLayers: { sidebar?: number; dock?: number } = {}
+const isMobileViewport = (): boolean =>
+  typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches
+
 export const useStore = create<AppStore>((set, get) => ({
   config: defaultConfig,
   setConfig: (config) => set({ config, theme: config.theme, dockOpen: config.dockOpen, dockWidth: config.dockWidth }),
@@ -378,7 +387,23 @@ export const useStore = create<AppStore>((set, get) => ({
   streamingSessions: [],
   busySessions: [],
   mobileSidebarOpen: false,
-  setMobileSidebarOpen: (v) => set({ mobileSidebarOpen: v }),
+  setMobileSidebarOpen: (v) => {
+    const st = get();
+    if (v === st.mobileSidebarOpen) return;
+    set({ mobileSidebarOpen: v });
+    if (!isMobileViewport()) return;
+    // v1.0.14: the panel is a back-stack layer (opened -> closable by the
+    // back gesture; closed -> the layer is gone).
+    if (v && panelLayers.sidebar === undefined) {
+      panelLayers.sidebar = get().pushBack(() => {
+        panelLayers.sidebar = undefined;
+        get().setMobileSidebarOpen(false);
+      });
+    } else if (!v && panelLayers.sidebar !== undefined) {
+      get().removeBack(panelLayers.sidebar);
+      panelLayers.sidebar = undefined;
+    }
+  },
   markSessionBusy: (sessionId) =>
     set((s) => ({
       busySessions: s.busySessions.includes(sessionId) ? s.busySessions : [...s.busySessions, sessionId],
@@ -994,12 +1019,25 @@ export const useStore = create<AppStore>((set, get) => ({
   setDockOpen: (dockOpen) => {
     const cfg = get().config;
     set({ dockOpen, config: { ...cfg, dockOpen } });
+    if (isMobileViewport() && !dockOpen && panelLayers.dock !== undefined) {
+      get().removeBack(panelLayers.dock);
+      panelLayers.dock = undefined;
+    }
     window.api.config.save({ ...cfg, dockOpen }).catch(console.error);
   },
   ensureDockOpen: () => {
     if (get().dockOpen) return;
     const cfg = get().config;
     set({ dockOpen: true, config: { ...cfg, dockOpen: true } });
+    if (isMobileViewport() && panelLayers.dock === undefined) {
+      // v1.0.14: the dock is a back-stack layer on mobile; the LIFO
+      // order is automatic - a preview opened later pushed its layer
+      // after this one, so back pops the preview first, then this.
+      panelLayers.dock = get().pushBack(() => {
+        panelLayers.dock = undefined;
+        get().setDockOpen(false);
+      });
+    }
     window.api.config.save({ ...cfg, dockOpen: true }).catch(console.error);
   },
   dockWidth: defaultConfig.dockWidth,
@@ -1922,7 +1960,7 @@ export const useStore = create<AppStore>((set, get) => ({
   historyLoadedSessions: [],
   pushBack: (run) => {
     const id = Date.now() + Math.random();
-    set((s) => ({ backStack: [...s.backStack, { id, run }] }));
+    set((s) => ({ backStack: [...s.backStack.slice(-31), { id, run }] }));
     return id;
   },
   removeBack: (id) => set((s) => ({ backStack: s.backStack.filter((e) => e.id !== id) })),
