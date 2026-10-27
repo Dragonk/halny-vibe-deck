@@ -170,6 +170,11 @@ export default function Sidebar(): React.JSX.Element {
   // project (vibe must run in the right location); the bottom
   // "Choose folder..." button picks an arbitrary local folder.
   const startLocalDraft = (cwd?: string): void => {
+    // v1.0.15: the same back layer as entering an existing session -
+    // ANY entry from the list must make the back gesture return to it.
+    if (window.matchMedia('(max-width: 768px)').matches) {
+      useStore.getState().pushBack(() => useStore.getState().setMobileSidebarOpen(true))
+    }
     setMobileSidebarOpen(false)
     if (cwd) {
       const store = useStore.getState()

@@ -2034,6 +2034,15 @@ export const useStore = create<AppStore>((set, get) => ({
       (c: RemoteConnection) => c.id === remoteId,
     );
     if (!conn) return;
+    // v1.0.15: entering a remote session is the same navigation as a
+    // local one - the back gesture returns to the session list.
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(max-width: 768px)").matches
+    ) {
+      get().pushBack(() => get().setMobileSidebarOpen(true));
+      get().setMobileSidebarOpen(false);
+    }
     // v0.7.0: create the draft BEFORE starting the worker so the
     // SessionInitialized event can always link to it (multi-worker safe).
     const session = get().addSession(cwd);

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.15 — 2026-10-27
+
+### Fixed
+- **Every way of entering a session now registers a back layer.**
+  Starting a session with "+" (per-project, per-remote or the new
+  project picker) pushes the same "return to the session list"
+  layer as opening an existing one - previously only the
+  existing-session path did, so the back gesture could hit an
+  empty stack (toast / app close) right after starting a
+  session.
+
 ## 1.0.14 — 2026-10-26
 
 ### Fixed
