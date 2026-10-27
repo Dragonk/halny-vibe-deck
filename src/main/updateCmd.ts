@@ -363,6 +363,39 @@ export async function applyPortableUpdate(p: PortableApplyParams, killAfterMs: n
     /* best effort */
   }
   logUpdate("restarting app")
+  // v1.0.19: a systemd-managed install restarts THROUGH THE UNIT.
+  // Spawning the executable directly here creates an ORPHAN
+  // instance that holds the serve port forever: every later
+  // unit start fails with EADDRINUSE (no serving), unit
+  // restarts never take the port back, and two instances end
+  // up fighting over the user data dir. The manager is outside
+  // this process's cgroup, so the restart proceeds even when
+  // this helper gets reaped by the unit's stop.
+  const viaSystemd = await new Promise<boolean>((resolve) => {
+    try {
+      execFile("systemctl", ["--user", "is-active", "--quiet", "halny-vibe-deck"], (err) =>
+        resolve(!err),
+      )
+    } catch {
+      resolve(false)
+    }
+  })
+  if (viaSystemd) {
+    logUpdate("systemd unit active - restarting through it")
+    try {
+      const child = spawn(
+        "systemctl",
+        ["--user", "restart", "halny-vibe-deck"],
+        { detached: true, stdio: "ignore" },
+      )
+      child.on("error", (e) => logUpdate("unit restart failed: " + String(e)))
+      child.unref()
+    } catch (e) {
+      logUpdate("unit restart threw: " + String(e))
+    }
+    logUpdate("apply helper done in " + (Date.now() - t0) + " ms (systemd path)")
+    return
+  }
   try {
     const child = spawn(newExe, [], { detached: true, stdio: "ignore" })
     child.on("error", (e) => logUpdate("relaunch failed: " + String(e)))

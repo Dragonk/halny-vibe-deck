@@ -499,6 +499,51 @@ async function dispatchForWeb(ch: string, args: unknown[]): Promise<unknown> {
   return await Promise.resolve(handler(null as never, ...(callArgs as never[])))
 }
 
+// v1.0.19: the listening pid goes into a pidfile - the EADDRINUSE
+// recovery uses it to take the port back from an orphaned previous
+// instance (relaunched by an old update helper OUTSIDE the systemd
+// unit: unit restarts never rebind and serving silently dies).
+function servePidPath(): string {
+  return path.join(app.getPath("userData"), "serve.pid")
+}
+
+let recoveryAttempts = 0
+
+async function recoverServePort(): Promise<boolean> {
+  let pid = 0
+  try {
+    pid = parseInt(fs.readFileSync(servePidPath(), "utf-8").trim(), 10) || 0
+  } catch {
+    /* no pidfile - nothing to recover from */
+  }
+  if (pid && pid !== process.pid) {
+    let mine = false
+    try {
+      mine = fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8").includes("halny-vibe-deck")
+    } catch {
+      /* no /proc (Windows/mac) - never kill blind */
+    }
+    if (mine) {
+      console.log(`[serve] EADDRINUSE: killing orphaned previous instance pid ${pid}`)
+      try {
+        process.kill(pid, "SIGTERM")
+      } catch {
+        /* already gone */
+      }
+      await new Promise((r) => setTimeout(r, 1500))
+      try {
+        if (fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8")) {
+          process.kill(pid, "SIGKILL")
+        }
+      } catch {
+        /* gone after TERM */
+      }
+      await new Promise((r) => setTimeout(r, 500))
+    }
+  }
+  return recoveryAttempts < 3
+}
+
 export async function startServe(serve: ServeConfig, rendererDir: string): Promise<void> {
   if (isServeRunning()) throw new Error("Serve already running")
   if (!credentialsConfigured(serve)) {
@@ -649,8 +694,42 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
   server = https.createServer({ key: keyPem, cert: certPem }, reqHandler)
   server.listen(serve.port, () => {
     console.log(`[serve] HTTPS listening on https://0.0.0.0:${serve.port} (HTTP is not supported)`)
+    try {
+      fs.writeFileSync(servePidPath(), String(process.pid))
+    } catch {
+      /* best effort */
+    }
   })
   server.on("error", (err) => {
+    const e = err as NodeJS.ErrnoException
+    if (e.code === "EADDRINUSE") {
+      // v1.0.19: do not die silently - kill the orphaned previous
+      // instance (pidfile) and take the port back.
+      recoveryAttempts++
+      console.error("[serve] EADDRINUSE - recovering the port (attempt " + recoveryAttempts + ")")
+      void recoverServePort().then((ok) => {
+        if (!ok || !server) {
+          console.error("[serve] recovery failed - serving stays down")
+          server = null
+          return
+        }
+        setTimeout(() => {
+          try {
+            server!.listen(serve.port, () => {
+              console.log(`[serve] HTTPS recovered on https://0.0.0.0:${serve.port}`)
+              try {
+                fs.writeFileSync(servePidPath(), String(process.pid))
+              } catch {
+                /* best effort */
+              }
+            })
+          } catch {
+            server = null
+          }
+        }, 500)
+      })
+      return
+    }
     console.error("[serve] server error:", err.message)
     server = null
   })

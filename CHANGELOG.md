@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.19 — 2026-10-27
+
+### Fixed
+- **Serving silently dies after an in-app update (critical for
+  headless).** The Linux portable update helper relaunched the
+  executable DIRECTLY, outside the systemd unit: the orphan
+  instance holds the serve port forever, every later unit
+  start fails with `EADDRINUSE` (the unit runs but serves
+  nothing), restarts never take the port back, and two
+  instances fight over the user data dir. Clients hanging
+  on the orphan lost the WS whenever the orphan was
+  replaced, and the unit's instance never served.
+  - The update helper now restarts **through the systemd
+    unit** when one is active (the manager survives the
+    cgroup reap, so the restart always proceeds); the
+    direct relaunch stays for non-systemd installs.
+  - Serving now writes a **pidfile** and RECOVERS from
+    `EADDRINUSE`: the orphaned previous instance is
+    identified (via /proc cmdline - never killed blind)
+    and killed, and the port is rebound (up to 3 attempts).
+
 ## 1.0.18 — 2026-10-27
 
 ### Fixed
