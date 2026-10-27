@@ -691,7 +691,10 @@ fn update_app_windows(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .creation_flags(0x0000_0008) // DETACHED_PROCESS
+        // DETACHED_PROCESS | CREATE_NO_WINDOW — v1.0.3: without
+        // CREATE_NO_WINDOW the console-subsystem helper flashed a
+        // black terminal window during self-update.
+        .creation_flags(0x0800_0008)
         .spawn();
     if let Err(e) = spawned {
         // Leave a trace in the log - otherwise the app quits with no

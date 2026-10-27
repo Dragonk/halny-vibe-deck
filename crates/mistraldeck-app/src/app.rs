@@ -409,6 +409,7 @@ impl MistraldeckApp {
                 self.acp.send(AcpCommand::Prompt {
                     session_id: acp_session_id,
                     text,
+                    images: Vec::new(),
                 });
             }
             None => {
@@ -421,6 +422,7 @@ impl MistraldeckApp {
                     self.acp.send(AcpCommand::Prompt {
                         session_id: primed,
                         text,
+                        images: Vec::new(),
                     });
                 } else if self.priming {
                     // The primed session is still being created — its
@@ -715,6 +717,9 @@ impl MistraldeckApp {
                     self.debug_log.remove(0);
                 }
             }
+            // L1: setup/account events are lister-scoped; the
+            // desktop app consumes them through the engine snapshot.
+            _ => {}
         }
     }
 

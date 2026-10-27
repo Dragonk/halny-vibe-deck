@@ -431,6 +431,107 @@ fn default_remote_port() -> u16 {
     8080
 }
 
+// ---------------------------------------------------------------------------
+// L1: konto / logowanie (setup/status, account/read, identity/read)
+// ---------------------------------------------------------------------------
+
+/// `provider` z setup/status (raport §3.0; models/_setup.py).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SetupProviderView {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub api_base: String,
+    #[serde(default)]
+    pub api_key_env_var: String,
+    #[serde(default)]
+    pub browser_auth_base_url: String,
+    #[serde(default)]
+    pub browser_auth_api_base_url: String,
+    #[serde(default)]
+    pub browser_auth_allow_origin_rewrite: bool,
+}
+
+/// Seed wizarda: `setup/status`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SetupStatusView {
+    #[serde(default)]
+    pub provider: Option<SetupProviderView>,
+    #[serde(default)]
+    pub console_base_url: String,
+    #[serde(default)]
+    pub vibe_base_url: String,
+    #[serde(default)]
+    pub supports_browser_sign_in: bool,
+    #[serde(default)]
+    pub has_api_key: bool,
+    #[serde(default)]
+    pub pinned_console_url: Option<String>,
+    /// true gdy serwer nie zna metody (method_not_found) — UI degraduje się.
+    #[serde(default)]
+    pub unsupported: bool,
+}
+
+/// `AccountPlanView` (models.py:101): kind api|chat|mistral_code.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountPlanView {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+/// `AccountActionView` (models.py:96): kind switch_api_key|upgrade_to_pro + url.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountActionView {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub url: String,
+}
+
+/// `AccountApiKeyView` (models.py:112); accessScope: None na starszych backendach.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountApiKeyView {
+    #[serde(default)]
+    pub preview: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub access_scope: Option<String>,
+}
+
+/// `AccountView` (models.py:119-126) — JEDYNE źródło danych konta.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountView {
+    /// ready|missing_key|unauthorized|unavailable
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub plan: Option<AccountPlanView>,
+    #[serde(default)]
+    pub plan_offer: Option<AccountActionView>,
+    #[serde(default)]
+    pub rate_limit_action: Option<AccountActionView>,
+    #[serde(default)]
+    pub teleport_eligible: bool,
+    #[serde(default)]
+    pub api_key: Option<AccountApiKeyView>,
+    /// method_not_found na starym CLI
+    #[serde(default)]
+    pub unsupported: bool,
+}
+
+/// identity/read → /whoami (commands/simple.rs:232-280); pola tolerancyjne.
+/// UI czyta name/email/org z surowego JSONa.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct IdentityView {
+    #[serde(default)]
+    pub raw_json: String,
+}
+
 /// Full state snapshot served to freshly-connected UI clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -462,6 +563,15 @@ pub struct Snapshot {
     pub working_directory: String,
     pub preferred_model: Option<String>,
     pub config: UiConfig,
+    /// L1: konto (account/read) — None = jeszcze nie odpytane.
+    #[serde(default)]
+    pub account: Option<AccountView>,
+    /// L1: seed logowania (setup/status) — None = nie odpytane / stary CLI.
+    #[serde(default)]
+    pub setup: Option<SetupStatusView>,
+    /// L1: whoami (identity/read) — opcjonalne, do ustawień.
+    #[serde(default)]
+    pub identity: Option<IdentityView>,
 }
 
 impl Default for Snapshot {
@@ -486,6 +596,9 @@ impl Default for Snapshot {
             working_directory: String::new(),
             preferred_model: None,
             config: UiConfig::default(),
+            account: None,
+            setup: None,
+            identity: None,
         }
     }
 }

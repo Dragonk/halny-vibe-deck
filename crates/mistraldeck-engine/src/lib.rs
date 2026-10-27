@@ -6,11 +6,14 @@
 //! Every change is published on a broadcast bus so any number of UI
 //! clients stays in sync.
 
+pub mod auth_browser;
 pub mod config;
 pub mod remote;
 pub mod remote_vibe;
 pub mod updates;
 mod types;
+
+pub use auth_browser::{BrowserSignInFlow, PollOutcome};
 
 pub use config::{random_hex, AuthEntry, EngineConfig};
 pub use types::EngineState;
@@ -49,6 +52,17 @@ pub struct Engine {
     /// auth token -> (username, expires) — remote HTTPS sessions
     /// minted by serve.rs; 30-day sliding expiry.
     tokens: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    // --- L1: login & account (app-server global methods) ---
+    /// Browser sign-in flow in progress (PKCE verifier lives here).
+    signin_flow: Mutex<Option<auth_browser::BrowserSignInFlow>>,
+    /// Last `setup/status` seed (drives the login gate + wizard).
+    last_setup: Mutex<Option<mistraldeck_core::snapshot::SetupStatusView>>,
+    /// Last `account/read` view (banner, rate limit, settings).
+    last_account: Mutex<Option<mistraldeck_core::snapshot::AccountView>>,
+    /// Last `identity/read` (whoami, settings).
+    last_identity: Mutex<Option<mistraldeck_core::snapshot::IdentityView>>,
+    /// Last `setup/store-credential` outcome (apikey login server-fn).
+    last_store_outcome: Mutex<Option<(String, Option<String>)>>,
 }
 
 impl Engine {
@@ -63,6 +77,11 @@ impl Engine {
             tx,
             config: RwLock::new(cfg),
             tokens: Mutex::new(HashMap::new()),
+            signin_flow: Mutex::new(None),
+            last_setup: Mutex::new(None),
+            last_account: Mutex::new(None),
+            last_identity: Mutex::new(None),
+            last_store_outcome: Mutex::new(None),
         };
         let e: &'static Engine = ENGINE.get_or_init(|| engine);
         e.start_lister_pump();
@@ -102,6 +121,10 @@ impl Engine {
                                 AcpEvent::Initialized { .. } => {
                                     *self.global_status.lock().unwrap() = AcpStatus::Connected;
                                     self.global_error.lock().unwrap().clear();
+                                    // L1: seed login/account state right
+                                    // after the handshake (methods are
+                                    // global — no session needed).
+                                    self.setup_refresh();
                                     true
                                 }
                                 AcpEvent::Disconnected { .. } => {
@@ -118,6 +141,37 @@ impl Engine {
                                     *self.global_status.lock().unwrap() = AcpStatus::Error;
                                     *self.global_error.lock().unwrap() =
                                         format!("{context}: {message}");
+                                    true
+                                }
+                                // --- L1: setup / konto ---
+                                AcpEvent::SetupStatusReady { status } => {
+                                    *self.last_setup.lock().unwrap() = Some(status.clone());
+                                    true
+                                }
+                                AcpEvent::SetupStoreOutcome { outcome, detail } => {
+                                    *self.last_store_outcome.lock().unwrap() =
+                                        Some((outcome.clone(), detail.clone()));
+                                    // Chain: store-credential completed →
+                                    // submit-choices (domknięcie onboarding).
+                                    if outcome == "completed" {
+                                        self.lister.send(AcpCommand::SetupSubmitChoices);
+                                    }
+                                    false
+                                }
+                                AcpEvent::SetupChoicesOutcome { outcome, .. } => {
+                                    // Onboarding domknięty — odśwież status
+                                    // (hasApiKey) + konto.
+                                    if outcome == "completed" {
+                                        self.setup_refresh();
+                                    }
+                                    true
+                                }
+                                AcpEvent::IdentityReady { identity } => {
+                                    *self.last_identity.lock().unwrap() = Some(identity.clone());
+                                    false
+                                }
+                                AcpEvent::AccountReady { account } => {
+                                    *self.last_account.lock().unwrap() = Some(account.clone());
                                     true
                                 }
                                 _ => false,
@@ -304,6 +358,9 @@ impl Engine {
                 hidden_projects: cfg.hidden_projects.clone(),
                 remote_connections: cfg.remote_connections.clone(),
             },
+            account: self.last_account.lock().unwrap().clone(),
+            setup: self.last_setup.lock().unwrap().clone(),
+            identity: self.last_identity.lock().unwrap().clone(),
         }
     }
 
@@ -676,6 +733,16 @@ impl Engine {
                 session.messages.last().expect("just pushed").clone(),
             )
         };
+        // v1.0.8: image attachments travel as ACP image content blocks.
+        let images: Vec<mistraldeck_core::proto::PromptImage> = user_msg
+            .attachments
+            .iter()
+            .filter(|a| a.mime.starts_with("image/") && !a.data_base64.is_empty())
+            .map(|a| mistraldeck_core::proto::PromptImage {
+                data_base64: a.data_base64.clone(),
+                mime: a.mime.clone(),
+            })
+            .collect();
         self.publish(BusEvent::UserMessageAdded {
             local_session_id: key.clone(),
             message: user_msg,
@@ -696,6 +763,7 @@ impl Engine {
                             .send(AcpCommand::Prompt {
                                 session_id: acp_session_id,
                                 text,
+                                images,
                             })
                             .is_err()
                         {
@@ -743,6 +811,7 @@ impl Engine {
                                 !k.starts_with(&format!("{acp_session_id}|"))
                             });
                             slot.pending_prompt = Some(text);
+                            slot.pending_images = images;
                             slot.load_progress = Some(mistraldeck_core::snapshot::SessionLoadProgress {
                                 session_id: acp_session_id.clone(),
                                 count: 0,
@@ -778,6 +847,7 @@ impl Engine {
                         slot.busy = true;
                         slot.last_activity = std::time::Instant::now();
                         slot.pending_prompt = Some(text);
+                        slot.pending_images = images.clone();
                     }
                 }
                 None => {
@@ -794,6 +864,7 @@ impl Engine {
                             slot.busy = true;
                             slot.last_activity = std::time::Instant::now();
                             slot.pending_prompt = Some(text);
+                            slot.pending_images = images;
                         }
                     }
                 }
@@ -840,6 +911,14 @@ impl Engine {
                 })
                 .ok();
         }
+    }
+
+    /// v1.0.5: true while any session's turn is in flight — app/CLI
+    /// self-updates must be refused, because the relaunch would kill
+    /// live worker processes.
+    pub fn any_turn_in_flight(&self) -> bool {
+        let st = self.state.lock().unwrap();
+        st.slots.values().any(|s| s.busy)
     }
 
     pub fn approve(&self, request_id: String, option_id: String) {
@@ -983,6 +1062,136 @@ impl Engine {
         }
         *self.global_status.lock().unwrap() = AcpStatus::Disconnected;
         self.publish(BusEvent::StructureChanged);
+    }
+
+    // ---------------- L1: login & account ----------------
+
+    /// Login/account methods only exist on the app-server transport
+    /// (global methods, no session). The legacy ACP transport ignores
+    /// them — everything below refuses clearly instead of hanging.
+    fn lister_is_aps(&self) -> bool {
+        matches!(self.lister, TransportHandle::Aps(_))
+    }
+
+    fn aps_not_connected() -> String {
+        "app-server transport not connected (setup/* unavailable)".to_string()
+    }
+
+    /// `setup/status` + `identity/read` + `account/read` — the L1
+    /// preflow. Also called once right after the lister `Initialized`.
+    pub fn setup_refresh(&self) {
+        if !self.lister_is_aps() {
+            return;
+        }
+        self.lister.send(AcpCommand::SetupStatus);
+        self.lister.send(AcpCommand::IdentityRead);
+        self.lister.send(AcpCommand::AccountRead);
+    }
+
+    /// Provider name for `setup/store-credential` (None = server default).
+    fn provider_name(&self) -> Option<String> {
+        self.last_setup
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.provider.as_ref().map(|p| p.name.clone()))
+    }
+
+    /// Start the browser sign-in flow: PKCE begin (blocking curl).
+    /// Returns `(sign_in_url, expires_at_ms)` for the UI; the
+    /// verifier never leaves the engine.
+    pub fn login_browser_start(&self) -> Result<(String, i64), String> {
+        if !self.lister_is_aps() {
+            return Err(Self::aps_not_connected());
+        }
+        if *self.global_status.lock().unwrap() != AcpStatus::Connected {
+            return Err(Self::aps_not_connected());
+        }
+        let setup = self.last_setup.lock().unwrap().clone();
+        let Some(setup) = setup else {
+            // Seed not loaded yet — trigger it; the UI retries.
+            self.lister.send(AcpCommand::SetupStatus);
+            return Err("setup status not loaded yet — retry".to_string());
+        };
+        if setup.unsupported {
+            return Err("CLI does not support setup/* (method_not_found)".to_string());
+        }
+        if setup.pinned_console_url.is_some() {
+            // Login domain is pinned — the flow still runs, but the
+            // UI must not offer a custom domain. Kept as info only.
+        }
+        let base = setup
+            .provider
+            .map(|p| p.browser_auth_api_base_url)
+            .filter(|b| !b.is_empty())
+            .ok_or_else(|| "browser sign-in not supported by this provider".to_string())?;
+        let flow = auth_browser::browser_sign_in_begin(&base)?;
+        let url = flow.sign_in_url.clone();
+        let expires = flow.expires_at_ms;
+        *self.signin_flow.lock().unwrap() = Some(flow);
+        Ok((url, expires))
+    }
+
+    /// One poll step of the browser flow (blocking curl). On
+    /// `Completed` the api key is immediately sent to the transport
+    /// (`setup/store-credential`; `setup/submit-choices` is chained
+    /// by the event pump when the store outcome arrives).
+    pub fn login_browser_poll(&self) -> PollOutcome {
+        let mut guard = self.signin_flow.lock().unwrap();
+        let Some(flow) = guard.as_mut() else {
+            return PollOutcome::Failed("no sign-in flow in progress".to_string());
+        };
+        let outcome = auth_browser::browser_sign_in_poll(flow);
+        if let PollOutcome::Completed { api_key } = &outcome {
+            self.send_store_credential(&api_key, None);
+        }
+        // The flow is one-shot: terminal states clear it (a retry
+        // starts a fresh POST /vibe/sign-in).
+        if !matches!(outcome, PollOutcome::Pending) {
+            *guard = None;
+        }
+        outcome
+    }
+
+    /// Login with a pasted api key: `setup/store-credential`, then
+    /// (on `completed`, via the pump) `setup/submit-choices`. Blocks
+    /// briefly waiting for the store outcome so the server-fn can
+    /// return the exact error (env_var_error / save_error).
+    pub fn login_with_api_key(&self, api_key: &str, custom_domain: Option<&str>) -> Result<(String, Option<String>), String> {
+        if !self.lister_is_aps() {
+            return Err(Self::aps_not_connected());
+        }
+        if *self.global_status.lock().unwrap() != AcpStatus::Connected {
+            return Err(Self::aps_not_connected());
+        }
+        self.send_store_credential(api_key, custom_domain);
+        // Wait up to 5 s for the store outcome (worker round-trip).
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            if let Some((outcome, detail)) = self.last_store_outcome.lock().unwrap().clone() {
+                return Ok((outcome, detail));
+            }
+        }
+        Err("store-credential timed out".to_string())
+    }
+
+    fn send_store_credential(&self, api_key: &str, custom_domain: Option<&str>) {
+        // Reset so the waiter sees only the fresh outcome.
+        *self.last_store_outcome.lock().unwrap() = None;
+        self.lister.send(AcpCommand::SetupStoreCredential {
+            provider: self.provider_name(),
+            api_key: api_key.to_string(),
+            custom_domain: custom_domain.map(str::to_string),
+        });
+    }
+
+    /// Re-read account state (`account/read` + `identity/read`).
+    pub fn refresh_account(&self) {
+        if !self.lister_is_aps() {
+            return;
+        }
+        self.lister.send(AcpCommand::IdentityRead);
+        self.lister.send(AcpCommand::AccountRead);
     }
 
     /// Auto-close idle live sessions (Nexus v0.9.0): stop every slot whose
@@ -1217,6 +1426,7 @@ impl Engine {
                     slot.busy = false;
                     slot.last_activity = std::time::Instant::now();
                     slot.pending_prompt = None;
+                    slot.pending_images.clear();
                     slot.load_progress = None;
                     // The turn will never end on its own — clear the
                     // stopping marker (Nexus markSessionIdle).
@@ -1245,6 +1455,9 @@ impl Engine {
                     slot.error.clear();
                     // The wake finished: the resuming overlay disappears.
                     slot.load_progress = None;
+                    // L1: session up → re-read account state (the
+                    // sessionId-scoped `account/read` is fresher now).
+                    self.refresh_account();
                     slot.modes = modes;
                     slot.config_options = config_options.clone();
                     if let Some(i) = slot_session {
@@ -1333,7 +1546,11 @@ impl Engine {
                             // send fails (dead worker channel).
                             if slot
                                 .cmd
-                                .send(AcpCommand::Prompt { session_id, text })
+                                .send(AcpCommand::Prompt {
+                                    session_id,
+                                    text,
+                                    images: std::mem::take(&mut slot.pending_images),
+                                })
                                 .is_err()
                             {
                                 mark_prompt_failed(slot);
@@ -1407,6 +1624,7 @@ impl Engine {
                         }
                     } else {
                         slot.pending_prompt = None;
+                        slot.pending_images.clear();
                     }
                     if respawn.is_none() {
                         if let Some(i) = slot_session {
@@ -1594,12 +1812,31 @@ impl Engine {
                     params_json,
                     tool_name,
                 } => {
-                    slot.approval = Some(PendingApproval {
-                        request_id,
-                        method,
-                        params_json,
-                        tool_name,
-                    });
+                    // v1.0.6: in the built-in auto-approve mode ("yolo")
+                    // approve ourselves instead of surfacing the dialog.
+                    // Custom agents keep the manual approval flow.
+                    let auto = slot_session
+                        .and_then(|i| st.sessions.get(i))
+                        .map(|s| {
+                            s.last_mode.as_deref() == Some("auto-approve")
+                                || s.config_options
+                                    .iter()
+                                    .any(|o| o.id == "mode" && o.current_value == "auto-approve")
+                        })
+                        .unwrap_or(false);
+                    if auto {
+                        let _ = slot.cmd.send(AcpCommand::Approve {
+                            request_id,
+                            option_id: "allow_once".into(),
+                        });
+                    } else {
+                        slot.approval = Some(PendingApproval {
+                            request_id,
+                            method,
+                            params_json,
+                            tool_name,
+                        });
+                    }
                 }
                 AcpEvent::AskUserQuestion {
                     request_id,
@@ -1664,6 +1901,9 @@ impl Engine {
                 // Wildcard: must not move out of `event` (the usage
                 // mirror borrows it after the match).
                 AcpEvent::DebugLog(_) => {}
+                // L1: setup/account events are lister-scoped —
+                // slots never emit them.
+                _ => {}
             }
         }
         drop(guard);
@@ -1686,6 +1926,9 @@ impl Engine {
                     slot.busy = true;
                     slot.last_activity = std::time::Instant::now();
                     slot.pending_prompt = Some(prompt);
+                    // Respawn fallback re-sends text only (the
+                    // images were already rendered on the message).
+                    slot.pending_images.clear();
                 }
             }
         }
@@ -2053,6 +2296,7 @@ mod idle_reaper_tests {
                 .checked_sub(age)
                 .unwrap_or_else(std::time::Instant::now),
             pending_prompt: None,
+            pending_images: Vec::new(),
             pending_option: None,
             approval: None,
             question: None,
@@ -2181,6 +2425,7 @@ mod zombie_tests {
             busy,
             last_activity: std::time::Instant::now(),
             pending_prompt: None,
+            pending_images: Vec::new(),
             pending_option: None,
             approval: None,
             question: None,
@@ -2349,6 +2594,7 @@ mod prompt_unblock_tests {
             busy: true,
             last_activity: std::time::Instant::now(),
             pending_prompt: None,
+            pending_images: Vec::new(),
             pending_option: None,
             approval: None,
             question: None,
@@ -2361,7 +2607,11 @@ mod prompt_unblock_tests {
         };
         let failed = s
             .cmd
-            .send(AcpCommand::Prompt { session_id: "x".into(), text: "hi".into() })
+            .send(AcpCommand::Prompt {
+                session_id: "x".into(),
+                text: "hi".into(),
+                images: Vec::new(),
+            })
             .is_err();
         assert!(failed);
         mark_prompt_failed(&mut s);

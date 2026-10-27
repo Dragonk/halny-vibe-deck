@@ -1,7 +1,8 @@
 //! Root component: bootstrap (first snapshot) and the app shell
-//! (header + sidebar + view). No in-app login gate: the local server is
-//! trusted and the remote HTTPS listener authenticates with a /login page
-//! before the app is even served.
+//! (header + sidebar + view). L1 login gate: when `setup/status`
+//! reports no API key the LoginView replaces the Shell (TUI
+//! wizard parity); the remote HTTPS listener still authenticates
+//! with a /login page before the app is even served.
 
 use dioxus::prelude::*;
 
@@ -27,6 +28,19 @@ pub fn App() -> Element {
     if s.setup_needed && !s.setup_skipped {
         drop(s);
         return rsx! { components::setup::SetupView {} };
+    }
+    // L1: no API key (setup/status loaded, wizard-capable or not)
+    // or an explicit "sign in again" from Settings / rate limit —
+    // the login wizard replaces the Shell.
+    let login_gate = s
+        .snapshot
+        .setup
+        .as_ref()
+        .map(|st| !st.has_api_key)
+        .unwrap_or(false);
+    if login_gate || s.login_requested {
+        drop(s);
+        return rsx! { components::login::LoginView {} };
     }
     drop(s);
 

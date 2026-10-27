@@ -132,6 +132,86 @@ async fn reload_files(
     }
 }
 
+/// L1: read-only account rows (status, plan, key preview, whoami)
+/// for the General tab — data comes from `account/read` +
+/// `identity/read` via the snapshot (Nexus /whoami parity).
+fn account_rows(state: &Signal<ClientState>, lang: &str) -> Element {
+    let s = state.read();
+    let account = s.snapshot.account.clone();
+    let identity = s.snapshot.identity.clone();
+    drop(s);
+    let unsupported = account.as_ref().map(|a| a.unsupported).unwrap_or(false);
+    let row = |label: String, value: String| {
+        rsx! {
+            div { class: "updates-row",
+                div { class: "updates-info",
+                    span { class: "updates-name", "{label}" }
+                    span { class: "updates-versions", "{value}" }
+                }
+            }
+        }
+    };
+    let mut rows: Vec<Element> = Vec::new();
+    if unsupported || account.is_none() {
+        rows.push(rsx! {
+            div { class: "field-hint", "{tr(lang, \"accountUnsupported\")}" }
+        });
+        return rsx! { div { {rows.iter().cloned()} } };
+    }
+    let acc = account.expect("checked above");
+    rows.push(row(
+        tr(lang, "accountStatus").to_string(),
+        acc.status.clone(),
+    ));
+    if let Some(plan) = &acc.plan {
+        if !plan.title.is_empty() {
+            rows.push(row(tr(lang, "accountPlan").to_string(), plan.title.clone()));
+        }
+    }
+    if let Some(key) = &acc.api_key {
+        if !key.preview.is_empty() {
+            let mut v = key.preview.clone();
+            if !key.scope.is_empty() {
+                v.push_str(&format!(" · {}", key.scope));
+            }
+            if let Some(asx) = &key.access_scope {
+                v.push_str(&format!(" · {asx}"));
+            }
+            rows.push(row(tr(lang, "accountApiKeyPreview").to_string(), v));
+        }
+    }
+    if let Some(id) = &identity {
+        if !id.raw_json.is_empty() {
+            // Tolerant whoami: pick the usual fields out of the raw
+            // JSON, fall back to a trimmed dump.
+            let who = serde_json::from_str::<serde_json::Value>(&id.raw_json)
+                .ok()
+                .and_then(|v| {
+                    ["name", "email", "login", "user", "username"]
+                        .iter()
+                        .find_map(|k| {
+                            v.get(*k)
+                                .or_else(|| v.get("user").and_then(|u| u.get(*k)))
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_string)
+                        })
+                })
+                .unwrap_or_else(|| {
+                    let raw = id.raw_json.trim();
+                    if raw.len() > 120 {
+                        format!("{}…", &raw[..120])
+                    } else {
+                        raw.to_string()
+                    }
+                });
+            if !who.is_empty() {
+                rows.push(row(tr(lang, "accountWhoami").to_string(), who));
+            }
+        }
+    }
+    rsx! { div { {rows.iter().cloned()} } }
+}
+
 fn del_btn(mut on_click: impl FnMut() + 'static) -> Element {
     rsx! {
         button {
@@ -2492,6 +2572,43 @@ pub fn SettingsView() -> Element {
                         }
                     }
                     div { class: "field-hint", "{reconnect_hint}" }
+                }
+                // ---- Konto (L1; TUI /whoami + AccountView parity) ----
+                div { class: "settings-section-header",
+                    div { class: "settings-section-title", "{tr(&lang, \"accountSection\")}" }
+                }
+                {account_rows(&state, &lang)}
+                div { class: "updates-row",
+                    div { class: "updates-actions",
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let state = state;
+                                move |_| {
+                                    let state = state;
+                                    spawn(async move {
+                                        let _ = crate::api::api_setup_account_status(
+                                            token(&state),
+                                        )
+                                        .await;
+                                        crate::state::refresh(state).await;
+                                    });
+                                }
+                            },
+                            "{tr(&lang, \"accountRefresh\")}"
+                        }
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let state = state;
+                                move |_| {
+                                    let mut state = state;
+                                    state.write().login_requested = true;
+                                }
+                            },
+                            "{tr(&lang, \"accountReLogin\")}"
+                        }
+                    }
                 }
                 // ---- Updates (element 6; Nexus SettingsView general tab) ----
                 div { class: "settings-section-header",

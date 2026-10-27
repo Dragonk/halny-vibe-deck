@@ -2,6 +2,7 @@ pub mod chat;
 pub mod code_editor;
 pub mod dock;
 pub mod header;
+pub mod login;
 pub mod mobile;
 pub mod history;
 pub mod input;

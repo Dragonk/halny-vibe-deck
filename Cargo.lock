@@ -4723,6 +4723,7 @@ name = "mistraldeck"
 version = "1.99.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "calamine",
  "console_error_panic_hook",
  "dioxus",
@@ -4823,6 +4824,7 @@ name = "mistraldeck-engine"
 version = "1.99.0"
 dependencies = [
  "dirs 5.0.1",
+ "getrandom 0.2.17",
  "hex",
  "mistraldeck-acp",
  "mistraldeck-appsrv",

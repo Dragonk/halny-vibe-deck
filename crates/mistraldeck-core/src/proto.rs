@@ -17,6 +17,16 @@ pub struct AcpSessionInfo {
     pub start_time: String,
 }
 
+/// One image attached to a prompt — sent as an ACP `image` content
+/// block (v1.0.8: images must actually reach the LLM).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PromptImage {
+    /// Base64-encoded image bytes.
+    pub data_base64: String,
+    /// MIME type, e.g. `image/png`.
+    pub mime: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModeInfo {
     pub id: String,
@@ -190,6 +200,36 @@ pub enum AcpEvent {
     },
     /// Worker stdout/stderr noise for the debug panel.
     DebugLog(String),
+
+    // --- L1: setup / konto (metody globalne app-servera, nie sesyjne) ---
+    /// L1: odpowiedź setup/status; `unsupported` = method_not_found (stare CLI).
+    SetupStatusReady {
+        status: crate::snapshot::SetupStatusView,
+    },
+    /// L1: wynik zapisu klucza: "completed" | "env_var_error" | "save_error" (+detail).
+    SetupStoreOutcome {
+        outcome: String,
+        detail: Option<String>,
+    },
+    /// L1: wynik submit-choices: "completed" | "provider_config_error" (+failures).
+    SetupChoicesOutcome {
+        outcome: String,
+        failures: Vec<String>,
+    },
+    /// L1: odpowiedź identity/read (tolerancyjnie: surowy JSON → string).
+    IdentityReady {
+        identity: crate::snapshot::IdentityView,
+    },
+    /// L1: odpowiedź account/read.
+    AccountReady {
+        account: crate::snapshot::AccountView,
+    },
+    /// L1: tura zakończona błędem (rate_limit i in.) — z wire `turn.error`.
+    TurnFailed {
+        session_id: String,
+        code: String,
+        message: String,
+    },
 }
 
 /// Commands from the UI to the ACP worker.
@@ -222,6 +262,9 @@ pub enum AcpCommand {
     Prompt {
         session_id: String,
         text: String,
+        /// Image attachments turned into `image` content blocks.
+        #[serde(default)]
+        images: Vec<PromptImage>,
     },
     /// Handled with priority even while a prompt is streaming.
     Cancel {
@@ -242,4 +285,20 @@ pub enum AcpCommand {
         request_id: String,
         answer: String,
     },
+
+    // --- L1: setup / konto (metody globalne app-servera, nie sesyjne) ---
+    /// setup/status — seed wizarda (supportsBrowserSignIn, hasApiKey, browserAuth*).
+    SetupStatus,
+    /// setup/store-credential — zapis klucza (keyring / $VIBE_HOME/.env).
+    SetupStoreCredential {
+        provider: Option<String>,
+        api_key: String,
+        custom_domain: Option<String>,
+    },
+    /// setup/submit-choices — domknięcie onboarding (theme/console pozostają = "zostaw").
+    SetupSubmitChoices,
+    /// identity/read — /whoami (login, org).
+    IdentityRead,
+    /// account/read — AccountView (plan.title, planOffer, rateLimitAction, apiKey.preview).
+    AccountRead,
 }

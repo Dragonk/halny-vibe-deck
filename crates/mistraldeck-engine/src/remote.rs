@@ -70,7 +70,27 @@ pub fn ssh_run(conn: &RemoteConnection, remote_cmd: &str, timeout_ms: u64, stdin
         return SshRunResult::err("Empty ssh command".into());
     }
     let mut cmd = Command::new(&tokens[0]);
-    cmd.args(&tokens[1..]).arg(remote_cmd);
+    cmd.args(&tokens[1..]);
+    // v1.0.9: a first connect used to hang on the interactive host-key
+    // prompt until the timeout — accept new keys automatically and
+    // bound the TCP connect. Only for an OpenSSH binary and only when
+    // the user's own command passes no `-o` options.
+    if let Some(ssh_idx) = tokens
+        .iter()
+        .position(|t| std::path::Path::new(t).file_name().and_then(|n| n.to_str()) == Some("ssh"))
+    {
+        if !tokens.iter().any(|t| t == "-o") {
+            let mut opts: Vec<String> = tokens[..=ssh_idx].to_vec();
+            opts.extend(
+                ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
+                    .iter()
+                    .map(|s| s.to_string()),
+            );
+            opts.extend(tokens[ssh_idx + 1..].iter().cloned());
+            cmd.args(&opts[1..]);
+        }
+    }
+    cmd.arg(remote_cmd);
     cmd.stdin(if stdin_data.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

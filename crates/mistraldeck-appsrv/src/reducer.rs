@@ -166,6 +166,27 @@ impl Projection {
                     .as_ref()
                     .and_then(|t| t.stop_reason.clone())
                     .unwrap_or_else(|| "completed".into());
+                // L1: wire `turn.error` is `{code, message}` (plain
+                // strings never occur) — decode tolerantly and emit
+                // TurnFailed alongside PromptCompleted (the UI keeps
+                // its stop_reason handling untouched).
+                if let Some(err) = t.as_ref().and_then(|t| t.error.as_ref()) {
+                    let (code, message) = match err {
+                        Value::Object(m) => (
+                            m.get("code").and_then(Value::as_str).unwrap_or_default(),
+                            m.get("message").and_then(Value::as_str).unwrap_or_default(),
+                        ),
+                        Value::String(s) => ("", s.as_str()),
+                        _ => ("", ""),
+                    };
+                    if !code.is_empty() {
+                        events.push(AcpEvent::TurnFailed {
+                            session_id: self.session_id.clone(),
+                            code: code.to_string(),
+                            message: message.to_string(),
+                        });
+                    }
+                }
                 self.current_turn = None;
                 events.push(AcpEvent::PromptCompleted {
                     session_id: self.session_id.clone(),
@@ -627,6 +648,27 @@ mod tests {
             "eventId": 7, "turn": {"id": "t1", "status": {"type": "completed"},
                                    "stopReason": "end_turn"}}));
         assert!(evs.iter().any(|e| matches!(e, AcpEvent::PromptCompleted { stop_reason, .. } if stop_reason == "end_turn")));
+    }
+
+    /// L1: wire `turn.error` is an object `{code, message}` — the
+    /// rate-limit case must emit TurnFailed alongside PromptCompleted.
+    #[test]
+    fn turn_error_emits_turn_failed() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("turn/completed", &json!({
+            "eventId": 7, "turn": {"id": "t1", "status": {"type": "failed"},
+                                   "stopReason": "error",
+                                   "error": {"code": "rate_limit", "message": "Limit reached"}}}));
+        assert!(evs.iter().any(|e| matches!(e, AcpEvent::TurnFailed { code, message, .. }
+            if code == "rate_limit" && message == "Limit reached")));
+        // stop_reason still reaches the UI (no regression).
+        assert!(evs.iter().any(|e| matches!(e, AcpEvent::PromptCompleted { stop_reason, .. } if stop_reason == "error")));
+        // A turn without an error emits no TurnFailed.
+        let evs = p.consume("turn/completed", &json!({
+            "eventId": 8, "turn": {"id": "t2", "status": {"type": "completed"},
+                                   "stopReason": "end_turn"}}));
+        assert!(evs.iter().all(|e| !matches!(e, AcpEvent::TurnFailed { .. })));
         assert!(p.current_turn.is_none());
     }
 

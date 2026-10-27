@@ -44,6 +44,94 @@ pub async fn api_snapshot(token: String) -> Result<Snapshot, ServerFnError> {
     Ok(mistraldeck_engine::Engine::global().snapshot())
 }
 
+// ---------------------------------------------------------------------------
+// L1: login & account (setup/* + account/read + identity/read)
+// ---------------------------------------------------------------------------
+
+/// Result of `api_login_start`: the URL to open in the user's
+/// browser and the poll deadline (epoch ms) from the server.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LoginStartView {
+    pub sign_in_url: String,
+    pub expires_at_ms: i64,
+}
+
+/// Trigger the L1 preflow: `setup/status` + `identity/read` +
+/// `account/read`. Results arrive through the snapshot (`setup`,
+/// `identity`, `account` fields) — the UI just refreshes.
+#[server]
+pub async fn api_setup_account_status(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().setup_refresh();
+    Ok(())
+}
+
+/// Start the browser sign-in flow (PKCE begin — blocking curl on
+/// the engine side, so off the async runtime).
+#[server]
+pub async fn api_login_start(token: String) -> Result<LoginStartView, ServerFnError> {
+    check(&token)?;
+    let (sign_in_url, expires_at_ms) =
+        tokio::task::spawn_blocking(|| mistraldeck_engine::Engine::global().login_browser_start())
+            .await
+            .map_err(|e| ServerFnError::new(e.to_string()))?
+            .map_err(ServerFnError::new)?;
+    Ok(LoginStartView {
+        sign_in_url,
+        expires_at_ms,
+    })
+}
+
+/// One poll step of the browser flow (client calls every 3 s).
+/// Returns "pending" | "completed" | "expired" | "denied"; network
+/// / protocol failures come back as Err with the detail.
+#[server]
+pub async fn api_login_poll(token: String) -> Result<String, ServerFnError> {
+    check(&token)?;
+    let outcome = tokio::task::spawn_blocking(|| {
+        mistraldeck_engine::Engine::global().login_browser_poll()
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    match outcome {
+        mistraldeck_engine::PollOutcome::Pending => Ok("pending".to_string()),
+        mistraldeck_engine::PollOutcome::Completed { .. } => Ok("completed".to_string()),
+        mistraldeck_engine::PollOutcome::Expired => Ok("expired".to_string()),
+        mistraldeck_engine::PollOutcome::Denied => Ok("denied".to_string()),
+        mistraldeck_engine::PollOutcome::Failed(msg) => Err(ServerFnError::new(msg)),
+    }
+}
+
+/// Login with a pasted api key: `setup/store-credential` (+ the
+/// pump-chained `setup/submit-choices`). Err carries the outcome
+/// detail (`env_var_error` / `save_error`). Blocking wait — off
+/// the async runtime.
+#[server]
+pub async fn api_login_with_api_key(
+    token: String,
+    api_key: String,
+    custom_domain: Option<String>,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    if api_key.trim().is_empty() {
+        return Err(ServerFnError::new("api key is empty"));
+    }
+    let res = tokio::task::spawn_blocking(move || {
+        mistraldeck_engine::Engine::global().login_with_api_key(api_key.trim(), custom_domain.as_deref())
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    let (outcome, detail) = res.map_err(ServerFnError::new)?;
+    match outcome.as_str() {
+        "completed" => Ok(()),
+        // "unsupported" = method_not_found (old CLI) — degrade.
+        other => Err(ServerFnError::new(match detail {
+            Some(d) => format!("{other}: {d}"),
+            None => other.to_string(),
+        })),
+    }
+}
+
 #[server]
 pub async fn api_create_session(token: String) -> Result<(), ServerFnError> {
     check(&token)?;
@@ -219,11 +307,15 @@ pub async fn api_restore_project(token: String, wd: String) -> Result<(), Server
 fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Attachment>) {
     const MAX_FILE_BYTES: usize = 256 * 1024;
     const MAX_DIR_ENTRIES: usize = 400;
+    // v1.0.8 image contract (CLI parity): base64 images for the LLM.
+    const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+    const MAX_IMAGES: usize = 8;
 
     let engine = mistraldeck_engine::Engine::global();
     let cwd = engine.workdir();
     let mut expanded = text.to_string();
     let mut attachments: Vec<mistraldeck_core::types::Attachment> = Vec::new();
+    let mut image_count = 0usize;
 
     if cwd.is_empty() || !text.contains('@') {
         return (expanded, attachments);
@@ -249,7 +341,7 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
             continue; // no traversal outside the working directory
         }
         let full = root.join(rel);
-        let (block, content) = if is_dir {
+        let (block, content, mime, data_base64) = if is_dir {
             let listing = match std::fs::read_dir(&full) {
                 Ok(entries) => {
                     let mut names: Vec<String> = entries
@@ -278,6 +370,37 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
                     "<vibe_attach_directory><name>{name}</name><location>{raw}</location><content>{listing}</content></vibe_attach_directory>"
                 ),
                 listing,
+                String::new(),
+                String::new(),
+            )
+        } else if let Some(mime) = image_mime(&full) {
+            // v1.0.8: images must reach the LLM as base64 content
+            // blocks — inlining the bytes as text is useless. The
+            // marker stays in the text as a location note only.
+            if image_count >= MAX_IMAGES {
+                continue;
+            }
+            let bytes = match std::fs::metadata(&full).map(|m| m.len()) {
+                Ok(len) if len <= MAX_IMAGE_BYTES as u64 => std::fs::read(&full),
+                _ => continue, // missing or too large — leave marker as typed
+            };
+            let bytes = match bytes {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            image_count += 1;
+            let name = full
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| rel.to_string());
+            use base64::Engine as _;
+            (
+                format!(
+                    "<vibe_attach_image><name>{name}</name><location>{raw}</location></vibe_attach_image>"
+                ),
+                String::new(),
+                mime.to_string(),
+                base64::engine::general_purpose::STANDARD.encode(&bytes),
             )
         } else {
             let bytes = match std::fs::metadata(&full).map(|m| m.len()) {
@@ -297,12 +420,16 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
                     "<vibe_attach_file><name>{name}</name><location>{raw}</location><content>{content}</content></vibe_attach_file>"
                 ),
                 content,
+                String::new(),
+                String::new(),
             )
         };
         attachments.push(mistraldeck_core::types::Attachment {
             path: raw.to_string(),
             is_dir,
             content,
+            mime,
+            data_base64,
         });
         // Replace only the first occurrence of this marker (Nexus does the
         // same via String.replace).
@@ -312,6 +439,24 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
     }
 
     (expanded, attachments)
+}
+
+/// v1.0.8: image extensions forwarded to the LLM as base64 blocks
+/// (PNG/JPEG/GIF/WebP — the CLI contract).
+#[cfg(feature = "server")]
+fn image_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +568,13 @@ pub async fn api_upgrade_local_cli(
     token: String,
 ) -> Result<mistraldeck_core::snapshot::CliUpgradeResult, ServerFnError> {
     check(&token)?;
+    // v1.0.5: upgrading restarts the CLI — refused while a turn runs.
+    if mistraldeck_engine::Engine::global().any_turn_in_flight() {
+        return Ok(mistraldeck_core::snapshot::CliUpgradeResult {
+            version: None,
+            error: Some("A turn is running — update refused".into()),
+        });
+    }
     let acp_path = mistraldeck_engine::Engine::global().config().acp_path;
     tokio::task::spawn_blocking(move || mistraldeck_engine::updates::upgrade_local_cli(&acp_path))
         .await
@@ -437,6 +589,14 @@ pub async fn api_update_app(
     token: String,
 ) -> Result<mistraldeck_core::snapshot::AppUpdateResult, ServerFnError> {
     check(&token)?;
+    // v1.0.5: the relaunch kills live agent processes — refuse while
+    // any session's turn is in flight.
+    if mistraldeck_engine::Engine::global().any_turn_in_flight() {
+        return Ok(mistraldeck_core::snapshot::AppUpdateResult {
+            ok: false,
+            error: Some("A turn is running — update refused".into()),
+        });
+    }
     tokio::task::spawn_blocking(mistraldeck_engine::updates::update_app)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))

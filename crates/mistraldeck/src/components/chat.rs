@@ -68,6 +68,54 @@ pub fn ChatView() -> Element {
         0
     };
 
+    // L1: rate-limit banner — the last failed turn of this
+    // session (`turn.error`) + the server's rateLimitAction CTA
+    // (present only when an upgrade makes sense — plan API /
+    // Mistral Code; CHAT Pro holders get no CTA).
+    let turn_failed = state.read().turn_failed.clone();
+    let rate_limit_action = state
+        .read()
+        .snapshot
+        .account
+        .as_ref()
+        .filter(|a| !a.unsupported)
+        .and_then(|a| a.rate_limit_action.clone());
+    let rate_limit_el: Element = match turn_failed.as_ref() {
+        Some((code, message)) => {
+            let is_rate_limit = code == "rate_limit";
+            let cta = if is_rate_limit { rate_limit_action.clone() } else { None };
+            rsx! {
+                div { class: "chat-error-banner",
+                    span { "⚠" }
+                    " {tf(&lang, \"rateLimitBanner\", &[(\"message\", message.as_str())])}"
+                    if let Some(a) = cta {
+                        if a.kind == "switch_api_key" {
+                            button {
+                                class: "field-btn",
+                                style: "margin-left:12px;",
+                                onclick: move |_| {
+                                    let mut state = state.clone();
+                                    state.write().login_requested = true;
+                                },
+                                "{tr(&lang, \"rateLimitSwitchKey\")}"
+                            }
+                        } else {
+                            a {
+                                class: "field-btn",
+                                style: "margin-left:12px;color:var(--accent);text-decoration:none;",
+                                href: "{a.url}",
+                                target: "_blank",
+                                rel: "noopener",
+                                "{tr(&lang, \"rateLimitUpgrade\")}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None => VNode::empty(),
+    };
+
     // one-shot: install the mermaid MutationObserver renderer and the
     // markdown path-link click bridge (client only; the server SSR build
     // never evaluates JS)
@@ -146,6 +194,8 @@ pub fn ChatView() -> Element {
                     if !messages.is_empty() && !acp_error.is_empty() {
                         div { class: "chat-error-banner", span { "⚠" } " {acp_error}" }
                     }
+                    // L1: rate-limit banner (turn.error + rateLimitAction CTA).
+                    {rate_limit_el}
                     // Lazy-resume overlay (Nexus ChatView isResuming):
                     // spinner + label, chunk count once the replay streams.
                     if is_resuming {

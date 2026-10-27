@@ -136,8 +136,12 @@ pub struct Turn {
     pub id: Option<String>,
     #[serde(default)]
     pub status: Option<Value>,
+    /// Raw wire `turn.error` — an object `{code, message}` on current
+    /// backends (a plain string was never the real shape; the old
+    /// `Option<String>` parse silently dropped rate limits). Kept as
+    /// `Value` and decoded by the reducer.
     #[serde(default)]
-    pub error: Option<String>,
+    pub error: Option<Value>,
     #[serde(default, rename = "stopReason")]
     pub stop_reason: Option<String>,
 }

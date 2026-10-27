@@ -448,7 +448,11 @@ impl Worker {
                 cwd,
                 model,
             } => self.cmd_resume_session(&session_id, &cwd, model),
-            AcpCommand::Prompt { session_id, text } => self.cmd_prompt(&session_id, &text),
+            AcpCommand::Prompt {
+                session_id,
+                text,
+                images,
+            } => self.cmd_prompt(&session_id, &text, images),
             AcpCommand::Cancel { session_id } => {
                 let note = json!({
                     "jsonrpc": "2.0",
@@ -493,6 +497,9 @@ impl Worker {
             AcpCommand::AnswerQuestion { request_id, answer } => {
                 self.respond_to_agent(&request_id, json!({ "answer": answer }));
             }
+            // L1: setup/* + account methods are app-server-only
+            // (global methods); the legacy ACP transport ignores them.
+            _ => {}
         }
     }
 
@@ -742,7 +749,12 @@ impl Worker {
         });
     }
 
-    fn cmd_prompt(&mut self, session_id: &str, text: &str) {
+    fn cmd_prompt(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        images: Vec<mistraldeck_core::proto::PromptImage>,
+    ) {
         let Some(client) = self.client.as_mut() else {
             self.emit(AcpEvent::SessionError {
                 context: "prompt".into(),
@@ -750,8 +762,17 @@ impl Worker {
             });
             return;
         };
-        let params =
-            json!({ "sessionId": session_id, "prompt": [ { "type": "text", "text": text } ] });
+        // v1.0.8: image attachments go out as ACP image content
+        // blocks alongside the text block.
+        let mut prompt = vec![json!({ "type": "text", "text": text })];
+        for img in &images {
+            prompt.push(json!({
+                "type": "image",
+                "data": img.data_base64,
+                "mimeType": img.mime,
+            }));
+        }
+        let params = json!({ "sessionId": session_id, "prompt": prompt });
         match client.request("session/prompt", &params, REQUEST_TIMEOUT) {
             Ok(result) => {
                 let stop_reason = result

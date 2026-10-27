@@ -95,6 +95,9 @@ pub struct SlotState {
     pub last_activity: std::time::Instant,
     /// Prompt to send as soon as `session/new` completes.
     pub pending_prompt: Option<String>,
+    /// Images belonging to `pending_prompt` (v1.0.8) — kept beside
+    /// it so a lazy wake does not drop attachments.
+    pub pending_images: Vec<mistraldeck_core::proto::PromptImage>,
     /// Config option to apply as soon as `session/new` completes.
     pub pending_option: Option<(String, String)>,
     pub approval: Option<PendingApproval>,
@@ -207,6 +210,7 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
         busy: false,
         last_activity: std::time::Instant::now(),
         pending_prompt: None,
+        pending_images: Vec::new(),
         pending_option: None,
         approval: None,
         question: None,

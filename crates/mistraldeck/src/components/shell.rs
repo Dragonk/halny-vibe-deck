@@ -20,6 +20,7 @@ pub fn Shell() -> Element {
             spawn(async move {
                 dioxus::document::eval(RESIZE_JS);
                 dioxus::document::eval(crate::components::mobile::MOBILE_JS);
+                dioxus::document::eval(VISIBILITY_JS);
             });
         }
     }
@@ -85,6 +86,25 @@ pub fn Shell() -> Element {
             }
             if let Some(el) = approval_el {
                 {el}
+            }
+            // v1.0.17: JS half of the visibilitychange re-sync — the
+            // script clicks this hidden bridge button when the tab
+            // becomes visible again (same pattern as MobileBridges).
+            button {
+                id: "vd-visibility-resync",
+                style: "display:none",
+                onclick: {
+                    let state = state.clone();
+                    move |_| {
+                        let state = state.clone();
+                        async move {
+                            // Full snapshot + queued prompts: the tab
+                            // may have missed any number of events.
+                            refresh(state).await;
+                            crate::state::drain_queue(state).await;
+                        }
+                    }
+                },
             }
         }
     }
@@ -235,6 +255,22 @@ fn approval_el(
 /// Sidebar (120–400 px) and dock (260–720 px) resize handles, like Nexus
 /// Sidebar/Dock. The widths live in CSS vars on <html> (`.sidebar` and
 /// `.dock` read them) and persist in localStorage.
+/// v1.0.17: on return to a (frozen) tab the event stream may have
+/// dropped events while backgrounded — clicking the hidden
+/// `vd-visibility-resync` bridge button triggers a full snapshot
+/// refresh + queue drain in Rust.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const VISIBILITY_JS: &str = r#"
+(function () {
+  if (window.__vdVisibilityInit) return; window.__vdVisibilityInit = 1;
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible') return;
+    var btn = document.getElementById('vd-visibility-resync');
+    if (btn) btn.click();
+  });
+})();
+"#;
+
 #[cfg(any(feature = "web", feature = "desktop"))]
 const RESIZE_JS: &str = r#"
 (function () {
@@ -246,22 +282,28 @@ const RESIZE_JS: &str = r#"
   root.style.setProperty('--vd-dock-w', load('vdDockW', '400px'));
   function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
   function arm(handleSel, onDown) {
-    document.addEventListener('mousedown', function (e) {
+    // Pointer events (faa86ac): touch/PWA drags never fired mouse
+    // events, and a mouseup outside the window left the panel stuck.
+    // setPointerCapture keeps move/up on the handle even outside it.
+    document.addEventListener('pointerdown', function (e) {
       var h = e.target.closest ? e.target.closest(handleSel) : null;
       if (!h || e.button !== 0) return;
       e.preventDefault();
+      try { h.setPointerCapture(e.pointerId); } catch (err) {}
       onDown(e);
     });
   }
   function drag(startX, startW, apply, done) {
     function move(e) { apply(startX - e.clientX); }
     function up() {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', up);
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', up);
       done();
     }
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', up);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
   }
   // sidebar: drag right edge -> wider
   arm('.sidebar-resize-handle', function (e) {

@@ -16,3 +16,5 @@ dirs = { workspace = true }
 tokio = { version = "1", features = ["sync"] }
 sha2 = "0.10"
 hex = "0.4"
+# L1: PKCE verifier (64 B CSPRNG) — no other RNG in the graph.
+getrandom = "0.2"

@@ -31,6 +31,21 @@ pub fn Header() -> Element {
     };
     let activity_cls = format!("header-activity {activity_cls}");
 
+    // L1: account banner (TUI ui/banner + startup/banners): the
+    // plan title next to the status and the planOffer CTA link.
+    // Only for a ready account; unsupported CLI → no banner.
+    let account = state.read().snapshot.account.clone();
+    let (plan_title, plan_offer) = match account.as_ref() {
+        Some(acc) if acc.status == "ready" && !acc.unsupported => (
+            acc.plan.as_ref().map(|p| p.title.clone()).filter(|t| !t.is_empty()),
+            acc.plan_offer
+                .as_ref()
+                .map(|o| (o.kind.clone(), o.url.clone()))
+                .filter(|(_, u)| !u.is_empty()),
+        ),
+        _ => (None, None),
+    };
+
     let (theme_icon, theme_title) = match theme.as_str() {
         "auto" => ('\u{25D1}', tr(&lang, "themeAuto")),
         "dark" => ('\u{263c}', tr(&lang, "themeDark")),
@@ -86,6 +101,24 @@ pub fn Header() -> Element {
                         if status == "error" && !acp_error.is_empty() {
                             div { style: "margin-top:2px;color:#f87171;", "{acp_error}" }
                         }
+                    }
+                }
+                // L1: plan banner + planOffer CTA (Nexus banner parity).
+                if let Some(title) = &plan_title {
+                    span {
+                        class: "header-plan",
+                        style: "margin-left:8px;font-size:12px;color:var(--text-muted);white-space:nowrap;",
+                        "{title}"
+                    }
+                }
+                if let Some((kind, url)) = &plan_offer {
+                    a {
+                        class: "header-plan-cta",
+                        href: "{url}",
+                        target: "_blank",
+                        rel: "noopener",
+                        style: "margin-left:6px;font-size:12px;color:var(--accent);text-decoration:none;white-space:nowrap;",
+                        if kind == "upgrade_to_pro" { "{tr(&lang, \"rateLimitUpgrade\")}" } else { "{tr(&lang, \"rateLimitSwitchKey\")}" }
                     }
                 }
             }

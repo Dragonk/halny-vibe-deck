@@ -8,7 +8,7 @@ use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 use mistraldeck_core::proto::{AcpCommand, AcpEvent, AcpSessionInfo};
@@ -24,6 +24,21 @@ fn value_to_string(v: Option<Value>) -> String {
         Some(Value::Number(n)) => n.to_string(),
         _ => String::new(),
     }
+}
+
+/// First present string field (camelCase before snake_case fallbacks).
+fn str_field(v: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// First present bool field (missing = false — tolerant wire style).
+fn bool_field(v: &Value, keys: &[&str]) -> bool {
+    keys.iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_bool))
+        .unwrap_or(false)
 }
 
 pub const CLIENT_NAME: &str = "Halny Vibe Deck";
@@ -192,8 +207,12 @@ impl Worker {
             | AcpCommand::ResumeSession { session_id, .. } => {
                 self.resume_session(&session_id);
             }
-            AcpCommand::Prompt { session_id, text } => {
-                self.enqueue(&session_id, &text);
+            AcpCommand::Prompt {
+                session_id,
+                text,
+                images,
+            } => {
+                self.enqueue(&session_id, &text, images);
             }
             AcpCommand::Cancel { .. } => self.interrupt(),
             AcpCommand::SetConfigOption {
@@ -209,6 +228,16 @@ impl Worker {
                 request_id,
                 answer,
             } => self.answer(&request_id, &answer),
+            // --- L1: setup / konto (metody globalne, idą przed sesją) ---
+            AcpCommand::SetupStatus => self.setup_status(),
+            AcpCommand::SetupStoreCredential {
+                provider,
+                api_key,
+                custom_domain,
+            } => self.store_credential(provider.as_deref(), &api_key, custom_domain.as_deref()),
+            AcpCommand::SetupSubmitChoices => self.submit_choices(),
+            AcpCommand::IdentityRead => self.read_identity(),
+            AcpCommand::AccountRead => self.read_account(),
         }
     }
 
@@ -275,16 +304,19 @@ impl Worker {
 
     /// Request/response with the timeout, pumping the inbox while
     /// waiting so notifications keep flowing in order (response
-    /// boundary — docs/appserver-protocol.md §10).
-    fn call(&mut self, method: &str, params: Value, context: &str) -> Result<Value> {
+    /// boundary — docs/appserver-protocol.md §10). The error carries
+    /// the raw RPC `(code, message)` so callers can do feature
+    /// detection (`method_not_found` / -32601, L1).
+    fn call_res(&mut self, method: &str, params: Value, context: &str) -> Result<Value, (i64, String)> {
         if self.conn.is_none() {
-            bail!("{context}: not connected");
+            return Err((-32000, format!("{context}: not connected")));
         }
         let id = self
             .conn
             .as_ref()
             .expect("checked")
-            .request(method, params)?;
+            .request(method, params)
+            .map_err(|e| (-32000, format!("{context}: {e:#}")))?;
         let (tx, rx) = channel();
         self.pending
             .lock()
@@ -306,23 +338,26 @@ impl Worker {
                             }
                             Ok(v)
                         }
-                        Err((code, message)) => {
-                            Err(anyhow!("{context}: {message} ({code})"))
-                        }
+                        Err((code, message)) => Err((code, format!("{context}: {message}"))),
                     };
                 }
                 Ok(_) => {} // routed elsewhere
                 Err(_) => {}
             }
             if self.conn.is_none() {
-                bail!("{context}: connection gone");
+                return Err((-32000, format!("{context}: connection gone")));
             }
             if Instant::now() > deadline {
                 self.pending.lock().expect("pending").remove(&id);
-                bail!("{context}: request timed out");
+                return Err((-32000, format!("{context}: request timed out")));
             }
             std::thread::sleep(Duration::from_millis(15));
         }
+    }
+
+    fn call(&mut self, method: &str, params: Value, context: &str) -> Result<Value> {
+        self.call_res(method, params, context)
+            .map_err(|(_code, message)| anyhow!("{message}"))
     }
 
     fn list_sessions(&mut self) {
@@ -400,7 +435,19 @@ impl Worker {
         }
     }
 
-    fn enqueue(&mut self, session_id: &str, text: &str) {
+    fn enqueue(
+        &mut self,
+        session_id: &str,
+        text: &str,
+        images: Vec<mistraldeck_core::proto::PromptImage>,
+    ) {
+        // TODO(v1.0.8 app-server parity): images are dropped here.
+        // The app-server wire shape for an inline image is uncertain —
+        // appserver-protocol.md §6 gives `{"type":"image","attachment":{...}}`
+        // while the TUI uses `ContentBlock {type:"image", uri, mediaType}`;
+        // the exact inline-source payload (`source: {kind:"inline", ...}`)
+        // needs verification against protocol.py before enabling.
+        let _ = &images;
         let params = json!({
             "sessionId": session_id,
             "entries": [
@@ -510,6 +557,159 @@ impl Worker {
         }
     }
 
+    // -------------------------------------------------------------------
+    // L1: setup/* + identity/read + account/read (metody globalne —
+    // działają po samym Start+initialize, bez sesji; TUI woła je tak samo).
+    // Feature detection: method_not_found (-32601) = stary CLI → pole
+    // `unsupported` zamiast SessionError (raport §5).
+    // -------------------------------------------------------------------
+
+    fn is_method_not_found(code: i64, message: &str) -> bool {
+        code == -32601 || message.contains("method_not_found")
+    }
+
+    fn setup_status(&mut self) {
+        let res = match self.call_res("setup/status", json!({}), "setup/status") {
+            Ok(v) => v,
+            Err((code, message)) => {
+                if Self::is_method_not_found(code, &message) {
+                    self.emit(AcpEvent::SetupStatusReady {
+                        status: mistraldeck_core::snapshot::SetupStatusView {
+                            unsupported: true,
+                            ..Default::default()
+                        },
+                    });
+                } else {
+                    self.error("setup/status", message);
+                }
+                return;
+            }
+        };
+        self.emit(AcpEvent::SetupStatusReady {
+            status: map_setup_status(&res),
+        });
+    }
+
+    fn store_credential(
+        &mut self,
+        provider: Option<&str>,
+        api_key: &str,
+        custom_domain: Option<&str>,
+    ) {
+        let mut params = json!({ "apiKey": api_key });
+        if let Some(p) = provider {
+            params["provider"] = json!(p);
+        }
+        if let Some(d) = custom_domain {
+            if !d.is_empty() {
+                params["customDomain"] = json!(d);
+            }
+        }
+        let res = match self.call_res("setup/store-credential", params, "setup/store-credential") {
+            Ok(v) => v,
+            Err((code, message)) => {
+                if Self::is_method_not_found(code, &message) {
+                    self.emit(AcpEvent::SetupStoreOutcome {
+                        outcome: "unsupported".into(),
+                        detail: None,
+                    });
+                } else {
+                    self.error("setup/store-credential", message);
+                }
+                return;
+            }
+        };
+        self.emit(AcpEvent::SetupStoreOutcome {
+            outcome: str_field(&res, &["outcome"]),
+            detail: res
+                .get("detail")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
+    }
+
+    fn submit_choices(&mut self) {
+        let res = match self.call_res("setup/submit-choices", json!({}), "setup/submit-choices") {
+            Ok(v) => v,
+            Err((code, message)) => {
+                if Self::is_method_not_found(code, &message) {
+                    self.emit(AcpEvent::SetupChoicesOutcome {
+                        outcome: "unsupported".into(),
+                        failures: Vec::new(),
+                    });
+                } else {
+                    self.error("setup/submit-choices", message);
+                }
+                return;
+            }
+        };
+        self.emit(AcpEvent::SetupChoicesOutcome {
+            outcome: str_field(&res, &["outcome"]),
+            failures: res
+                .get("failures")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .map(|f| {
+                            f.as_str().map(str::to_string).unwrap_or_else(|| f.to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
+    }
+
+    fn read_identity(&mut self) {
+        let res = match self.call_res("identity/read", json!({}), "identity/read") {
+            Ok(v) => v,
+            Err((code, message)) => {
+                if Self::is_method_not_found(code, &message) {
+                    self.emit(AcpEvent::IdentityReady {
+                        identity: mistraldeck_core::snapshot::IdentityView::default(),
+                    });
+                } else {
+                    self.error("identity/read", message);
+                }
+                return;
+            }
+        };
+        self.emit(AcpEvent::IdentityReady {
+            identity: mistraldeck_core::snapshot::IdentityView {
+                raw_json: serde_json::to_string(&res).unwrap_or_default(),
+            },
+        });
+    }
+
+    fn read_account(&mut self) {
+        // `{sessionId}` wg raportu (AccountView request); gdy brak sesji —
+        // puste params (serwer przyjmuje, TUI woła po starcie sesji).
+        let params = if self.proj.session_id.is_empty() {
+            json!({})
+        } else {
+            json!({ "sessionId": self.proj.session_id })
+        };
+        let res = match self.call_res("account/read", params, "account/read") {
+            Ok(v) => v,
+            Err((code, message)) => {
+                if Self::is_method_not_found(code, &message) {
+                    self.emit(AcpEvent::AccountReady {
+                        account: mistraldeck_core::snapshot::AccountView {
+                            unsupported: true,
+                            ..Default::default()
+                        },
+                    });
+                } else {
+                    self.error("account/read", message);
+                }
+                return;
+            }
+        };
+        let acct = res.get("account").cloned().unwrap_or(res.clone());
+        self.emit(AcpEvent::AccountReady {
+            account: map_account(&acct),
+        });
+    }
+
     /// F3: full resync — the authoritative snapshot replaces the
     /// projection state (missed notifications / stale cursor).
     fn resync(&mut self) {
@@ -519,5 +719,171 @@ impl Worker {
             return;
         }
         self.resume_session(&id);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// L1: tolerant wire → view mapping (pure, unit-tested against
+// fixture shapes from docs/tui-capabilities-report.md §2/§3).
+// ---------------------------------------------------------------------------
+
+/// `setup/status` → [`SetupStatusView`] (camelCase with snake_case
+/// fallbacks; missing bools = false, missing strings = "").
+pub(crate) fn map_setup_status(res: &Value) -> mistraldeck_core::snapshot::SetupStatusView {
+    let provider = res.get("provider").filter(|p| p.is_object()).map(|p| {
+        mistraldeck_core::snapshot::SetupProviderView {
+            name: str_field(p, &["name"]),
+            api_base: str_field(p, &["apiBase", "api_base"]),
+            api_key_env_var: str_field(p, &["apiKeyEnvVar", "api_key_env_var"]),
+            browser_auth_base_url: str_field(p, &["browserAuthBaseUrl", "browser_auth_base_url"]),
+            browser_auth_api_base_url: str_field(
+                p,
+                &["browserAuthApiBaseUrl", "browser_auth_api_base_url"],
+            ),
+            browser_auth_allow_origin_rewrite: bool_field(
+                p,
+                &["browserAuthAllowOriginRewrite", "browser_auth_allow_origin_rewrite"],
+            ),
+        }
+    });
+    mistraldeck_core::snapshot::SetupStatusView {
+        provider,
+        console_base_url: str_field(res, &["consoleBaseUrl", "console_base_url"]),
+        vibe_base_url: str_field(res, &["vibeBaseUrl", "vibe_base_url"]),
+        supports_browser_sign_in: bool_field(
+            res,
+            &["supportsBrowserSignIn", "supports_browser_sign_in"],
+        ),
+        has_api_key: bool_field(res, &["hasApiKey", "has_api_key"]),
+        pinned_console_url: res
+            .get("pinnedConsoleUrl")
+            .or_else(|| res.get("pinned_console_url"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        unsupported: false,
+    }
+}
+
+/// `account/read` body (the `account` object or the bare response)
+/// → [`AccountView`] (models.py:119-126; `accessScope` absent on
+/// older backends → None, never a render blocker).
+pub(crate) fn map_account(acct: &Value) -> mistraldeck_core::snapshot::AccountView {
+    let plan = acct.get("plan").filter(|p| p.is_object()).map(|p| {
+        mistraldeck_core::snapshot::AccountPlanView {
+            kind: str_field(p, &["kind"]),
+            name: str_field(p, &["name"]),
+            title: str_field(p, &["title"]),
+        }
+    });
+    let action = |keys: &[&str]| {
+        keys.iter().find_map(|k| acct.get(*k)).filter(|a| a.is_object()).map(|a| {
+            mistraldeck_core::snapshot::AccountActionView {
+                kind: str_field(a, &["kind"]),
+                url: str_field(a, &["url"]),
+            }
+        })
+    };
+    mistraldeck_core::snapshot::AccountView {
+        status: str_field(acct, &["status"]),
+        plan,
+        plan_offer: action(&["planOffer", "plan_offer"]),
+        rate_limit_action: action(&["rateLimitAction", "rate_limit_action"]),
+        teleport_eligible: bool_field(acct, &["teleportEligible", "teleport_eligible"]),
+        api_key: acct
+            .get("apiKey")
+            .or_else(|| acct.get("api_key"))
+            .filter(|k| k.is_object())
+            .map(|k| mistraldeck_core::snapshot::AccountApiKeyView {
+                preview: str_field(k, &["preview"]),
+                scope: str_field(k, &["scope"]),
+                access_scope: k
+                    .get("accessScope")
+                    .or_else(|| k.get("access_scope"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            }),
+        unsupported: false,
+    }
+}
+
+#[cfg(test)]
+mod l1_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Report §3.0 — the full setup/status fixture shape.
+    #[test]
+    fn parses_setup_status_fixture() {
+        let v = json!({
+            "provider": {"name": "mistral", "apiBase": "https://api.mistral.ai/v1",
+                         "apiKeyEnvVar": "MISTRAL_API_KEY",
+                         "browserAuthBaseUrl": "https://console.mistral.ai",
+                         "browserAuthApiBaseUrl": "https://api.mistral.ai",
+                         "browserAuthAllowOriginRewrite": false},
+            "consoleBaseUrl": "https://console.mistral.ai",
+            "vibeBaseUrl": "https://code.mistral.ai",
+            "activeModel": "m", "theme": "dark",
+            "supportsBrowserSignIn": true,
+            "hasApiKey": false,
+            "enableSystemTrustStore": false,
+            "pinnedConsoleUrl": null
+        });
+        let s = map_setup_status(&v);
+        assert_eq!(s.provider.as_ref().unwrap().name, "mistral");
+        assert_eq!(
+            s.provider.as_ref().unwrap().browser_auth_api_base_url,
+            "https://api.mistral.ai"
+        );
+        assert!(s.supports_browser_sign_in);
+        assert!(!s.has_api_key);
+        assert!(s.pinned_console_url.is_none());
+        assert!(!s.unsupported);
+    }
+
+    #[test]
+    fn setup_status_missing_fields_defaults() {
+        let s = map_setup_status(&json!({}));
+        assert!(s.provider.is_none());
+        assert!(!s.supports_browser_sign_in && !s.has_api_key);
+        assert_eq!(s.console_base_url, "");
+    }
+
+    /// Report §2 — the full AccountView fixture, plus null actions
+    /// and a missing accessScope ("None on older backends").
+    #[test]
+    fn parses_account_fixture_and_variants() {
+        let full = json!({
+            "status": "ready",
+            "plan": {"kind": "chat", "name": "Pro", "title": "[Subscription] Pro"},
+            "planOffer": {"kind": "switch_api_key", "url": "…/code/extensions?focus=key"},
+            "rateLimitAction": {"kind": "upgrade_to_pro", "url": "https://admin.mistral.ai/…"},
+            "teleportEligible": true,
+            "apiKey": {"preview": "abc…****", "scope": "vibe", "accessScope": "personal_and_shared"}
+        });
+        let a = map_account(&full);
+        assert_eq!(a.status, "ready");
+        assert_eq!(a.plan.as_ref().unwrap().title, "[Subscription] Pro");
+        assert_eq!(a.plan_offer.as_ref().unwrap().kind, "switch_api_key");
+        assert_eq!(a.rate_limit_action.as_ref().unwrap().kind, "upgrade_to_pro");
+        assert_eq!(a.api_key.as_ref().unwrap().access_scope.as_deref(), Some("personal_and_shared"));
+
+        let minimal = json!({
+            "status": "missing_key", "plan": null, "planOffer": null,
+            "rateLimitAction": null, "apiKey": {"preview": "x…"}
+        });
+        let a = map_account(&minimal);
+        assert_eq!(a.status, "missing_key");
+        assert!(a.plan.is_none() && a.plan_offer.is_none() && a.rate_limit_action.is_none());
+        let k = a.api_key.unwrap();
+        assert_eq!(k.preview, "x…");
+        assert!(k.access_scope.is_none());
+    }
+
+    #[test]
+    fn method_not_found_detection() {
+        assert!(Worker::is_method_not_found(-32601, "setup/status: method_not_found"));
+        assert!(Worker::is_method_not_found(-1, "error: method_not_found"));
+        assert!(!Worker::is_method_not_found(-32602, "invalid params"));
+        assert!(!Worker::is_method_not_found(-32000, "not connected"));
     }
 }

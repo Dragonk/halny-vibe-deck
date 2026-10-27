@@ -120,6 +120,13 @@ pub struct Attachment {
     pub path: String,
     pub is_dir: bool,
     pub content: String,
+    /// Image attachments only (v1.0.8): MIME type and base64 payload
+    /// forwarded to the LLM as an ACP `image` content block. Empty
+    /// for text/directory attachments.
+    #[serde(default)]
+    pub mime: String,
+    #[serde(default)]
+    pub data_base64: String,
 }
 
 /// Who authored a chat message.
