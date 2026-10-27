@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.16 — 2026-10-27
+
+### Fixed
+- **"Resume failed: Connection closed" after a server restart.** A
+  transport hiccup (the app restarting while a session was being
+  resumed, a WS blip) rejected the pending session/load and left a
+  dead-end error banner with an empty chat. Both resume paths (the
+  sidebar open + the send-time reviver) now retry automatically
+  (up to 4 attempts, 3 s apart) while the web bridge reconnects -
+  a session opened during an app update resumes on its own once
+  the server is back.
+
 ## 1.0.15 — 2026-10-27
 
 ### Fixed

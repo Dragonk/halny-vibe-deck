@@ -815,7 +815,16 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             // v0.13.15: raise the replay guard so streaming/replay events
             // from this load cannot leak into other sessions mid-resume.
             useStore.getState().setPendingLoadSessionId(acpSessId)
-            await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
+            // v1.0.16: one retry on a transport hiccup (server restart
+            // / WS blip) instead of a dead-end "Resume failed" banner.
+            try {
+              await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
+            } catch (lerr) {
+              const lmsg = String((lerr as Error)?.message ?? lerr)
+              if (!/Connection closed|app server was lost|Request failed/.test(lmsg)) throw lerr
+              await new Promise((r) => setTimeout(r, 3000))
+              await window.api.acp.loadSession(acpSessId, sessionWd, rid ?? undefined, hasRetryCfg ? retryCfg : undefined)
+            }
             useStore.getState().setPendingLoadSessionId(null)
             useStore.getState().markSessionLive(currentSess.id)
             // v0.13.15: the replay replaced the whole message array, so the

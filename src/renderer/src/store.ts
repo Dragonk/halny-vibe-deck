@@ -279,7 +279,7 @@ interface AppStore {
   ) => void;
   /** v1.0.11: sessions whose history was loaded from disk (per client). */
   historyLoadedSessions: string[];
-  loadAcpSession: (localSessionId: string) => Promise<void>;
+  loadAcpSession: (localSessionId: string, internalAttempt?: number) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
   // ---- v0.6.0/v0.7.0: remote SSH connections ----
@@ -1703,7 +1703,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);
   },
 
-  loadAcpSession: async (localSessionId) => {
+  loadAcpSession: async (localSessionId, attempt) => {
     const session = get().sessions.find((s) => s.id === localSessionId);
     if (!session?.acpSessionId) return;
     const acpSessionId = session.acpSessionId;
@@ -1771,6 +1771,19 @@ export const useStore = create<AppStore>((set, get) => ({
         if (sess?.loading) st.updateSession(localSessionId, { loading: false });
       }, 620_000);
     } catch (err) {
+      // v1.0.16: a transport hiccup (server restart while resuming, WS
+      // blip) rejects the load with "Connection closed" - RETRY instead
+      // of a dead-end "Resume failed" banner. The web bridge reconnects
+      // within ~3 s, so a few short attempts cover the restart window.
+      const msg = String((err as Error)?.message ?? err);
+      const transportHiccup =
+        /Connection closed|app server was lost|Request failed/.test(msg);
+      const attemptN = attempt ?? 1;
+      if (transportHiccup && attemptN < 4) {
+        console.error("[store] ACP session/load transport hiccup, retrying:", msg);
+        await new Promise((r) => setTimeout(r, 3000));
+        return get().loadAcpSession(localSessionId, attemptN + 1);
+      }
       console.error("[store] ACP session/load failed:", err);
       get().setPendingLoadSessionId(null);
       get().updateSession(localSessionId, { loading: false });
@@ -1780,7 +1793,7 @@ export const useStore = create<AppStore>((set, get) => ({
       if (!rid) await get().loadVibeSessionMessages(localSessionId);
       else {
         get().setAcpStatus("error");
-        get().setAcpError("Resume failed: " + String((err as Error)?.message ?? err));
+        get().setAcpError("Resume failed: " + msg);
       }
     }
   },
