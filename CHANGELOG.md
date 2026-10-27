@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.20 — 2026-10-27
+
+### Fixed
+- **A dead draft session no longer dead-ends the chat.** After a
+  cancelled turn (e.g. an MCP-OAuth login waiting in flight) the CLI
+  session could be really gone - the next send failed with "ACP session
+  does not exist" / "Resume failed" and nothing could be delivered.
+  For a draft with no AI messages yet the send now RECOVERS: it relinks
+  the draft to a fresh ACP session (with the recorded model/mode/
+  thinking) and delivers the prompt there - the sidebar entry and the
+  message stay, nothing splits. Sessions with real history still
+  surface the error (no silent chat splits).
+
+### Documented
+- **MCP OAuth over SSH works from the chat**: `/mcp login <alias>` sent
+  as a normal message reaches the CLI (an ACP command), which streams
+  the authentication URL - open it in the local browser, complete the
+  login and the session continues ("authenticated."). While the login
+  turn waits for your browser, the session is busy - that is the
+  expected state; use stop only to abandon the login.
+
 ## 1.0.19 — 2026-10-27
 
 ### Fixed

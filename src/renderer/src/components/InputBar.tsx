@@ -843,6 +843,41 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, promptImages, userMsgPayload)
           } catch (loadErr) {
             useStore.getState().setPendingLoadSessionId(null)
+            // v1.0.20: for an (almost) EMPTY DRAFT the old "surface the
+            // error" rule is a dead end: the CLI session may be really
+            // gone (a cancelled MCP-OAuth login turn, a worker restart).
+            // Relink the draft to a FRESH session and deliver the prompt
+            // there - no history can be split: the draft never had any.
+            const nearEmpty = !currentSess.messages.some((m) => m.sender === 'ai')
+            if (nearEmpty) {
+              console.error('[InputBar] dead draft session - relinking:', loadErr)
+              try {
+                unlinkAcpSession(currentSess.id)
+                const relinkCfg = {
+                  model: currentSess.lastModel,
+                  mode: currentSess.lastMode,
+                  thinking: currentSess.lastThinking,
+                }
+                const hasRelinkCfg = !!(relinkCfg.model || relinkCfg.mode || relinkCfg.thinking)
+                await window.api.acp.newSession(sessionWd, rid ?? undefined, hasRelinkCfg ? relinkCfg : undefined)
+                // wait for the SessionInitialized link (as the first-message
+                // branch does) - an unaddressed prompt must never be sent
+                let linked = useStore.getState().currentSession()
+                for (let w = 0; w < 25 && !(linked && linked.acpSessionId); w++) {
+                  // eslint-disable-next-line no-await-in-loop
+                  await new Promise((resolve) => setTimeout(resolve, 200))
+                  linked = useStore.getState().currentSession()
+                }
+                if (!linked?.acpSessionId) throw new Error('relinked session did not initialize')
+                useStore.getState().markSessionLive(currentSess.id)
+                useStore.getState().markSessionBusy(currentSess.id)
+                await window.api.acp.sendPrompt(promptText, linked.acpSessionId, rid ?? undefined, promptImages, userMsgPayload)
+                setSessionStarting(false)
+                return
+              } catch (relinkErr) {
+                console.error('[InputBar] draft relink failed:', relinkErr)
+              }
+            }
             // v0.13.11: never fall back to a new session here. The old
             // fallback silently created a fresh ACP session and sent the
             // prompt into it, splitting the chat into a duplicate sidebar
