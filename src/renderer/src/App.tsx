@@ -760,27 +760,56 @@ export default function App(): React.JSX.Element {
   // browser history leave the app.
   useEffect(() => {
     if (!isWebMode()) return
-    window.history.replaceState({ nav: 'app' }, '')
+    // v1.0.18 (audit of the v1.0.14 failure): a layer pushed WITHOUT a
+    // history entry is invisible to the Android back gesture - with an
+    // empty history stack the PWA closes (or reloaded through the
+    // /login 302 -> boot state). The documented PWA contract: forward
+    // navigation pushes an entry (store.pushBack does it now), popstate
+    // pops exactly one layer WITHOUT re-pushing (the browser already
+    // consumed the entry), and a guard entry below the app + a
+    // double-back window make the exit intentional:
+    // back=preview, back=file list, ..., back=session list (boot),
+    // back=toast, back again=app closes.
+    window.history.replaceState({ nav: 0 }, '')
+    window.history.pushState({ nav: 'guard' }, '')
     let lastBareBack = 0
-    const onPop = (): void => {
+    const onPop = (ev: PopStateEvent): void => {
       const st = useStore.getState()
-      // v1.0.14: panels are back-stack layers themselves (managed by
-      // the store) - the LIFO order matches exactly what the user
-      // sees: edit -> preview -> file list -> dock -> session list.
+      // v1.0.18: reconcile by the LANDED history entry - a manual
+      // panel close (menu/swipe) consumed its layer without a
+      // popstate, so the back gesture may land on an entry whose
+      // layer is already gone; pop only layers pushed AFTER the
+      // landed one.
+      const landed = (ev.state as { nav?: number | string } | null)?.nav
+      if (typeof landed === 'number' && landed > 0) {
+        const stack = st.backStack
+        let stale = 0
+        for (let i = stack.length - 1; i >= 0; i--) {
+          if (stack[i].id > landed) stale++
+          else break
+        }
+        if (stale > 0) {
+          useStore.setState({ backStack: stack.slice(0, stack.length - stale) })
+        }
+        return
+      }
       if (st.backStack.length > 0) {
+        // Landed on the guard/base entry: the top layer's state was
+        // skipped past - run its restore (one layer per gesture).
         st.popBack()
-        window.history.pushState({ nav: 'app' }, '')
         return
       }
       const now = Date.now()
       if (now - lastBareBack < 2000) {
-        // Confirmed double-back: let the default happen (PWA closes).
+        // Confirmed double-back from the boot state: close the app.
+        window.history.back()
         return
       }
       lastBareBack = now
       setBackToast(true)
       window.setTimeout(() => setBackToast(false), 2000)
-      window.history.pushState({ nav: 'app' }, '')
+      // Re-arm the guard so this press never exits the app.
+      window.history.pushState({ nav: 'guard' }, '')
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)

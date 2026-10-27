@@ -2000,9 +2000,39 @@ export const useStore = create<AppStore>((set, get) => ({
   pushBack: (run) => {
     const id = Date.now() + Math.random();
     set((s) => ({ backStack: [...s.backStack.slice(-31), { id, run }] }));
+    // v1.0.18: EVERY layer is a real browser-history entry. The
+    // documented PWA contract: the Android back button/gesture pops a
+    // history entry and fires popstate - with an empty history stack it
+    // closes the app. A layer without a history entry is invisible to
+    // back (the v1.0.14 bug: the stack never grew, back exited the app
+    // or reloaded through the /login redirect).
+    try {
+      if ((window as { __NEXUS_WEB__?: boolean }).__NEXUS_WEB__) {
+        window.history.pushState({ nav: id }, "");
+      }
+    } catch {
+      /* not a web context - desktop uses preload, no history */
+    }
     return id;
   },
-  removeBack: (id) => set((s) => ({ backStack: s.backStack.filter((e) => e.id !== id) })),
+  removeBack: (id) => {
+    const st = get();
+    const wasTop =
+      st.backStack.length > 0 && st.backStack[st.backStack.length - 1].id === id;
+    set({ backStack: st.backStack.filter((e) => e.id !== id) });
+    // v1.0.18: removing the TOP layer (a manual close: the menu
+    // button, the in-editor X) must also consume its history entry,
+    // or the next back gesture desyncs by one step.
+    if (wasTop) {
+      try {
+        if ((window as { __NEXUS_WEB__?: boolean }).__NEXUS_WEB__) {
+          window.history.back();
+        }
+      } catch {
+        /* not a web context */
+      }
+    }
+  },
   popBack: () => {
     const st = get();
     const top = st.backStack[st.backStack.length - 1];

@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.0.18 — 2026-10-27
+
+### Fixed
+- **The back gesture in the installed PWA closed the app or reloaded
+  through /login instead of going one view back.** Full audit of the
+  navigation contract per the documented PWA behaviour ("installed
+  PWA with no history: back closes the app"): every forward
+  navigation must PUSH a history entry. The previous implementation
+  registered view layers only in the app store and never pushed
+  history entries on forward navigation, so the browser stack
+  stayed empty and every back press fell out of the app (or
+  into the /login 302 redirect - a full reload landing on the
+  boot state).
+
+  Now the documented contract is implemented end to end:
+  - every layer pushes a real history entry (store.pushBack),
+  - popstate pops exactly ONE layer, reconciled against the
+    landed entry (`event.state.nav`) - manual panel closes
+    (menu/swipe) consume their entry too (removeBack), so the
+    stack never desyncs,
+  - a guard entry + a 2 s window: back from the boot state
+    shows a toast; a second back within 2 s closes the app.
+
+  The full gesture path: edit → preview → file list → dock →
+  session list → toast → double-back closes.
+
 ## 1.0.17 — 2026-10-27
 
 ### Fixed
