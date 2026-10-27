@@ -447,17 +447,53 @@ export default function App(): React.JSX.Element {
           if (queue.length > 0 && localId) {
             const nextMsg = queue[0]
             store.removeFromMessageQueue(nextMsg.id)
-            store.addUserMessage(nextMsg.content)
+            // v1.0.21: deterministic id + echo payload - other clients
+            // (phone) must see the queued message too.
+            const qid = 'q-' + nextMsg.id
+            store.addUserMessage(nextMsg.content, undefined, qid)
             const sess = store.sessions.find((s) => s.id === localId)
             const promptText = sess?.contextSummary
               ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
               : nextMsg.content
             if (store.pendingLoadSessionId !== acpSessId) markSessionBusy(localId)
             const rid = (d.remoteId as string | undefined) ?? null
-            window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined).catch((err: Error) => {
-              setAcpError(err.message)
-              if (store.pendingLoadSessionId !== acpSessId) markSessionIdle(localId)
-            })
+            // v1.0.21: the worker may be DEAD here (a hung turn - e.g. an
+            // MCP-OAuth login - was just stopped; the ssh worker died with
+            // it). Deliver with the SAME recovery as the send-time
+            // reviver: revive the worker, restore (or recreate) the CLI
+            // session, then send - a queued slash command (/mcp login)
+            // must reach the agent, not die as a raw error.
+            void (async () => {
+              try {
+                await store.ensureAcpWorker(rid, sess?.workingDirectory || '')
+                try {
+                  await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, undefined, {
+                    id: qid,
+                    text: nextMsg.content,
+                  })
+                } catch (sendErr) {
+                  const m = String((sendErr as Error)?.message ?? sendErr)
+                  if (!/not started|not running|No active session|Session not found|No target session/.test(m)) {
+                    throw sendErr
+                  }
+                  // The CLI session is gone with the worker - restore it
+                  // from disk (or recreate when the session never had
+                  // history) and deliver.
+                  await window.api.acp
+                    .loadSession(acpSessId, sess?.workingDirectory || '.', rid ?? undefined)
+                    .catch(() =>
+                      window.api.acp.newSession(sess?.workingDirectory || '.', rid ?? undefined),
+                    )
+                  await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, undefined, {
+                    id: qid,
+                    text: nextMsg.content,
+                  })
+                }
+              } catch (err: unknown) {
+                setAcpError((err as Error)?.message ?? String(err))
+                if (store.pendingLoadSessionId !== acpSessId) markSessionIdle(localId)
+              }
+            })()
           }
           break
         }

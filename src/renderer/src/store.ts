@@ -1360,14 +1360,41 @@ export const useStore = create<AppStore>((set, get) => ({
       const promptText = session.contextSummary
         ? `${session.contextSummary}\n\nUser: ${msg.content}`
         : msg.content;
-      get().addUserMessage(msg.content);
+      // v1.0.21: deterministic id + echo payload (other clients see it).
+      const qid = "q-" + msg.id;
+      get().addUserMessage(msg.content, undefined, qid);
       get().markSessionBusy(session.id);
-      window.api.acp
-        .sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined)
-        .catch((err: Error) => {
+      // v1.0.21: the worker may be dead here (a hung turn was just
+      // stopped) - revive + restore the session before delivering,
+      // exactly like the queue flush recovery in App.
+      void (async () => {
+        try {
+          await get().ensureAcpWorker(session.remoteId ?? null, session.workingDirectory || "");
+          try {
+            await window.api.acp.sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined, undefined, {
+              id: qid,
+              text: msg.content,
+            });
+          } catch (sendErr) {
+            const m = String((sendErr as Error)?.message ?? sendErr);
+            if (!/not started|not running|No active session|Session not found|No target session/.test(m)) {
+              throw sendErr;
+            }
+            await window.api.acp
+              .loadSession(acpSessionId, session.workingDirectory || ".", session.remoteId ?? undefined)
+              .catch(() =>
+                window.api.acp.newSession(session.workingDirectory || ".", session.remoteId ?? undefined),
+              );
+            await window.api.acp.sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined, undefined, {
+              id: qid,
+              text: msg.content,
+            });
+          }
+        } catch (err: unknown) {
           get().markSessionIdle(session.id);
-          set({ acpError: err.message });
-        });
+          set({ acpError: (err as Error)?.message ?? String(err) });
+        }
+      })();
       return;
     }
     set({ messageQueue: [msg, ...messageQueue.filter((m) => m.id !== id)] });

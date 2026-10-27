@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.21 — 2026-10-27
+
+### Fixed
+- **A queued message died with the worker after a stop.** The exact
+  MCP-over-SSH deadlock: the agent's turn hangs (the MCP server waits
+  for OAuth), the `/mcp login <alias>` command goes to the queue (the
+  session is busy - correct), the user hits stop - and the turn-end
+  queue flush sent the command with NO recovery: the worker had died
+  with the hung turn, so the flush surfaced the raw
+  "Remote ACP worker not started" error and the command was lost.
+
+  Both delivery paths (the turn-end queue flush in App and the
+  force-send button in the store) now use the SAME recovery as the
+  send-time reviver: revive the worker, restore the CLI session from
+  disk (or recreate it when it never had history), then deliver.
+  Queued messages also carry the deterministic echo id now, so other
+  clients (the phone) see them too.
+
 ## 1.0.20 — 2026-10-27
 
 ### Fixed
