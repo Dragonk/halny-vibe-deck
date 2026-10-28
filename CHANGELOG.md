@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.35 — 2026-10-28
+
+### Fixed
+
+- **A model/mode change the CLI silently refuses is now visible instead of
+  silently ignored.** When session/set_config_option fails (for example the
+  CLI process does not know the requested model, so it answers with a
+  JSON-RPC error), the chip no longer keeps the optimistic value: the previous
+  setting is restored, a red banner explains what failed and why, and the
+  main process logs the refused set_config_option with its error code. Before,
+  the failure was swallowed: the chip showed the new model while the session
+  kept running on the old one.
+- **Main-side verification that a model change actually applied.** The parsed
+  set_config_option confirmation is now checked for model changes: if the CLI
+  acknowledges the request but the running model is still the old one, an
+  error is thrown so the UI can revert and inform.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.34...v1.0.35
+
 ## 1.0.34 — 2026-10-28
 
 ### Fixed

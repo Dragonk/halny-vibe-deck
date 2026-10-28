@@ -1207,6 +1207,17 @@ export class AcpManager {
     if (confirmed.length > 0) {
       this.emit({ type: 'ConfigOptionsUpdate', data: { sessionId: sid, configOptions: confirmed } })
     }
+    // v1.0.35: verify the option actually took hold. A long-lived worker
+    // can refuse a change without the client noticing (e.g. a model that is
+    // missing from the catalog the app-server loaded at startup) - the user
+    // then sees a chip the CLI silently ignored. Throw so callers surface
+    // the failure instead of assuming success.
+    const applied = confirmed.find((o) => o.id === key)
+    if (key === 'model' && applied && applied.currentValue !== value) {
+      throw new Error(
+        'CLI did not apply model=' + value + ' (still ' + applied.currentValue + ')'
+      )
+    }
   }
 
   async getContextSummary(messages: Array<{ role: string; content: string }>): Promise<string> {

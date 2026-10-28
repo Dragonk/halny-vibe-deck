@@ -745,7 +745,14 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle("acp:set-config-option", async (_e, key: string, value: string, sessionId?: string, remoteId?: string) => {
-    await getManager(remoteId).setConfigOption(key, value, sessionId)
+    try {
+      await getManager(remoteId).setConfigOption(key, value, sessionId)
+    } catch (err) {
+      // v1.0.35: a refused option change (e.g. a model unknown to the
+      // running worker) was invisible in headless serve mode - log it.
+      console.log('[ACP] set-config-option failed:', key, '=', value, String((err as Error)?.message ?? err))
+      throw err
+    }
   })
 
   ipcMain.handle("acp:approve-tool", (_e, requestId: string, optionId: string, remoteId?: string) => {

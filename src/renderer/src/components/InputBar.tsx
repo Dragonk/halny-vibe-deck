@@ -1267,7 +1267,25 @@ export default function InputBar({ config }: Props): React.JSX.Element {
         // applied when the next session starts (syncSessionChips), so this
         // specific failure is expected and must not alarm the user.
         if (key === 'mode' && /Unsupported config option/.test(String(err?.message ?? err))) return
-        console.error(err)
+        // v1.0.35: a refused option change must be visible and must not
+        // leave the chip showing a value the CLI ignored (e.g. a model the
+        // running worker does not know). Revert the optimistic chip and the
+        // recorded value, and surface the error in the header.
+        if (sess) {
+          const revert =
+            key === 'model'
+              ? { lastModel: sess.lastModel }
+              : key === 'mode'
+                ? { lastMode: sess.lastMode }
+                : { lastThinking: sess.lastThinking }
+          useStore.getState().updateSession(sess.id, revert)
+        }
+        if (key === 'model') setCurrentModel(sess?.lastModel ?? '')
+        if (key === 'mode') setCurrentMode(sess?.lastMode ?? '')
+        if (key === 'thinking') setCurrentThinking(sess?.lastThinking ?? '')
+        useStore.getState().setAcpError(
+          'Failed to apply ' + key + ' = ' + value + ': ' + String(err?.message ?? err)
+        )
       })
   }
 
