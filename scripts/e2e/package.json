@@ -1,0 +1,11 @@
+{
+  "name": "halny-vibe-deck-stable-e2e",
+  "private": true,
+  "description": "Playwright golden e2e suite for the stable (Electron) edition — CI only",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
