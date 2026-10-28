@@ -197,22 +197,36 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 
 ## 5. Summary: bugs PRESENT in next (priorities)
 
+> Re-audited after the ACP-removal and v1.0.32–34 parity work
+> (see docs/stable-parity-plan.md). Items marked **FIXED** below were
+> verified in code; the detailed §-references keep the original analysis.
+
 ### HIGH
-1. **App/CLI update interrupts an in-flight turn** (v1.0.5) — `api_update_app`/`api_upgrade_local_cli` without a `slot.busy` check; the update_app relaunch/exit kills the workers. → §3.1.
-2. **Serve dies after an in-app update under systemd** (v1.0.19) — `update_app_linux` relaunches the exe outside the unit; no pidfile/EADDRINUSE recovery in serve.rs. → §3.13.
-3. **Dock/sidebar resize: mouse-only** (faa86ac) — touch/PWA does not work, resize can get stuck. → §3.3.
-4. **Images never reach the LLM** (v1.0.8) — `cmd_prompt` is text-only; no ACP image content blocks. → §3.7.
+1. **App/CLI update interrupts an in-flight turn** (v1.0.5) — **FIXED**:
+   `api_update_app` refuses while `any_turn_in_flight()`.
+2. **Serve dies after an in-app update under systemd** (v1.0.19) — **OPEN**;
+   no pidfile/EADDRINUSE recovery in serve.rs. → §3.13.
+3. **Dock/sidebar resize: mouse-only** (faa86ac) — **FIXED**: `RESIZE_JS`
+   uses pointer events + setPointerCapture.
+4. **Images never reach the LLM** (v1.0.8) — **FIXED** (image blocks through
+   the app-server transport).
 
 ### MEDIUM
-5. **Back gesture in the PWA closes the app** (v1.0.14/15/18) — no LIFO `pushState`/`popstate` stack. → §3.10.
-6. **SSH first-connect hang on the host-key prompt** (v1.0.9) — no `StrictHostKeyChecking=accept-new`/`ConnectTimeout`. → §3.8.
-7. **Auto-approval ignores the built-in yolo mode** (v1.0.6) — every tool asks for consent. → §3.6.
-8. **Worker death: the pending map is not drained** (v1.0.4) — fail-fast works via the `exited()` poll, but the drain on `StdoutClosed` + the hung-worker probe (v0.13.12) are incomplete. → §3.2.
-9. **Re-sync after returning to the tab** (v1.0.17) — reconnect exists, no `visibilitychange` and no `drain_queue` after the reconnect. → §3.12.
+5. **Back gesture in the PWA closes the app** (v1.0.14/15/18) — **OPEN**; no
+   LIFO `pushState`/`popstate` stack. → §3.10.
+6. **SSH first-connect hang on the host-key prompt** (v1.0.9) — **FIXED**:
+   `StrictHostKeyChecking=accept-new` + `ConnectTimeout=10` in remote.rs.
+7. **Auto-approval ignores the built-in yolo mode** (v1.0.6) — **OPEN**;
+   every tool still asks for consent. → §3.6.
+8. **Worker death: the pending map is not drained** (v1.0.4) — **FIXED**: the
+   appsrv `call_res` loop probes `conn.exited()` and fails fast, draining
+   the pending waiter (v1.0.34 port).
+9. **Re-sync after returning to the tab** (v1.0.17) — **FIXED**: `VISIBILITY_JS`
+   resync + `drain_queue` after the reconnect refresh.
 
 ### LOW
-10. **Prompt queue: no "send now" and no resilience to a stale busy** (v0.13.15/f6398d0) → §3.5.
-11. **Resume without auto-retry on a transport hiccup** (v1.0.16) — the fallback exists, the retry does not. → §3.11.
-12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) → §3.4.
-13. **Windows self-update: black terminal window** (v1.0.3) — no `CREATE_NO_WINDOW` with `DETACHED_PROCESS`. → §3.14.
-14. **PWA manifest/SW details (512 icon, `id`, cache purge)** (v1.0.10) → §3.9.
+10. **Prompt queue: no "send now" and no resilience to a stale busy** (v0.13.15/f6398d0) — **FIXED** ("Send now" in the input panel).
+11. **Resume without auto-retry on a transport hiccup** (v1.0.16) — **OPEN**; the fallback exists, the retry does not. → §3.11.
+12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) — **OPEN**. → §3.4.
+13. **Windows self-update: black terminal window** (v1.0.3) — **OPEN**; no `CREATE_NO_WINDOW` with `DETACHED_PROCESS`. → §3.14.
+14. **PWA manifest/SW details (512 icon, `id`, cache purge)** (v1.0.10) — **FIXED** (version-scoped cache; manifest `id` + 512 icon).

@@ -503,6 +503,21 @@ code {
     font-weight: 600;
 }
 
+/* v1.0.33 parity: web-only logout (inline SVG power icon, sidebar bottom) */
+.sidebar-logout-btn {
+    color: #f87171;
+}
+
+.sidebar-logout-btn:hover {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+}
+
+.sidebar-logout-icon {
+    display: inline-flex;
+    vertical-align: middle;
+}
+
 /* ===== Chat View ===== */
 .chat-view-wrap {
     flex: 1;

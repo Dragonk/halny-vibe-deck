@@ -97,6 +97,18 @@ pub fn Sidebar() -> Element {
     let view = s.view;
     drop(s);
 
+    // v1.0.33 parity: web-only bottom controls (theme cycle + logout).
+    // Same theme naming/cycle as the header (themeAuto/themeDark/themeLight).
+    let language = cfg.language.clone();
+    let theme = cfg.theme.clone();
+    let (theme_icon, theme_title) = if matches!(theme.as_str(), "" | "system" | "auto") {
+        ('\u{25D1}', tr(&lang, "themeAuto"))
+    } else if theme == "dark" {
+        ('\u{263c}', tr(&lang, "themeDark"))
+    } else {
+        ('\u{263e}', tr(&lang, "themeLight"))
+    };
+
     // ---- Filter (hidden sessions/projects) + limit ----
     // Remote mirrors (SSH) are excluded here: they render inside their
     // connection group below.
@@ -309,6 +321,67 @@ pub fn Sidebar() -> Element {
                     class: "{nav_cls(View::Settings)}",
                     onclick: { let state = state.clone(); move |_| { crate::app::set_view(state, View::Settings); } },
                     "{tr(&lang, \"settings\")}"
+                }
+                // v1.0.32/33 parity: in the browser the brand row is gone
+                // (the frameless title bar never existed on web), so the
+                // theme toggle and logout live at the bottom of the
+                // sessions list — under Settings, same as stable. The
+                // desktop webview keeps the header theme toggle.
+                if !crate::state::is_desktop() {
+                    button {
+                        class: "sidebar-nav-item",
+                        title: "{theme_title}",
+                        onclick: {
+                            let state = state.clone();
+                            let language = language.clone();
+                            let theme = theme.clone();
+                            let dock = cfg.dock_open;
+                            let limit = cfg.sidebar_sessions_limit.unwrap_or(0);
+                            move |_| {
+                                let state = state.clone();
+                                let language = language.clone();
+                                let theme = theme.clone();
+                                let dock = dock;
+                                let limit = limit;
+                                async move {
+                                    let next_theme = if matches!(theme.as_str(), "" | "system" | "auto") {
+                                        "dark"
+                                    } else if theme == "dark" {
+                                        "light"
+                                    } else {
+                                        "auto"
+                                    };
+                                    crate::state::save_prefs(state, language, next_theme.to_string(), dock, limit).await;
+                                }
+                            }
+                        },
+                        "{theme_icon}"
+                        span { style: "margin-left:8px;", "{theme_title}" }
+                    }
+                    button {
+                        class: "sidebar-nav-item sidebar-logout-btn",
+                        title: "{tr(&lang, \"logoutLabel\")}",
+                        onclick: move |_| {
+                            async move {
+                                // Clear the server session cookie; the
+                                // reload lands on the /login page.
+                                let _ = dioxus::document::eval(
+                                    "fetch('/api/auth/logout',{method:'POST'}).finally(function(){location.href='/login';});",
+                                ).await;
+                            }
+                        },
+                        span { class: "sidebar-logout-icon",
+                            svg {
+                                width: "14", height: "14", view_box: "0 0 24 24",
+                                fill: "none", stroke: "currentColor",
+                                "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
+                                path { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" }
+                                polyline { points: "16 17 21 12 16 7" }
+                                line { x1: "21", y1: "12", x2: "9", y2: "12" }
+                            }
+                        }
+                        span { style: "margin-left:8px;", "{tr(&lang, \"logoutLabel\")}" }
+                    }
                 }
             }
             div { class: "sidebar-resize-handle" }
