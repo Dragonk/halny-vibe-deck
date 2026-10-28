@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.28 — 2026-10-28
+
+### Fixed
+- **Mobile web: no more covered elements.** With the preview dock open, the
+  sessions button stays reachable and the dock closes with its own X button;
+  with the sessions list open, the dock button stays reachable. Tab strips
+  and the sidebar header reserve space for the floating buttons. Edge swipe
+  gestures are unchanged; picking a session or tab still hides the list.
+- **Headless serve: systemd watchdog.** The app now sends sd_notify pings
+  from the main loop; when the loop wedges (port open, no HTTP responses),
+  systemd restarts the service instead of leaving a dead endpoint behind
+  the reverse proxy.
+
+### Changed
+- Sessions sidebar: the NEW icon is now a translated 'New project…' text
+  button (en/de/es/fr/it/pl).
+- Release workflow uploads only latest.yml / latest-linux.yml (no more
+  builder-debug.yml leak in release assets).
+
+## 1.0.27 — 2026-10-28
+
+### Added
+- Web client: no title bar chrome - the sessions list and the preview dock
+  open via floating buttons and edge swipe gestures; theme and logout are
+  available from the sessions sidebar.
+
+### Fixed
+- ACP worker cwd for all-users (Program Files) installs.
+
 ## 1.0.26 — 2026-10-27
 
 ### Added

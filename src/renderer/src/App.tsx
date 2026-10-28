@@ -1095,7 +1095,7 @@ export default function App(): React.JSX.Element {
         <>
           {/* Sessions panel toggle - floating, top-left corner (phone). */}
           <button
-            className="web-fab web-fab-left"
+            className={`web-fab web-fab-left ${mobileSidebarOpen ? 'panel-open' : ''}`}
             title={tr.menuLabel}
             onClick={() => setMobileSidebarOpen(true)}
           >
@@ -1111,10 +1111,13 @@ export default function App(): React.JSX.Element {
               dock is open the button slides left of it instead of covering
               the dock tabs. */}
           <button
-            className={`web-fab web-fab-right ${dockOpen && currentView === 'chat' ? 'active' : ''}`}
+            className={`web-fab web-fab-right ${dockOpen && currentView === 'chat' ? 'active dock-open' : ''}`}
             style={dockOpen && currentView === 'chat' ? { right: (dockWidth ?? 420) + 20 } : undefined}
             title={tr.dockToggle}
-            onClick={() => setDockOpen(!dockOpen)}
+            onClick={() => {
+              if (mobileSidebarOpen) setMobileSidebarOpen(false)
+              setDockOpen(!dockOpen)
+            }}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />

@@ -3,6 +3,7 @@ import { join, dirname } from "path";
 import * as pathMod from "path";
 import fs from "fs";
 import os from "os";
+import dgram from "node:dgram";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { applyPortableUpdate, cleanupStaleUpdateDirs } from "./updateCmd";
 import {
@@ -324,7 +325,65 @@ function showFailedUpdateNotice(): void {
 
 const cliKey = argVal("key");
 
+// v1.0.28: best-effort sd_notify(3) over $NOTIFY_SOCKET. With Type=notify +
+// WatchdogSec a wedged main loop (port open, nothing served) stops the
+// WATCHDOG=1 pings and systemd restarts the unit instead of a silent 521.
+// Node typings do not know the "unix_dgram" socket type, but it works in
+// Electron (same trick systemd-cat style helpers use) - declare the tiny
+// surface we need and cast.
+interface UnixDgramSocketLike {
+  on(event: "error", listener: (err: Error) => void): void;
+  send(
+    msg: Buffer,
+    offset: number,
+    length: number,
+    path: string,
+    callback: (err: Error | null, bytes: number) => void
+  ): void;
+  close(): void;
+}
+
+function sdNotify(message: string): void {
+  const socketPath = process.env["NOTIFY_SOCKET"];
+  if (!socketPath) return;
+  try {
+    const target = socketPath.startsWith("@")
+      ? "\0" + socketPath.slice(1)
+      : socketPath;
+    const client = dgram.createSocket(
+      "unix_dgram" as unknown as dgram.SocketType
+    ) as unknown as UnixDgramSocketLike;
+    client.on("error", () => {
+      try {
+        client.close();
+      } catch {
+        /* already closed */
+      }
+    });
+    client.send(Buffer.from(message, "utf8"), 0, message.length, target, () => {
+      try {
+        client.close();
+      } catch {
+        /* already closed */
+      }
+    });
+  } catch {
+    /* best effort - never block app startup */
+  }
+}
+
+function startSystemdNotify(): void {
+  sdNotify("READY=1");
+  const usec = Number.parseInt(process.env["WATCHDOG_USEC"] ?? "0", 10);
+  if (!Number.isFinite(usec) || usec <= 0) return;
+  const intervalMs = Math.max(Math.floor(usec / 3_000_000), 5) * 1000;
+  const timer = setInterval(() => sdNotify("WATCHDOG=1"), intervalMs);
+  timer.unref();
+  console.log(`[systemd] notify active, watchdog ping every ${intervalMs}ms`);
+}
+
 app.whenReady().then(() => {
+  startSystemdNotify();
   // v0.14.0 rebrand: one-time migration of user data from the legacy
   // "mistral-vibe-nexus" directory so settings survive the rename.
   try {

@@ -476,7 +476,7 @@ export default function Sidebar(): React.JSX.Element {
           onClick={openNewProjectPicker}
           title={tr.newProjectLabel}
         >
-          🆕
+          {tr.newProjectLabel}
         </button>
       </div>
 

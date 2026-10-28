@@ -6069,7 +6069,12 @@ code {
         cursor: pointer;
     }
     .dock-resize-handle { display: none; }
-    .dock-tabs { overflow-x: auto; padding-right: 46px; }
+    .dock-tabs { overflow-x: auto; padding-right: 46px; padding-left: 56px; }
+    /* v1.0.28: the panel that owns the corner hides its floating button */
+    .web-fab-left.panel-open { display: none; }
+    .web-fab-right.dock-open { display: none; }
+    .sidebar .sidebar-brand { padding-right: 56px; }
+    .sidebar, .dock { padding-bottom: env(safe-area-inset-bottom, 0px); }
     .dock-tab-name {
         max-width: 90px;
         overflow: hidden;
@@ -6166,7 +6171,7 @@ code {
 .sidebar-sessions-header .sidebar-sessions-label { padding: 0; }
 /* v1.0.7: compact, remote-style 🆕 in the sessions header (the bottom
    duplicate button was removed). */
-.sidebar-np-btn { margin-left: 6px; padding: 0 5px; background: none; border: none; border-radius: 6px; font-size: 14px; font-weight: 400; opacity: 0.55; cursor: pointer; white-space: nowrap; }
+.sidebar-np-btn { margin-left: 6px; padding: 2px 8px; background: none; border: none; border-radius: 6px; font-size: 11px; font-weight: 400; opacity: 0.75; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 .sidebar-np-btn:hover { opacity: 1; background: var(--panel-hover); }
 /* v1.0.8: mobile full-size "new session" row button under each project
    header; hidden on desktop where the tiny "+" is fine. */
@@ -6175,9 +6180,9 @@ code {
   /* v1.0.10: the ✕ close button is gone - the 🆕 button sits at the
      right edge with a full touch target. */
   .sidebar .sidebar-np-btn {
-    min-width: 44px;
-    min-height: 40px;
-    font-size: 20px;
+    min-height: 34px;
+    font-size: 12px;
+    padding: 4px 10px;
     opacity: 1;
     display: flex;
     align-items: center;

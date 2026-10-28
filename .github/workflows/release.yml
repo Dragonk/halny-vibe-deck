@@ -39,7 +39,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
-            dist/*.yml
+            dist/latest.yml
             dist/*.blockmap
           if-no-files-found: error
 
@@ -50,7 +50,7 @@ jobs:
           files: |
             dist/*.exe
             dist/*.zip
-            dist/*.yml
+            dist/latest.yml
             dist/*.blockmap
           generate_release_notes: true
         env:
@@ -108,7 +108,7 @@ jobs:
           files: |
             dist/halny-vibe-deck-linux-x64.zip
             dist/*.AppImage
-            dist/*.yml
+            dist/latest-linux.yml
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
