@@ -1,6 +1,6 @@
 {
   "name": "halny-vibe-deck",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "Halny Vibe Deck — unofficial desktop client for the Mistral Vibe coding agent",
   "main": "out/main/index.js",
   "author": "Dragonk",

@@ -596,15 +596,6 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
   const [binary, setBinary] = useState<{ base64: string; mime: string } | null>(null)
   const [stat, setStat] = useState<{ exists: boolean; isDir: boolean; size: number } | null>(null)
   const [dirEntries, setDirEntries] = useState<Array<{ name: string; isDir: boolean }>>([])
-  // v1.0.9: while editing, the system back gesture returns to the preview
-  // (the layer is registered only for the edit state).
-  const pushBack = useStore((st) => st.pushBack)
-  const removeBack = useStore((st) => st.removeBack)
-  React.useEffect(() => {
-    if (!editMode) return
-    const id = pushBack(() => setEditMode(false))
-    return () => removeBack(id)
-  }, [editMode, pushBack, removeBack])
 
   const docRef = React.useRef<(() => string) | null>(null)
   const registerDoc = React.useCallback((fn: (() => string) | null) => {
@@ -630,7 +621,9 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
     setText(null)
     setTextError(null)
     setTruncated(false)
-    setEditMode(false)
+    // v1.0.26: respect the tab's edit intent - the context menu "Edit"
+    // must land in the EDITOR, not the read-only preview.
+    setEditMode(tab.kind === 'file' && Boolean(tab.startEdit))
     setSavedAt(0)
     setBinary(null)
     setStat(null)
@@ -675,6 +668,23 @@ export default function FilePreview({ tab }: { tab: PreviewTab }): React.JSX.Ele
       alive = false
     }
   }, [tab.path, tab.remoteId, isImage, isPdf, isSheet, isDocx, isZip])
+
+  // v1.0.26: "Edit" on an ALREADY OPEN tab - the store bumps startEditSeq,
+  // this effect re-enters edit mode (the load effect does not re-run for
+  // the same path).
+  React.useEffect(() => {
+    if (tab.startEdit && tab.kind === 'file') setEditMode(true)
+  }, [tab.startEditSeq, tab.path, tab.startEdit, tab.kind])
+
+  // v1.0.9: while editing, the system back gesture returns to the preview
+  // (the layer is registered only for the edit state).
+  const pushBack = useStore((st) => st.pushBack)
+  const removeBack = useStore((st) => st.removeBack)
+  React.useEffect(() => {
+    if (!editMode) return
+    const id = pushBack(() => setEditMode(false))
+    return () => removeBack(id)
+  }, [editMode, pushBack, removeBack])
 
   const canEdit =
     tab.kind === 'file' &&

@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.26 — 2026-10-27
+
+### Added
+- **Drag & drop upload into the project file tree.** Drop files from the
+  host onto any folder in the Files dock (or the tree root) to upload
+  them into that directory - works locally and over SSH remote
+  connections (`fs:write-binary` creates parent directories).
+- Folders highlight while a drag hovers over them; hovering a folder
+  briefly auto-expands it so the drop target is visible.
+
+### Fixed
+- **"Edit" on a `.md` file opened preview instead of the editor.** The
+  preview load effect unconditionally reset `editMode` after the tab
+  was opened with `startEdit`. The editor now re-arms from the tab's
+  `startEditSeq` once the content finishes loading, so both "Edit"
+  (existing tab or new) and "Preview" behave as chosen.
+
 ## 1.0.22 — 2026-10-27
 
 ### Fixed

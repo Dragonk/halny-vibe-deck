@@ -50,13 +50,18 @@ const parentDir = (p: string): string => p.replace(/[\\/][^\\/]*$/, '') || '/'
 // The expansion state and directory entries live in the app store, so they
 // survive switching dock tabs (e.g. opening a file preview and coming back).
 export default function FileTree({ cwd, remoteId }: Props): React.JSX.Element {
-  const { openFilePreview, openFileEditor, config, fileTreeExpanded, fileTreeEntries, loadFileTreeDir, toggleFileTreeDir } = useStore()
+  const { openFilePreview, openFileEditor, config, fileTreeExpanded, fileTreeEntries, loadFileTreeDir, toggleFileTreeDir, setAcpError } = useStore()
   const tr = useTranslation(config.language)
   const rid = remoteId ?? null
 
   // v1.0.9: context menu (right-click on desktop, long-press on touch) -
   // preview / edit / download / open externally / rename / delete.
   const [ctx, setCtx] = useState<{ x: number; y: number; target: CtxTarget } | null>(null)
+  // v1.0.26: drag & drop upload - the hovered drop target + a busy flag
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  // v1.0.26: pending folder auto-expand timers (one per hovered folder)
+  const holdTimers = React.useRef<Map<string, number>>(new Map())
   const [renaming, setRenaming] = useState<CtxTarget | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [confirmDel, setConfirmDel] = useState<CtxTarget | null>(null)
@@ -173,6 +178,38 @@ export default function FileTree({ cwd, remoteId }: Props): React.JSX.Element {
     return <div className="dock-empty">{tr.openFolderFirst}</div>
   }
 
+  // v1.0.26: drop files into a directory (local disk or remote via ssh)
+  const handleDropUpload = async (dir: string, e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDropTarget(null)
+    const files = Array.from(e.dataTransfer?.files ?? [])
+    if (files.length === 0) return
+    setUploading(true)
+    let failed = 0
+    for (const file of files) {
+      try {
+        const b64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result ?? '').split(',')[1] ?? '')
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(file)
+        })
+        const res = (await window.api.fs.writeBinary(
+          dir.replace(/\/+$/, '') + '/' + file.name,
+          b64,
+          rid ?? undefined,
+        )) as { error: string | null }
+        if (res?.error) failed++
+      } catch {
+        failed++
+      }
+    }
+    setUploading(false)
+    void loadFileTreeDir(dir, rid)
+    if (failed > 0) setAcpError(`${failed}/${files.length} plików nie wgrano`)
+  }
+
   const renderEntries = (dir: string, depth: number): React.JSX.Element => {
     const entries = fileTreeEntries[fileTreeKey(dir, rid)] ?? []
     return (
@@ -186,8 +223,27 @@ export default function FileTree({ cwd, remoteId }: Props): React.JSX.Element {
             return (
               <div key={fullPath}>
                 <button
-                  className={`filetree-item ${depth > 0 ? '' : ''}`}
+                  className={`filetree-item ${dropTarget === fullPath ? 'drop-target' : ''}`}
                   style={{ paddingLeft: 6 + depth * 12 }}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setDropTarget(fullPath)
+                    // v1.0.26: hovering over a folder briefly expands it
+                    if (entry.isDir && !fileTreeExpanded.has(fileTreeKey(fullPath, rid))) {
+                      const t = holdTimers.current.get(fullPath)
+                      if (!t) holdTimers.current.set(fullPath, window.setTimeout(() => {
+                        holdTimers.current.delete(fullPath)
+                        toggleFileTreeDir(fullPath, rid)
+                      }, 800))
+                    }
+                  }}
+                  onDragLeave={(e) => {
+                    if (e.currentTarget === e.target) setDropTarget(null)
+                    const t = holdTimers.current.get(fullPath)
+                    if (t) { window.clearTimeout(t); holdTimers.current.delete(fullPath) }
+                  }}
+                  onDrop={(e) => { e.stopPropagation(); setDropTarget(null); void handleDropUpload(fullPath, e) }}
                   onClick={() => {
                     if (entry.isDir) toggleFileTreeDir(fullPath, rid)
                     else openFilePreview(fullPath, entry.name, rid)
@@ -225,10 +281,17 @@ export default function FileTree({ cwd, remoteId }: Props): React.JSX.Element {
 
   return (
     <div className="filetree">
-      <div className="filetree-root" title={cwd}>
+      <div
+        className={`filetree-root ${dropTarget === 'ROOT' ? 'drop-target' : ''}`}
+        title={cwd}
+        onDragOver={(e) => { e.preventDefault(); setDropTarget('ROOT') }}
+        onDragLeave={(e) => { if (e.currentTarget === e.target) setDropTarget(null) }}
+        onDrop={(e) => { e.stopPropagation(); setDropTarget(null); void handleDropUpload(normalizeDirPath(cwd), e) }}
+      >
         <span className="filetree-root-name">📁 {rootName}</span>
       </div>
       <div className="filetree-body">{renderEntries(normalizeDirPath(cwd), 0)}</div>
+      {uploading && <div className="filetree-uploading">⬆ …</div>}
 
       {ctx && (
         <div className="ctx-menu" style={{ left: ctx.x, top: ctx.y }}>

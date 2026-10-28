@@ -1169,9 +1169,18 @@ export const useStore = create<AppStore>((set, get) => ({
           path,
           remoteId: rid,
           startEdit: true,
+          startEditSeq: 1,
         };
         tabs = [...tabs, tab];
         activeId = tab.id;
+      } else {
+        // v1.0.26: "Edit" on an ALREADY OPEN tab must re-enter edit mode -
+        // bump the sequence so FilePreview's effect re-arms.
+        tabs = tabs.map((t) =>
+          t.id === existing.id
+            ? { ...t, startEdit: true, startEditSeq: (t.startEditSeq ?? 0) + 1 }
+            : t,
+        );
       }
       return { previewTabs: tabs, activePreviewId: activeId };
     });

@@ -4459,6 +4459,22 @@ code {
     background: var(--panel-hover);
     color: var(--text);
 }
+/* v1.0.26: drag & drop upload highlight */
+.filetree-root.drop-target {
+    background: var(--panel-hover);
+    box-shadow: inset 0 -2px 0 var(--accent, #4a9eff);
+}
+.filetree-item.drop-target {
+    background: var(--panel-hover);
+    box-shadow: inset 0 0 0 1px var(--accent, #4a9eff);
+    color: var(--text);
+}
+.filetree-uploading {
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
 .filetree-chevron {
     display: inline-flex;
     align-items: center;

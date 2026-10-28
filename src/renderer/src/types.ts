@@ -113,6 +113,9 @@ export interface PreviewTab {
   remoteId?: string | null
   /** v1.0.9: open directly in edit mode (file-list context menu). */
   startEdit?: boolean
+  /** v1.0.26: bumped on every "Edit" action - re-arms edit mode for an
+   * already open tab. */
+  startEditSeq?: number
 }
 
 /** One selectable choice of an ACP config option. */
