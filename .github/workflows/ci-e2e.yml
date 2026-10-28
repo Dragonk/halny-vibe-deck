@@ -1,0 +1,88 @@
+name: ci-e2e
+
+# Golden e2e suite for the stable edition. The same scenarios exist in the
+# Rust edition (branch `next`, .github/workflows/ci-dioxus.yml job `e2e`),
+# so both editions are measured against one behavioural contract.
+#
+# Runs on pushes to main and on pull requests; releases stay tag-only.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (headless serve + Playwright)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (main + preload + renderer)
+        run: npm run build
+
+      - name: Install Playwright (chromium)
+        working-directory: scripts/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+
+      - name: Start headless serve
+        run: |
+          export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          mkdir -p "$XDG_CONFIG_HOME"
+          nohup xvfb-run -a npx electron . --serve --headless \
+            --user e2e --password e2e-secret --port 8443 \
+            > .e2e-serve.log 2>&1 &
+          echo $! > .e2e-serve.pid
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -skf https://127.0.0.1:8443/login >/dev/null; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            while IFS= read -r line; do echo "::error::serve: $line"; done < <(tail -40 .e2e-serve.log || true)
+            exit 1
+          fi
+
+      - name: Run e2e
+        working-directory: scripts/e2e
+        env:
+          VD_REMOTE_URL: https://127.0.0.1:8443
+        run: |
+          set +e
+          npx playwright test 2>&1 | tee ../.e2e-tests.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            while IFS= read -r line; do echo "::error::test: $line"; done < <(tail -60 ../.e2e-tests.log)
+          fi
+          exit $rc
+
+      - name: Serve log
+        if: always()
+        run: tail -60 .e2e-serve.log || true
+
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-e2e-traces
+          path: scripts/e2e/test-results
+          if-no-files-found: ignore
