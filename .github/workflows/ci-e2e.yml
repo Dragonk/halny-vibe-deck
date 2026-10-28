@@ -71,7 +71,9 @@ jobs:
           npx playwright test 2>&1 | tee ../.e2e-tests.log
           rc=${PIPESTATUS[0]}
           if [ "$rc" != "0" ]; then
-            while IFS= read -r line; do echo "::error::test: $line"; done < <(tail -60 ../.e2e-tests.log)
+            while IFS= read -r line; do echo "::error::test: $line"; done < <(tail -150 ../.e2e-tests.log)
+            echo "::error::--- failure detail ---"
+            while IFS= read -r line; do echo "::error::detail: $line"; done < <(grep -A30 -m3 -E "^  [0-9]+\)|Error: " ../.e2e-tests.log | head -120)
           fi
           exit $rc
 
