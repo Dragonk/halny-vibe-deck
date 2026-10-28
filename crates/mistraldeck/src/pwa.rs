@@ -371,10 +371,20 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(MANIFEST).expect("manifest json");
         assert_eq!(v["name"], "Halny Vibe Deck");
         assert_eq!(v["theme_color"], "#111115");
+        assert_eq!(v["id"], "/");
         let icons = v["icons"].as_array().expect("icons array");
-        assert_eq!(icons.len(), 2);
-        assert_eq!(icons[0]["purpose"], "any");
-        assert_eq!(icons[1]["purpose"], "maskable");
+        // 256 + 512, each as "any" and "maskable" (stable-edition manifest).
+        assert_eq!(icons.len(), 4);
+        let sizes: Vec<&str> = icons
+            .iter()
+            .map(|i| i["sizes"].as_str().expect("sizes"))
+            .collect();
+        assert!(sizes.contains(&"256x256") && sizes.contains(&"512x512"));
+        let purposes: Vec<&str> = icons
+            .iter()
+            .map(|i| i["purpose"].as_str().expect("purpose"))
+            .collect();
+        assert!(purposes.contains(&"any") && purposes.contains(&"maskable"));
     }
 
     #[test]
