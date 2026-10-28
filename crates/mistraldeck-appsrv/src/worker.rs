@@ -1,5 +1,5 @@
 //! The app-server worker: owns the `vibe-app-server` subprocess,
-//! executes [`AcpCommand`]s from the engine and streams [`AcpEvent`]s
+//! executes [`AgentCommand`]s from the engine and streams [`AgentEvent`]s
 //! back — the same surface the engine drives, so the UI layer never
 //! touches the wire protocol.
 
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use mistraldeck_core::proto::{AcpCommand, AcpEvent, AcpSessionInfo};
+use mistraldeck_core::proto::{AgentCommand, AgentEvent, AgentSessionInfo};
 
 use crate::conn::{Conn, Inbound};
 use crate::proto::{CallbackEntry, SessionListItem, StateResponse};
@@ -47,16 +47,16 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Handle held by the engine (`send` / `cmd_sender` / `events`).
 pub struct ApsHandle {
-    cmd_tx: Sender<AcpCommand>,
-    event_rx: Mutex<Receiver<AcpEvent>>,
+    cmd_tx: Sender<AgentCommand>,
+    event_rx: Mutex<Receiver<AgentEvent>>,
 }
 
 impl ApsHandle {
     /// Spawn the worker thread. Cheap: no subprocess starts until
-    /// [`AcpCommand::Start`] arrives.
+    /// [`AgentCommand::Start`] arrives.
     pub fn spawn() -> Self {
-        let (cmd_tx, cmd_rx) = channel::<AcpCommand>();
-        let (event_tx, event_rx) = channel::<AcpEvent>();
+        let (cmd_tx, cmd_rx) = channel::<AgentCommand>();
+        let (event_tx, event_rx) = channel::<AgentEvent>();
         std::thread::Builder::new()
             .name("mistraldeck-appsrv".into())
             .spawn(move || Worker::new(event_tx, cmd_rx).run())
@@ -67,24 +67,24 @@ impl ApsHandle {
         }
     }
 
-    pub fn send(&self, cmd: AcpCommand) {
+    pub fn send(&self, cmd: AgentCommand) {
         // the worker always drains commands; ignore send errors only
         // if the worker is gone (app shutting down)
         let _ = self.cmd_tx.send(cmd);
     }
 
-    pub fn cmd_sender(&self) -> Sender<AcpCommand> {
+    pub fn cmd_sender(&self) -> Sender<AgentCommand> {
         self.cmd_tx.clone()
     }
 
-    pub fn events(&self) -> std::sync::MutexGuard<'_, Receiver<AcpEvent>> {
+    pub fn events(&self) -> std::sync::MutexGuard<'_, Receiver<AgentEvent>> {
         self.event_rx.lock().expect("app-server receiver poisoned")
     }
 }
 
 struct Worker {
-    events: Sender<AcpEvent>,
-    cmds: Receiver<AcpCommand>,
+    events: Sender<AgentEvent>,
+    cmds: Receiver<AgentCommand>,
     conn: Option<Conn>,
     /// Shared inbox handle (survives conn swaps; borrow-free draining).
     inbox: Arc<Mutex<Receiver<Inbound>>>,
@@ -94,7 +94,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(events: Sender<AcpEvent>, cmds: Receiver<AcpCommand>) -> Self {
+    fn new(events: Sender<AgentEvent>, cmds: Receiver<AgentCommand>) -> Self {
         // placeholder inbox until a connection exists
         let (_tx, rx) = channel::<Inbound>();
         Self {
@@ -107,12 +107,12 @@ impl Worker {
         }
     }
 
-    fn emit(&self, ev: AcpEvent) {
+    fn emit(&self, ev: AgentEvent) {
         let _ = self.events.send(ev);
     }
 
     fn error(&self, context: &str, message: impl Into<String>) {
-        self.emit(AcpEvent::SessionError {
+        self.emit(AgentEvent::SessionError {
             context: context.to_string(),
             message: message.into(),
         });
@@ -191,54 +191,54 @@ impl Worker {
         }
     }
 
-    fn handle(&mut self, cmd: AcpCommand) {
+    fn handle(&mut self, cmd: AgentCommand) {
         match cmd {
-            AcpCommand::Start { argv } => self.start(argv),
-            AcpCommand::Stop => {
+            AgentCommand::Start { argv } => self.start(argv),
+            AgentCommand::Stop => {
                 self.conn = None;
                 self.proj = Projection::new();
             }
-            AcpCommand::ListSessions => self.list_sessions(),
-            AcpCommand::NewSession { cwd, model } => {
+            AgentCommand::ListSessions => self.list_sessions(),
+            AgentCommand::NewSession { cwd, model } => {
                 self.new_session(&cwd, model.as_deref());
             }
-            AcpCommand::LoadSession { session_id, .. }
-            | AcpCommand::ResumeSession { session_id, .. } => {
+            AgentCommand::LoadSession { session_id, .. }
+            | AgentCommand::ResumeSession { session_id, .. } => {
                 self.resume_session(&session_id);
             }
-            AcpCommand::Prompt {
+            AgentCommand::Prompt {
                 session_id,
                 text,
                 images,
             } => {
                 self.enqueue(&session_id, &text, images);
             }
-            AcpCommand::Cancel { .. } => self.interrupt(),
-            AcpCommand::SetConfigOption {
+            AgentCommand::Cancel { .. } => self.interrupt(),
+            AgentCommand::SetConfigOption {
                 session_id,
                 key,
                 value,
             } => self.set_config_option(&session_id, &key, &value),
-            AcpCommand::Approve {
+            AgentCommand::Approve {
                 request_id,
                 option_id,
             } => self.approve(&request_id, &option_id),
-            AcpCommand::AnswerQuestion {
+            AgentCommand::AnswerQuestion {
                 request_id,
                 answer,
             } => self.answer(&request_id, &answer),
             // --- L1: setup / konto (metody globalne, idą przed sesją) ---
-            AcpCommand::SetupStatus => self.setup_status(),
-            AcpCommand::SetupStoreCredential {
+            AgentCommand::SetupStatus => self.setup_status(),
+            AgentCommand::SetupStoreCredential {
                 provider,
                 api_key,
                 custom_domain,
             } => self.store_credential(provider.as_deref(), &api_key, custom_domain.as_deref()),
-            AcpCommand::SetupSubmitChoices => self.submit_choices(),
-            AcpCommand::IdentityRead => self.read_identity(),
-            AcpCommand::AccountRead => self.read_account(),
+            AgentCommand::SetupSubmitChoices => self.submit_choices(),
+            AgentCommand::IdentityRead => self.read_identity(),
+            AgentCommand::AccountRead => self.read_account(),
             // Engine-side (local uv install); never reaches a transport.
-            AcpCommand::SetupInstall => {}
+            AgentCommand::SetupInstall => {}
         }
     }
 
@@ -289,8 +289,8 @@ impl Worker {
                     .and_then(Value::as_str)
                     .unwrap_or("?")
                     .to_string();
-                self.emit(AcpEvent::Initialized { protocol_version: 1 });
-                self.emit(AcpEvent::DebugLog(format!(
+                self.emit(AgentEvent::Initialized { protocol_version: 1 });
+                self.emit(AgentEvent::DebugLog(format!(
                     "app-server: {name} {ver} connected"
                 )));
             }
@@ -375,16 +375,16 @@ impl Worker {
             .or_else(|| Some(res.clone()))
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
-        let infos: Vec<AcpSessionInfo> = items
+        let infos: Vec<AgentSessionInfo> = items
             .into_iter()
-            .map(|s| AcpSessionInfo {
+            .map(|s| AgentSessionInfo {
                 session_id: s.id,
                 name: s.title.unwrap_or_default(),
                 cwd: s.cwd.unwrap_or_default(),
                 start_time: value_to_string(s.updated_at),
             })
             .collect();
-        self.emit(AcpEvent::SessionsList(infos));
+        self.emit(AgentEvent::SessionsList(infos));
     }
 
     fn new_session(&mut self, cwd: &str, model: Option<&str>) {
@@ -472,7 +472,7 @@ impl Worker {
     /// W9: interrupt with expected_turn validation (STALE_TURN).
     fn interrupt(&mut self) {
         let Some(turn) = self.proj.current_turn.clone() else {
-            self.emit(AcpEvent::DebugLog(
+            self.emit(AgentEvent::DebugLog(
                 "app-server: cancel without an active turn".into(),
             ));
             return;
@@ -578,7 +578,7 @@ impl Worker {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
-                    self.emit(AcpEvent::SetupStatusReady {
+                    self.emit(AgentEvent::SetupStatusReady {
                         status: mistraldeck_core::snapshot::SetupStatusView {
                             unsupported: true,
                             ..Default::default()
@@ -590,7 +590,7 @@ impl Worker {
                 return;
             }
         };
-        self.emit(AcpEvent::SetupStatusReady {
+        self.emit(AgentEvent::SetupStatusReady {
             status: map_setup_status(&res),
         });
     }
@@ -614,7 +614,7 @@ impl Worker {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
-                    self.emit(AcpEvent::SetupStoreOutcome {
+                    self.emit(AgentEvent::SetupStoreOutcome {
                         outcome: "unsupported".into(),
                         detail: None,
                     });
@@ -624,7 +624,7 @@ impl Worker {
                 return;
             }
         };
-        self.emit(AcpEvent::SetupStoreOutcome {
+        self.emit(AgentEvent::SetupStoreOutcome {
             outcome: str_field(&res, &["outcome"]),
             detail: res
                 .get("detail")
@@ -638,7 +638,7 @@ impl Worker {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
-                    self.emit(AcpEvent::SetupChoicesOutcome {
+                    self.emit(AgentEvent::SetupChoicesOutcome {
                         outcome: "unsupported".into(),
                         failures: Vec::new(),
                     });
@@ -648,7 +648,7 @@ impl Worker {
                 return;
             }
         };
-        self.emit(AcpEvent::SetupChoicesOutcome {
+        self.emit(AgentEvent::SetupChoicesOutcome {
             outcome: str_field(&res, &["outcome"]),
             failures: res
                 .get("failures")
@@ -679,7 +679,7 @@ impl Worker {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
-                    self.emit(AcpEvent::IdentityReady {
+                    self.emit(AgentEvent::IdentityReady {
                         identity: mistraldeck_core::snapshot::IdentityView::default(),
                     });
                 } else {
@@ -688,7 +688,7 @@ impl Worker {
                 return;
             }
         };
-        self.emit(AcpEvent::IdentityReady {
+        self.emit(AgentEvent::IdentityReady {
             identity: mistraldeck_core::snapshot::IdentityView {
                 raw_json: serde_json::to_string(&res).unwrap_or_default(),
             },
@@ -709,7 +709,7 @@ impl Worker {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
-                    self.emit(AcpEvent::AccountReady {
+                    self.emit(AgentEvent::AccountReady {
                         account: mistraldeck_core::snapshot::AccountView {
                             unsupported: true,
                             ..Default::default()
@@ -722,7 +722,7 @@ impl Worker {
             }
         };
         let acct = res.get("account").cloned().unwrap_or(res.clone());
-        self.emit(AcpEvent::AccountReady {
+        self.emit(AgentEvent::AccountReady {
             account: map_account(&acct),
         });
     }

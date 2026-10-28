@@ -226,7 +226,7 @@ pub async fn api_set_general(
     Ok(())
 }
 
-/// Connect the local agent (Nexus handleStartAcp).
+/// Connect the local agent (Nexus handleStartAgent).
 #[server]
 pub async fn api_agent_connect(token: String) -> Result<(), ServerFnError> {
     check(&token)?;
@@ -234,7 +234,7 @@ pub async fn api_agent_connect(token: String) -> Result<(), ServerFnError> {
     Ok(())
 }
 
-/// Disconnect the local agent (Nexus acp.stop).
+/// Disconnect the local agent (Nexus agent.stop).
 #[server]
 pub async fn api_agent_disconnect(token: String) -> Result<(), ServerFnError> {
     check(&token)?;

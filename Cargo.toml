@@ -2,10 +2,8 @@
 resolver = "2"
 members = [
     "crates/mistraldeck-core",
-    "crates/mistraldeck-acp",
     "crates/mistraldeck-vibe",
     "crates/mistraldeck-setup",
-    "crates/mistraldeck-app",
     "crates/mistraldeck-engine",
     "crates/mistraldeck",
     "crates/mistraldeck-appserver",
@@ -22,7 +20,6 @@ description = "Mistral Deck — an unofficial desktop GUI for the Mistral Vibe C
 
 [workspace.dependencies]
 mistraldeck-core = { path = "crates/mistraldeck-core" }
-mistraldeck-acp = { path = "crates/mistraldeck-acp" }
 mistraldeck-vibe = { path = "crates/mistraldeck-vibe" }
 mistraldeck-setup = { path = "crates/mistraldeck-setup" }
 mistraldeck-engine = { path = "crates/mistraldeck-engine" }

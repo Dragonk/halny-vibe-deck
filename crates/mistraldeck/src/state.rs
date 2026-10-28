@@ -3,7 +3,7 @@
 //! snapshot refetch for structural changes).
 
 use dioxus::prelude::*;
-use mistraldeck_core::proto::AcpEvent;
+use mistraldeck_core::proto::AgentEvent;
 use mistraldeck_core::snapshot::{BusEvent, SessionLoadProgress, Snapshot};
 use mistraldeck_core::types::{Message, MessageSender};
 
@@ -30,7 +30,7 @@ pub struct ClientState {
     /// Mobile (≤768 px): the sidebar drawer is open (Nexus
     /// mobileSidebarOpen).
     pub mobile_sidebar_open: bool,
-    /// vibe-acp binary missing → show the first-run SetupView.
+    /// agent binary missing → show the first-run SetupView.
     pub setup_needed: bool,
     /// User skipped the SetupView.
     pub setup_skipped: bool,
@@ -54,7 +54,7 @@ pub struct ClientState {
     /// Element 6: live self-update progress phase download/install/relaunch.
     pub update_progress: Option<mistraldeck_core::snapshot::UpdateProgress>,
     /// L1: last failed turn of the current session (`turn.error`
-    /// from the wire — `AcpEvent::TurnFailed`), `(code, message)`.
+    /// from the wire — `AgentEvent::TurnFailed`), `(code, message)`.
     /// Drives the rate-limit banner; cleared on the next submit.
     pub turn_failed: Option<(String, String)>,
     /// L1: force the login wizard on top of the Shell ("Sign in
@@ -128,22 +128,22 @@ pub fn apply_event(mut state: Signal<ClientState>, ev: BusEvent) -> bool {
             false
         }
         BusEvent::StructureChanged => true,
-        BusEvent::Acp(e) => apply_acp_event(state, e),
+        BusEvent::Agent(e) => apply_agent_event(state, e),
     }
 }
 
-fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
-    let current_acp_id = {
+fn apply_agent_event(mut state: Signal<ClientState>, e: AgentEvent) -> bool {
+    let current_agent_id = {
         let s = state.read();
         s.snapshot
             .current
             .and_then(|i| s.snapshot.sessions.get(i))
-            .and_then(|m| m.acp_session_id.clone())
+            .and_then(|m| m.agent_session_id.clone())
     };
-    let is_current = |sid: &str| current_acp_id.as_deref() == Some(sid);
+    let is_current = |sid: &str| current_agent_id.as_deref() == Some(sid);
     // Live usage: update counters locally, no refetch - but only for the
     // session the user is looking at (parallel slots stream in parallel).
-    if let AcpEvent::UsageUpdate { session_id, .. } = &e {
+    if let AgentEvent::UsageUpdate { session_id, .. } = &e {
         if is_current(session_id) {
             let mut s = state.write();
             let _ = s.snapshot.usage.apply(&e);
@@ -153,7 +153,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
     // Lazy-resume replay progress (Nexus SessionLoadProgress): update the
     // "Resuming session… (N)" overlay count in place, no refetch. The
     // wake finishing (SessionReady) refetches and clears it.
-    if let AcpEvent::SessionLoadProgress { session_id, count } = &e {
+    if let AgentEvent::SessionLoadProgress { session_id, count } = &e {
         if is_current(session_id) {
             let mut s = state.write();
             s.snapshot.session_load_progress = Some(SessionLoadProgress {
@@ -164,7 +164,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         return false;
     }
     match e {
-        AcpEvent::MessageChunk {
+        AgentEvent::MessageChunk {
             session_id,
             text,
             message_id,
@@ -172,7 +172,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             if is_current(&session_id) {
                 let mut s = state.write();
                 // v0.13.7: a new agent messageId starts a new agent
-                // message (Nexus `streamingState.acpMsgId` split) -
+                // message (Nexus `streamingState.agentMsgId` split) -
                 // mirror the engine so a snapshot refetch finds the
                 // same shape. The "current" fallback never splits.
                 if message_id != "current" {
@@ -188,7 +188,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
-        AcpEvent::ThinkingChunk {
+        AgentEvent::ThinkingChunk {
             session_id,
             text,
             block_id,
@@ -217,7 +217,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
-        AcpEvent::ThinkingComplete { session_id } => {
+        AgentEvent::ThinkingComplete { session_id } => {
             if is_current(&session_id) {
                 let mut s = state.write();
                 if let Some(msg) = s.snapshot.current_messages.last_mut() {
@@ -232,7 +232,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
-        AcpEvent::ToolCallStarted {
+        AgentEvent::ToolCallStarted {
             session_id,
             tool_call,
         } => {
@@ -244,7 +244,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
             }
             false
         }
-        AcpEvent::ToolCallUpdated {
+        AgentEvent::ToolCallUpdated {
             session_id,
             tool_call_id,
             status,
@@ -290,7 +290,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         }
         // Agent plan / todo checklist: cumulative snapshot, applied in
         // place for the open session (no refetch flicker).
-        AcpEvent::PlanUpdate {
+        AgentEvent::PlanUpdate {
             session_id,
             entries_json,
         } => {
@@ -303,7 +303,7 @@ fn apply_acp_event(mut state: Signal<ClientState>, e: AcpEvent) -> bool {
         // L1: turn failed (wire `turn.error`, e.g. rate_limit) —
         // kept client-side (an event, not snapshot state) and
         // rendered by the chat banner until the next submit.
-        AcpEvent::TurnFailed {
+        AgentEvent::TurnFailed {
             session_id,
             code,
             message,
@@ -525,7 +525,7 @@ pub async fn submit(mut state: Signal<ClientState>, text: String) {
     }
     // v0.13.1: a new send attempt clears the stale error banner
     // (Nexus InputBar handleSend).
-    state.write().snapshot.acp_error.clear();
+    state.write().snapshot.agent_error.clear();
     // L1: a new turn also clears the previous turn failure
     // (rate-limit banner) and any login-wizard request.
     state.write().turn_failed = None;

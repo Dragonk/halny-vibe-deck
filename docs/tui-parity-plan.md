@@ -11,7 +11,7 @@
 > `src/components/*` = views), `mistraldeck-engine` (the state machine, slots,
 > `TransportHandle { Aps | Acp }`), `mistraldeck-appsrv` (the worker: conn/proto/patch/
 > reducer), `mistraldeck-core` (shared types: `proto.rs` = `AcpCommand`/
-> `AcpEvent`, `snapshot.rs` = `Snapshot`), `mistraldeck-acp` (legacy).
+> `AgentEvent`, `snapshot.rs` = `Snapshot`).
 
 ## 0. Overriding principles (from the TUI report)
 

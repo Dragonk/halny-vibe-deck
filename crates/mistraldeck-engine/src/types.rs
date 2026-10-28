@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 
 use mistraldeck_appsrv::ApsHandle;
-use mistraldeck_core::proto::{AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
+use mistraldeck_core::proto::{AgentSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
 use mistraldeck_core::snapshot::{
-    AcpStatus, PendingApproval, PendingQuestion, SessionLoadProgress, UsageStats,
+    AgentStatus, PendingApproval, PendingQuestion, SessionLoadProgress, UsageStats,
 };
 use mistraldeck_core::types::ChatSession;
 
@@ -34,9 +34,9 @@ pub enum SlotPurpose {
 pub struct SlotState {
     /// Command channel straight to the worker thread (the pump thread
     /// owns the event receiver).
-    pub cmd: std::sync::mpsc::Sender<mistraldeck_core::proto::AcpCommand>,
+    pub cmd: std::sync::mpsc::Sender<mistraldeck_core::proto::AgentCommand>,
     pub purpose: SlotPurpose,
-    pub status: AcpStatus,
+    pub status: AgentStatus,
     pub error: String,
     pub busy: bool,
     /// Last user-visible activity (prompt sent / turn finished) - the
@@ -68,7 +68,7 @@ pub struct SlotState {
 pub struct EngineState {
     pub sessions: Vec<ChatSession>,
     pub current: Option<usize>,
-    pub backend_sessions: Vec<AcpSessionInfo>,
+    pub backend_sessions: Vec<AgentSessionInfo>,
     pub next_slot: u64,
     pub slots: HashMap<u64, SlotState>,
     /// ChatSession.id -> slot id
@@ -110,10 +110,10 @@ impl EngineState {
         }
     }
 
-    pub fn session_by_acp_id_mut(&mut self, acp_session_id: &str) -> Option<&mut ChatSession> {
+    pub fn session_by_agent_id_mut(&mut self, agent_session_id: &str) -> Option<&mut ChatSession> {
         self.sessions
             .iter_mut()
-            .find(|s| s.acp_session_id.as_deref() == Some(acp_session_id))
+            .find(|s| s.agent_session_id.as_deref() == Some(agent_session_id))
     }
 
     /// The local session bound to a slot (if any).
@@ -155,7 +155,7 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
     SlotState {
         cmd,
         purpose,
-        status: AcpStatus::Disconnected,
+        status: AgentStatus::Disconnected,
         error: String::new(),
         busy: false,
         last_activity: std::time::Instant::now(),

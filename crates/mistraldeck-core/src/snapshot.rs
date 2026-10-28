@@ -2,7 +2,7 @@
 //! Wasm-safe (serde only) so the web client can reuse them.
 
 use serde::{Deserialize, Serialize};
-use crate::proto::{AcpEvent, AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
+use crate::proto::{AgentEvent, AgentSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
 use crate::types::ChatSession;
 
 /// Live usage counters for the current turn (ported from the egui app).
@@ -33,8 +33,8 @@ impl UsageStats {
     }
 
     /// Consume a usage_update event; returns true when handled.
-    pub fn apply(&mut self, e: &AcpEvent) -> bool {
-        if let AcpEvent::UsageUpdate {
+    pub fn apply(&mut self, e: &AgentEvent) -> bool {
+        if let AgentEvent::UsageUpdate {
             prompt_tokens,
             completion_tokens,
             cached_tokens,
@@ -67,20 +67,20 @@ impl UsageStats {
 /// Connection state of the agent worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AcpStatus {
+pub enum AgentStatus {
     Connecting,
     Connected,
     Disconnected,
     Error,
 }
 
-impl AcpStatus {
+impl AgentStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
-            AcpStatus::Connecting => "connecting",
-            AcpStatus::Connected => "connected",
-            AcpStatus::Disconnected => "disconnected",
-            AcpStatus::Error => "error",
+            AgentStatus::Connecting => "connecting",
+            AgentStatus::Connected => "connected",
+            AgentStatus::Disconnected => "disconnected",
+            AgentStatus::Error => "error",
         }
     }
 }
@@ -108,8 +108,8 @@ pub struct PendingQuestion {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BusEvent {
-    /// A raw ACP worker event (stream + structural).
-    Acp(AcpEvent),
+    /// A transport event from the vibe-app-server worker (stream + structural).
+    Agent(AgentEvent),
     /// A user message entered locally in one client, mirrored to all.
     UserMessageAdded {
         local_session_id: String,
@@ -133,7 +133,7 @@ pub struct SessionLoadProgress {
 pub struct SessionMeta {
     pub id: String,
     pub name: String,
-    pub acp_session_id: Option<String>,
+    pub agent_session_id: Option<String>,
     pub working_directory: String,
     pub created_at_ms: i64,
     pub last_active_ms: i64,
@@ -160,7 +160,7 @@ impl SessionMeta {
         Self {
             id: s.id.clone(),
             name: s.name.clone(),
-            acp_session_id: s.acp_session_id.clone(),
+            agent_session_id: s.agent_session_id.clone(),
             working_directory: s.working_directory.clone(),
             created_at_ms: s.created_at_ms,
             last_active_ms: s.last_active_ms,
@@ -535,7 +535,7 @@ pub struct IdentityView {
 }
 
 /// One progress line of the local dependency install (engine-side
-/// `AcpCommand::SetupInstall` flow).
+/// `AgentCommand::SetupInstall` flow).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SetupInstallLine {
     #[serde(default)]
@@ -563,7 +563,7 @@ pub struct SetupInstallState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     pub status: String,
-    pub acp_error: String,
+    pub agent_error: String,
     pub busy: bool,
     pub current: Option<usize>,
     pub sessions: Vec<SessionMeta>,
@@ -574,7 +574,7 @@ pub struct Snapshot {
     pub modes: Vec<ModeInfo>,
     pub config_options: Vec<ConfigOption>,
     pub commands: Vec<AvailableCommand>,
-    pub backend_sessions: Vec<AcpSessionInfo>,
+    pub backend_sessions: Vec<AgentSessionInfo>,
     pub usage: UsageStats,
     /// `session/load` replay progress for the current session's agent
     /// (None when nothing is resuming) — lazy-resume overlay.
@@ -615,7 +615,7 @@ impl Default for Snapshot {
     fn default() -> Self {
         Self {
             status: "disconnected".to_string(),
-            acp_error: String::new(),
+            agent_error: String::new(),
             busy: false,
             current: None,
             sessions: Vec::new(),

@@ -106,7 +106,7 @@ pub fn Sidebar() -> Element {
         .filter(|(_, m)| {
             m.remote_id.is_none()
                 && {
-                    let key = m.acp_session_id.clone().unwrap_or_else(|| m.id.clone());
+                    let key = m.agent_session_id.clone().unwrap_or_else(|| m.id.clone());
                     !cfg.hidden_sessions.iter().any(|h| h == &key)
                         && (m.working_directory.is_empty()
                             || !cfg.hidden_projects.iter().any(|h| h == &m.working_directory))
@@ -128,7 +128,7 @@ pub fn Sidebar() -> Element {
         .filter(|(_, m)| {
             m.remote_id.is_some()
                 && {
-                    let key = m.acp_session_id.clone().unwrap_or_else(|| m.id.clone());
+                    let key = m.agent_session_id.clone().unwrap_or_else(|| m.id.clone());
                     !cfg.hidden_sessions.iter().any(|h| h == &key)
                 }
         })
@@ -255,7 +255,7 @@ pub fn Sidebar() -> Element {
                                         .sessions
                                         .iter()
                                         .enumerate()
-                                        .find(|(_, m)| m.message_count == 0 && m.acp_session_id.is_some())
+                                        .find(|(_, m)| m.message_count == 0 && m.agent_session_id.is_some())
                                         .map(|(i, _)| i)
                                 };
                                 match empty {
@@ -511,11 +511,11 @@ fn session_row(
         VNode::empty()
     };
     let date = date_str(m.last_active_ms);
-    let key = m.acp_session_id.clone().unwrap_or_else(|| m.id.clone());
+    let key = m.agent_session_id.clone().unwrap_or_else(|| m.id.clone());
     let name = m.name.clone();
-    let has_acp = m.acp_session_id.is_some();
+    let has_agent = m.agent_session_id.is_some();
     let empty = m.message_count == 0;
-    let acp_id = m.acp_session_id.clone();
+    let agent_id = m.agent_session_id.clone();
     let busy = m.busy;
 
     rsx! {
@@ -523,14 +523,14 @@ fn session_row(
             class: "{cls}",
             onclick: {
                 let state = state.clone();
-                let acp_id = acp_id.clone();
+                let agent_id = agent_id.clone();
                 move |_| {
                     let state = state.clone();
-                    let acp_id = acp_id.clone();
+                    let agent_id = agent_id.clone();
                     async move {
                         let tok = token(&state);
-                        if empty && has_acp {
-                            if let Some(sid) = acp_id.clone() {
+                        if empty && has_agent {
+                            if let Some(sid) = agent_id.clone() {
                                 let _ = crate::api::api_open_backend_session(tok, sid).await;
                             }
                         } else {
@@ -612,7 +612,7 @@ fn session_row(
 fn backend_el(
     state: Signal<ClientState>,
     _lang: String,
-    info: &mistraldeck_core::proto::AcpSessionInfo,
+    info: &mistraldeck_core::proto::AgentSessionInfo,
     confirm: Signal<Option<ConfirmTarget>>,
 ) -> Element {
     let sid = info.session_id.clone();
@@ -720,7 +720,7 @@ fn remote_conn_el(
     // session on click; the ＋ button always starts a session.
     let mirrored: Vec<String> = mirrors
         .iter()
-        .filter_map(|(_, m)| m.acp_session_id.clone())
+        .filter_map(|(_, m)| m.agent_session_id.clone())
         .collect();
     let norm_wd = |p: &str| -> String {
         if p.len() > 1 && p.ends_with('/') {

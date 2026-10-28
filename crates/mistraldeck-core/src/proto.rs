@@ -1,7 +1,7 @@
-//! Event & command protocol between the UI layer and the ACP worker.
+//! Event & command protocol between the UI layer and the agent worker.
 //!
-//! The UI never blocks: it sends [`AcpCommand`]s to the worker thread
-//! and consumes [`AcpEvent`]s every frame (the same shape as the old
+//! The UI never blocks: it sends [`AgentCommand`]s to the worker thread
+//! and consumes [`AgentEvent`]s every frame (the same shape as the old
 //! Electron IPC bridge, minus Electron).
 
 use crate::types::{ToolCall, ToolStatus};
@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 
 /// A session previously created with the `vibe` CLI, reported by `session/list`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct AcpSessionInfo {
+pub struct AgentSessionInfo {
     pub session_id: String,
     pub name: String,
     pub cwd: String,
     pub start_time: String,
 }
 
-/// One image attached to a prompt — sent as an ACP `image` content
+/// One image attached to a prompt — sent as an agent-transport `image` content
 /// block (v1.0.8: images must actually reach the LLM).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PromptImage {
@@ -77,13 +77,13 @@ pub struct AvailableCommand {
 
 /// Events emitted by the agent worker towards the UI.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AcpEvent {
+pub enum AgentEvent {
     /// `initialize` handshake finished.
     Initialized { protocol_version: u32 },
     /// The agent subprocess terminated.
     Disconnected { code: Option<i32> },
     /// `session/list` result.
-    SessionsList(Vec<AcpSessionInfo>),
+    SessionsList(Vec<AgentSessionInfo>),
     /// A session was created / loaded / resumed and is ready for prompts.
     SessionReady {
         session_id: String,
@@ -119,7 +119,7 @@ pub enum AcpEvent {
     /// Streaming assistant text.
     MessageChunk {
         session_id: String,
-        /// ACP `messageId` of the streamed message ("current" when the CLI
+        /// Backend `messageId` of the streamed message ("current" when the CLI
         /// does not send one) — stream dedup key (Nexus v0.10.2).
         #[serde(default)]
         message_id: String,
@@ -146,7 +146,7 @@ pub enum AcpEvent {
     /// Streaming assistant reasoning text.
     ThinkingChunk {
         session_id: String,
-        /// ACP `messageId` of the thought block ("thinking" default) —
+        /// Backend `messageId` of the thought block ("thinking" default) —
         /// stream dedup key (Nexus v0.10.2).
         #[serde(default)]
         block_id: String,
@@ -231,7 +231,7 @@ pub enum AcpEvent {
         message: String,
     },
 
-    // --- Setup install (engine-side `AcpCommand::SetupInstall` flow) ---
+    // --- Setup install (engine-side `AgentCommand::SetupInstall` flow) ---
     /// One progress line of the local dependency install (kind: info |
     /// success | error).
     SetupInstallLine { message: String, kind: String },
@@ -241,7 +241,7 @@ pub enum AcpEvent {
 
 /// Commands from the UI to the agent worker.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum AcpCommand {
+pub enum AgentCommand {
     /// Spawn the agent from `argv` and run the `initialize` handshake.
     /// For local sessions this is `[vibe-app-server]`; for SSH remotes it
     /// is the tokenized `ssh` command with `bash -lc "exec vibe-app-server"`
@@ -282,12 +282,12 @@ pub enum AcpCommand {
         key: String,
         value: String,
     },
-    /// Answer a [`AcpEvent::ToolApprovalRequest`].
+    /// Answer a [`AgentEvent::ToolApprovalRequest`].
     Approve {
         request_id: String,
         option_id: String,
     },
-    /// Answer a [`AcpEvent::AskUserQuestion`].
+    /// Answer a [`AgentEvent::AskUserQuestion`].
     AnswerQuestion {
         request_id: String,
         answer: String,

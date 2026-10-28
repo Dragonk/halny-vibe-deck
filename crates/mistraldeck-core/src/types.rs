@@ -12,7 +12,7 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
-    /// Normalize raw ACP status strings (`completed`, `failed`, …).
+    /// Normalize raw agent status strings (`completed`, `failed`, …).
     pub fn normalize(raw: &str) -> Self {
         match raw {
             "completed" | "done" | "success" => ToolStatus::Done,
@@ -81,7 +81,7 @@ pub struct ToolCall {
     /// Structured edit diffs (edit tool) — git-style hunks in the chat.
     #[serde(default)]
     pub diffs: Vec<DiffHunk>,
-    /// Canonical tool name from the ACP `_meta.tool_name` (rich routing).
+    /// Canonical tool name from the app-server `_meta.tool_name` (rich routing).
     #[serde(default)]
     pub tool_name: String,
     /// Pre-edit file content (edit tool `rawOutput.previousContent`) —
@@ -121,7 +121,7 @@ pub struct Attachment {
     pub is_dir: bool,
     pub content: String,
     /// Image attachments only (v1.0.8): MIME type and base64 payload
-    /// forwarded to the LLM as an ACP `image` content block. Empty
+    /// forwarded to the LLM as an app-server `image` content block. Empty
     /// for text/directory attachments.
     #[serde(default)]
     pub mime: String,
@@ -251,13 +251,13 @@ impl PlanEntry {
     }
 }
 
-/// A local chat session, optionally linked to a backend ACP session.
+/// A local chat session, optionally linked to a backend agent session.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatSession {
     pub id: String,
     pub name: String,
     #[serde(default)]
-    pub acp_session_id: Option<String>,
+    pub agent_session_id: Option<String>,
     pub messages: Vec<Message>,
     /// Unix epoch milliseconds.
     pub created_at_ms: i64,
@@ -291,7 +291,7 @@ pub struct ChatSession {
     /// `setUsage` in `previewSession`).
     #[serde(default)]
     pub usage: crate::snapshot::UsageStats,
-    /// v0.13.7 (Nexus App.tsx `streamingState.acpMsgId`): messageId of the
+    /// v0.13.7 (Nexus App.tsx `streamingState.agentMsgId`): messageId of the
     /// text currently streaming into the last AI message. A NEW messageId
     /// finalizes the segment and opens the next bubble, so the intermediate
     /// texts of one turn no longer merge into a single giant message.
@@ -305,7 +305,7 @@ impl ChatSession {
         Self {
             id: new_id(),
             name: name.to_string(),
-            acp_session_id: None,
+            agent_session_id: None,
             messages: Vec::new(),
             created_at_ms: now,
             last_active_ms: now,

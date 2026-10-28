@@ -182,7 +182,7 @@ Implementation principles:
    the callback state machine, conn framing (Response|Notification|ServerRequest dispatch).
 2. **Integration**: the probe (F0) as a marker script; session → prompt → interrupt;
    reconnect with lost events → resync.
-3. **GUI E2E**: smoke of mistraldeck-app on the new transport; comparing session content
+3. **GUI E2E**: smoke of the Dioxus UI on the new transport; comparing session content
    with the official Rust TUI (`vibe` → /resume, the same session).
 4. **Backward compatibility**: the `transport=acp` flag → the old tests pass unchanged.
 

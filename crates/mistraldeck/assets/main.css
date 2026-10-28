@@ -1912,8 +1912,8 @@ code {
     flex-shrink: 0;
 }
 
-/* ===== ACP Status ===== */
-.acp-status {
+/* ===== Agent Status ===== */
+.agent-status {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1928,23 +1928,23 @@ code {
     background: var(--text-dim);
 }
 
-.acp-status.connected .status-dot {
+.agent-status.connected .status-dot {
     background: #4ade80;
 }
-.acp-status.connected .status-label {
+.agent-status.connected .status-label {
     color: #4ade80;
 }
-.acp-status.connecting .status-dot {
+.agent-status.connecting .status-dot {
     background: var(--accent);
     animation: pulse 1s infinite;
 }
-.acp-status.connecting .status-label {
+.agent-status.connecting .status-label {
     color: var(--accent);
 }
-.acp-status.error .status-dot {
+.agent-status.error .status-dot {
     background: #f87171;
 }
-.acp-status.error .status-label {
+.agent-status.error .status-label {
     color: #f87171;
 }
 

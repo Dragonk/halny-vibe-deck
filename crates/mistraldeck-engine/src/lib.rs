@@ -18,7 +18,7 @@ pub use auth_browser::{BrowserSignInFlow, PollOutcome};
 pub use config::{random_hex, AuthEntry, EngineConfig};
 pub use types::EngineState;
 pub use mistraldeck_core::snapshot::{
-    AcpStatus, BusEvent, PendingApproval, PendingQuestion, SessionLoadProgress, SessionMeta,
+    AgentStatus, BusEvent, PendingApproval, PendingQuestion, SessionLoadProgress, SessionMeta,
     Snapshot, UiConfig, UsageStats,
 };
 
@@ -29,7 +29,7 @@ use std::sync::{Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
 use mistraldeck_appsrv::ApsHandle;
-use mistraldeck_core::proto::{AcpCommand, AcpEvent};
+use mistraldeck_core::proto::{AgentCommand, AgentEvent};
 use mistraldeck_core::snapshot::SetupInstallState;
 use mistraldeck_core::types::{
     now_ms, new_id, Attachment, ChatSession, Message, MessageSender, ThinkingBlock, ToolCall,
@@ -47,13 +47,13 @@ pub struct Engine {
     /// Lightweight worker for `session/list` (CLI history) + the global
     /// status shown when no session is open.
     lister: ApsHandle,
-    global_status: Mutex<AcpStatus>,
+    global_status: Mutex<AgentStatus>,
     global_error: Mutex<String>,
     /// Detected agent binary (None = not found / not checked yet) and
     /// the install instructions surfaced while it is missing.
     detected_agent: Mutex<Option<PathBuf>>,
     agent_missing: Mutex<Option<String>>,
-    /// Local dependency-install state (`AcpCommand::SetupInstall`).
+    /// Local dependency-install state (`AgentCommand::SetupInstall`).
     install: Mutex<SetupInstallState>,
     install_started: AtomicBool,
     state: Mutex<EngineState>,
@@ -81,7 +81,7 @@ impl Engine {
         let (tx, _rx) = broadcast::channel(8192);
         let engine = Engine {
             lister: ApsHandle::spawn(),
-            global_status: Mutex::new(AcpStatus::Disconnected),
+            global_status: Mutex::new(AgentStatus::Disconnected),
             global_error: Mutex::new(String::new()),
             detected_agent: Mutex::new(None),
             agent_missing: Mutex::new(None),
@@ -132,8 +132,8 @@ impl Engine {
                     match rx.recv() {
                         Ok(ev) => {
                             let structural = match &ev {
-                                AcpEvent::Initialized { .. } => {
-                                    *self.global_status.lock().unwrap() = AcpStatus::Connected;
+                                AgentEvent::Initialized { .. } => {
+                                    *self.global_status.lock().unwrap() = AgentStatus::Connected;
                                     self.global_error.lock().unwrap().clear();
                                     // L1: seed login/account state right
                                     // after the handshake (methods are
@@ -141,38 +141,38 @@ impl Engine {
                                     self.setup_refresh();
                                     true
                                 }
-                                AcpEvent::Disconnected { .. } => {
+                                AgentEvent::Disconnected { .. } => {
                                     *self.global_status.lock().unwrap() =
-                                        AcpStatus::Disconnected;
+                                        AgentStatus::Disconnected;
                                     true
                                 }
-                                AcpEvent::SessionsList(sessions) => {
+                                AgentEvent::SessionsList(sessions) => {
                                     self.state.lock().unwrap().backend_sessions =
                                         sessions.clone();
                                     true
                                 }
-                                AcpEvent::SessionError { context, message } => {
-                                    *self.global_status.lock().unwrap() = AcpStatus::Error;
+                                AgentEvent::SessionError { context, message } => {
+                                    *self.global_status.lock().unwrap() = AgentStatus::Error;
                                     *self.global_error.lock().unwrap() =
                                         format!("{context}: {message}");
                                     true
                                 }
                                 // --- L1: setup / konto ---
-                                AcpEvent::SetupStatusReady { status } => {
+                                AgentEvent::SetupStatusReady { status } => {
                                     *self.last_setup.lock().unwrap() = Some(status.clone());
                                     true
                                 }
-                                AcpEvent::SetupStoreOutcome { outcome, detail } => {
+                                AgentEvent::SetupStoreOutcome { outcome, detail } => {
                                     *self.last_store_outcome.lock().unwrap() =
                                         Some((outcome.clone(), detail.clone()));
                                     // Chain: store-credential completed →
                                     // submit-choices (domknięcie onboarding).
                                     if outcome == "completed" {
-                                        self.lister.send(AcpCommand::SetupSubmitChoices);
+                                        self.lister.send(AgentCommand::SetupSubmitChoices);
                                     }
                                     false
                                 }
-                                AcpEvent::SetupChoicesOutcome { outcome, .. } => {
+                                AgentEvent::SetupChoicesOutcome { outcome, .. } => {
                                     // Onboarding domknięty — odśwież status
                                     // (hasApiKey) + konto.
                                     if outcome == "completed" {
@@ -180,17 +180,17 @@ impl Engine {
                                     }
                                     true
                                 }
-                                AcpEvent::IdentityReady { identity } => {
+                                AgentEvent::IdentityReady { identity } => {
                                     *self.last_identity.lock().unwrap() = Some(identity.clone());
                                     false
                                 }
-                                AcpEvent::AccountReady { account } => {
+                                AgentEvent::AccountReady { account } => {
                                     *self.last_account.lock().unwrap() = Some(account.clone());
                                     true
                                 }
                                 _ => false,
                             };
-                            let _ = self.tx.send(BusEvent::Acp(ev));
+                            let _ = self.tx.send(BusEvent::Agent(ev));
                             if structural {
                                 let _ = self.tx.send(BusEvent::StructureChanged);
                             }
@@ -260,14 +260,14 @@ impl Engine {
         match self.resolve_agent_path() {
             Some(path) => {
                 *self.agent_missing.lock().unwrap() = None;
-                *self.global_status.lock().unwrap() = AcpStatus::Connecting;
-                self.lister.send(AcpCommand::Start {
+                *self.global_status.lock().unwrap() = AgentStatus::Connecting;
+                self.lister.send(AgentCommand::Start {
                     argv: vec![path.display().to_string()],
                 });
             }
             None => {
                 let instructions = mistraldeck_setup::install_instructions().join("\n");
-                *self.global_status.lock().unwrap() = AcpStatus::Error;
+                *self.global_status.lock().unwrap() = AgentStatus::Error;
                 *self.agent_missing.lock().unwrap() = Some(instructions);
             }
         }
@@ -275,7 +275,7 @@ impl Engine {
     }
 
     pub fn refresh_sessions(&self) {
-        self.lister.send(AcpCommand::ListSessions);
+        self.lister.send(AgentCommand::ListSessions);
     }
 
     /// Warm start: connect the agent and index CLI sessions up front, so
@@ -298,7 +298,7 @@ impl Engine {
                 let Some(path) = self.resolve_agent_path() else {
                     *self.agent_missing.lock().unwrap() =
                         Some(mistraldeck_setup::install_instructions().join("\n"));
-                    *self.global_status.lock().unwrap() = AcpStatus::Error;
+                    *self.global_status.lock().unwrap() = AgentStatus::Error;
                     self.publish_structure();
                     return None;
                 };
@@ -317,8 +317,8 @@ impl Engine {
         let slot_id = st.next_slot;
         st.next_slot += 1;
         let mut slot = spawn_slot(slot_id, purpose);
-        slot.status = AcpStatus::Connecting;
-        let _ = slot.cmd.send(AcpCommand::Start { argv });
+        slot.status = AgentStatus::Connecting;
+        let _ = slot.cmd.send(AgentCommand::Start { argv });
         st.slots.insert(slot_id, slot);
         st.slot_of.insert(session_key.to_string(), slot_id);
         Some(slot_id)
@@ -338,7 +338,7 @@ impl Engine {
         let global = *self.global_status.lock().unwrap();
         Snapshot {
             status: slot_status.unwrap_or(global).as_str().to_string(),
-            acp_error: current_slot
+            agent_error: current_slot
                 .map(|s| s.error.clone())
                 .unwrap_or_else(|| self.global_error.lock().unwrap().clone()),
             busy: slot_busy,
@@ -472,7 +472,7 @@ impl Engine {
                 if let Some(slot) = st.slots.remove(&slot_id) {
                     // Stop the subprocess; the pump thread exits when
                     // the event channel closes.
-                    let _ = slot.cmd.send(AcpCommand::Stop);
+                    let _ = slot.cmd.send(AgentCommand::Stop);
                 }
             }
             st.sessions.remove(index);
@@ -498,7 +498,7 @@ impl Engine {
             if let Some(i) = st
                 .sessions
                 .iter()
-                .position(|s| s.acp_session_id.as_deref() == Some(session_id))
+                .position(|s| s.agent_session_id.as_deref() == Some(session_id))
             {
                 st.current = Some(i);
                 drop(st);
@@ -524,11 +524,11 @@ impl Engine {
                 &cwd,
             );
             session.working_directory = cwd.clone();
-            // Lazy: the ACP id is known upfront, the agent process is not
+            // Lazy: the agent id is known upfront, the agent process is not
             // spawned until a prompt (or config change) needs it.
-            session.acp_session_id = Some(info.session_id.clone());
+            session.agent_session_id = Some(info.session_id.clone());
             // Disk preview (Nexus `previewSession`): transcript + plan +
-            // usage + last config from the unified store — zero ACP.
+            // usage + last config from the unified store — no transport calls.
             if let Some(preview) = mistraldeck_vibe::load_full_session_preview(&info.session_id) {
                 session.messages = preview_to_messages(&preview.messages);
                 session.plan = preview
@@ -650,7 +650,7 @@ impl Engine {
             let mut st = self.state.lock().unwrap();
             if let Some(i) = st.sessions.iter().position(|s| {
                 s.remote_id.as_deref() == Some(conn_id)
-                    && s.acp_session_id.as_deref() == Some(session_id)
+                    && s.agent_session_id.as_deref() == Some(session_id)
             }) {
                 st.current = Some(i);
                 drop(st);
@@ -676,9 +676,9 @@ impl Engine {
             let mut session = ChatSession::new(name, &cwd);
             session.working_directory = cwd.clone();
             session.remote_id = Some(conn_id.to_string());
-            // Lazy: the ACP id is known upfront, the remote agent process is
+            // Lazy: the agent id is known upfront, the remote agent process is
             // not spawned until a prompt (or config change) needs it.
-            session.acp_session_id = Some(session_id.to_string());
+            session.agent_session_id = Some(session_id.to_string());
             if let Some(preview) = preview {
                 session.messages = preview_to_messages(&preview.messages);
                 session.plan = preview
@@ -753,7 +753,7 @@ impl Engine {
             // No agent binary - tell the user instead of hanging.
             let instructions = mistraldeck_setup::install_instructions().join("\n");
             *self.agent_missing.lock().unwrap() = Some(instructions.clone());
-            *self.global_status.lock().unwrap() = AcpStatus::Error;
+            *self.global_status.lock().unwrap() = AgentStatus::Error;
             let mut st = self.state.lock().unwrap();
             if st.current.is_none() {
                 let cwd = self.workdir();
@@ -776,7 +776,7 @@ impl Engine {
         if self.state.lock().unwrap().current.is_none() {
             self.create_local_session();
         }
-        let (key, acp_id, user_msg) = {
+        let (key, agent_id, user_msg) = {
             let mut st = self.state.lock().unwrap();
             let Some(session) = st.current_session_mut() else { return };
             session.messages.push(Message::new_user(&text));
@@ -789,11 +789,11 @@ impl Engine {
             session.last_active_ms = now_ms();
             (
                 session.id.clone(),
-                session.acp_session_id.clone(),
+                session.agent_session_id.clone(),
                 session.messages.last().expect("just pushed").clone(),
             )
         };
-        // v1.0.8: image attachments travel as ACP image content blocks.
+        // v1.0.8: image attachments travel as agent-transport image content blocks.
         let images: Vec<mistraldeck_core::proto::PromptImage> = user_msg
             .attachments
             .iter()
@@ -811,8 +811,8 @@ impl Engine {
         // A new turn clears any stale stop request for the session
         // (Nexus markSessionBusy).
         st.stopping.remove(&key);
-        match acp_id {
-            Some(acp_session_id) => {
+        match agent_id {
+            Some(agent_session_id) => {
                 if let Some(slot_id) = st.slot_of_session(&key) {
                     if let Some(slot) = st.slots.get_mut(&slot_id) {
                         slot.busy = true;
@@ -820,8 +820,8 @@ impl Engine {
                         // v0.13.1: a failed prompt send unblocks the chat.
                         if slot
                             .cmd
-                            .send(AcpCommand::Prompt {
-                                session_id: acp_session_id,
+                            .send(AgentCommand::Prompt {
+                                session_id: agent_session_id,
                                 text,
                                 images,
                             })
@@ -849,11 +849,11 @@ impl Engine {
                     let purpose = match cur.as_ref().and_then(|s| s.remote_id.clone()) {
                         Some(conn_id) => SlotPurpose::LoadRemote {
                             conn_id,
-                            session_id: acp_session_id.clone(),
+                            session_id: agent_session_id.clone(),
                             cwd,
                         },
                         None => SlotPurpose::LoadBackend {
-                            session_id: acp_session_id.clone(),
+                            session_id: agent_session_id.clone(),
                             cwd,
                         },
                     };
@@ -868,12 +868,12 @@ impl Engine {
                             // stale dedup prefixes for this session (Nexus
                             // `loadSession` cleanup).
                             slot.stream_sent.retain(|k, _| {
-                                !k.starts_with(&format!("{acp_session_id}|"))
+                                !k.starts_with(&format!("{agent_session_id}|"))
                             });
                             slot.pending_prompt = Some(text);
                             slot.pending_images = images;
                             slot.load_progress = Some(mistraldeck_core::snapshot::SessionLoadProgress {
-                                session_id: acp_session_id.clone(),
+                                session_id: agent_session_id.clone(),
                                 count: 0,
                             });
                         }
@@ -934,17 +934,17 @@ impl Engine {
 
     pub fn cancel(&self) {
         let mut st = self.state.lock().unwrap();
-        let (key, acp) = {
+        let (key, agent_id) = {
             let Some(session) = st.current_session() else { return };
-            (session.id.clone(), session.acp_session_id.clone())
+            (session.id.clone(), session.agent_session_id.clone())
         };
-        let Some(acp_session_id) = acp else { return };
+        let Some(agent_session_id) = agent_id else { return };
         let Some(slot_id) = st.slot_of_session(&key) else { return };
         let mut marked = false;
         if let Some(slot) = st.slots.get(&slot_id) {
             if slot
                 .cmd
-                .send(AcpCommand::Cancel { session_id: acp_session_id })
+                .send(AgentCommand::Cancel { session_id: agent_session_id })
                 .is_ok()
             {
                 // Nexus v0.10.5 markSessionStopping: explicit stopping
@@ -985,7 +985,7 @@ impl Engine {
         let mut st = self.state.lock().unwrap();
         for (_, slot) in st.slots.iter_mut() {
             if slot.approval.as_ref().map(|a| &a.request_id) == Some(&request_id) {
-                let _ = slot.cmd.send(AcpCommand::Approve {
+                let _ = slot.cmd.send(AgentCommand::Approve {
                     request_id,
                     option_id,
                 });
@@ -999,7 +999,7 @@ impl Engine {
         let mut st = self.state.lock().unwrap();
         for (_, slot) in st.slots.iter_mut() {
             if slot.question.as_ref().map(|q| &q.request_id) == Some(&request_id) {
-                let _ = slot.cmd.send(AcpCommand::AnswerQuestion {
+                let _ = slot.cmd.send(AgentCommand::AnswerQuestion {
                     request_id: request_id.clone(),
                     answer,
                 });
@@ -1020,7 +1020,7 @@ impl Engine {
         let mut st = self.state.lock().unwrap();
         let Some(session) = st.current_session() else { return };
         let key = session.id.clone();
-        let acp_id = session.acp_session_id.clone();
+        let agent_id = session.agent_session_id.clone();
         // Mirror on the session first (works with no agent process).
         if let Some(session) = st.current_session_mut() {
             if let Some(opt) = session.config_options.iter_mut().find(|o| o.id == id) {
@@ -1041,8 +1041,8 @@ impl Engine {
                     if let Some(opt) = slot.config_options.iter_mut().find(|o| o.id == id) {
                         opt.current_value = value.clone();
                     }
-                    if let Some(session_id) = acp_id {
-                        let _ = slot.cmd.send(AcpCommand::SetConfigOption {
+                    if let Some(session_id) = agent_id {
+                        let _ = slot.cmd.send(AgentCommand::SetConfigOption {
                             session_id,
                             key: id.to_string(),
                             value,
@@ -1106,22 +1106,22 @@ impl Engine {
         self.publish_structure();
     }
 
-    /// Disconnect the agent (Nexus acp.stop): stop the lister and every
+    /// Disconnect the agent (Nexus agent.stop): stop the lister and every
     /// live slot. Sessions survive as lazy previews and wake again on
     /// the next prompt (lazy resume, Nexus 2.2).
     pub fn stop_agent(&self) {
-        self.lister.send(AcpCommand::Stop);
+        self.lister.send(AgentCommand::Stop);
         {
             let mut st = self.state.lock().unwrap();
             let slot_ids: Vec<u64> = st.slot_of.values().cloned().collect();
             for slot_id in slot_ids {
                 if let Some(slot) = st.slots.remove(&slot_id) {
-                    let _ = slot.cmd.send(AcpCommand::Stop);
+                    let _ = slot.cmd.send(AgentCommand::Stop);
                 }
             }
             st.slot_of.clear();
         }
-        *self.global_status.lock().unwrap() = AcpStatus::Disconnected;
+        *self.global_status.lock().unwrap() = AgentStatus::Disconnected;
         self.publish(BusEvent::StructureChanged);
     }
 
@@ -1139,7 +1139,7 @@ impl Engine {
     /// (`AccountReadParams.session_id`) — they go through a slot
     /// with an attached session (`refresh_account`).
     pub fn setup_refresh(&self) {
-        self.lister.send(AcpCommand::SetupStatus);
+        self.lister.send(AgentCommand::SetupStatus);
     }
 
     /// Provider name for `setup/store-credential` (None = server default).
@@ -1155,13 +1155,13 @@ impl Engine {
     /// Returns `(sign_in_url, expires_at_ms)` for the UI; the
     /// verifier never leaves the engine.
     pub fn login_browser_start(&self) -> Result<(String, i64), String> {
-        if *self.global_status.lock().unwrap() != AcpStatus::Connected {
+        if *self.global_status.lock().unwrap() != AgentStatus::Connected {
             return Err(Self::aps_not_connected());
         }
         let setup = self.last_setup.lock().unwrap().clone();
         let Some(setup) = setup else {
             // Seed not loaded yet — trigger it; the UI retries.
-            self.lister.send(AcpCommand::SetupStatus);
+            self.lister.send(AgentCommand::SetupStatus);
             return Err("setup status not loaded yet — retry".to_string());
         };
         if setup.unsupported {
@@ -1209,7 +1209,7 @@ impl Engine {
     /// briefly waiting for the store outcome so the server-fn can
     /// return the exact error (env_var_error / save_error).
     pub fn login_with_api_key(&self, api_key: &str, custom_domain: Option<&str>) -> Result<(String, Option<String>), String> {
-        if *self.global_status.lock().unwrap() != AcpStatus::Connected {
+        if *self.global_status.lock().unwrap() != AgentStatus::Connected {
             return Err(Self::aps_not_connected());
         }
         self.send_store_credential(api_key, custom_domain);
@@ -1226,7 +1226,7 @@ impl Engine {
     fn send_store_credential(&self, api_key: &str, custom_domain: Option<&str>) {
         // Reset so the waiter sees only the fresh outcome.
         *self.last_store_outcome.lock().unwrap() = None;
-        self.lister.send(AcpCommand::SetupStoreCredential {
+        self.lister.send(AgentCommand::SetupStoreCredential {
             provider: self.provider_name(),
             api_key: api_key.to_string(),
             custom_domain: custom_domain.map(str::to_string),
@@ -1244,8 +1244,8 @@ impl Engine {
             .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()));
         drop(st);
         if let Some(cmd) = target {
-            let _ = cmd.send(AcpCommand::IdentityRead);
-            let _ = cmd.send(AcpCommand::AccountRead);
+            let _ = cmd.send(AgentCommand::IdentityRead);
+            let _ = cmd.send(AgentCommand::AccountRead);
         }
     }
 
@@ -1258,8 +1258,8 @@ impl Engine {
 
     /// Kick off the local dependency install (uv → mistral-vibe → verify
     /// `vibe-app-server`) on a background thread. Idempotent while a run
-    /// is in flight; progress streams as `AcpEvent::SetupInstallLine`,
-    /// the terminal outcome as `AcpEvent::SetupInstallDone` (and is kept
+    /// is in flight; progress streams as `AgentEvent::SetupInstallLine`,
+    /// the terminal outcome as `AgentEvent::SetupInstallDone` (and is kept
     /// in the snapshot for late joiners). On success the agent restarts
     /// immediately — no app restart needed.
     pub fn setup_install(&self) {
@@ -1282,7 +1282,7 @@ impl Engine {
                             message: message.clone(),
                             kind: kind.to_string(),
                         });
-                        let _ = e.tx.send(BusEvent::Acp(AcpEvent::SetupInstallLine {
+                        let _ = e.tx.send(BusEvent::Agent(AgentEvent::SetupInstallLine {
                             message,
                             kind: kind.to_string(),
                         }));
@@ -1305,7 +1305,7 @@ impl Engine {
                         g.running = false;
                         g.finished = Some(ok);
                     }
-                    let _ = e.tx.send(BusEvent::Acp(AcpEvent::SetupInstallDone { ok }));
+                    let _ = e.tx.send(BusEvent::Agent(AgentEvent::SetupInstallDone { ok }));
                     e.publish_structure();
                     if ok {
                         // Verified vibe-app-server: (re)connect right away.
@@ -1390,12 +1390,12 @@ impl Engine {
             let matched = st
                 .sessions
                 .iter()
-                .find(|s| s.id == key || s.acp_session_id.as_deref() == Some(key))
+                .find(|s| s.id == key || s.agent_session_id.as_deref() == Some(key))
                 .map(|s| s.id.clone());
             if let Some(sid) = matched {
                 if let Some(slot_id) = st.slot_of.remove(&sid) {
                     if let Some(slot) = st.slots.remove(&slot_id) {
-                        let _ = slot.cmd.send(AcpCommand::Stop);
+                        let _ = slot.cmd.send(AgentCommand::Stop);
                     }
                 }
             }
@@ -1469,12 +1469,12 @@ impl Engine {
 
     // ---------------- state machine (per-slot) ----------------
 
-    /// Apply one ACP worker event to the owning slot + session.
-    pub(crate) fn apply_slot_event(&'static self, slot_id: u64, event: AcpEvent) {
+    /// Apply one agent worker event to the owning slot + session.
+    pub(crate) fn apply_slot_event(&'static self, slot_id: u64, event: AgentEvent) {
         let event_out = event.clone();
         // Deduped replacement for streamed text events (None = unchanged);
         // a fully deduped (empty) chunk is suppressed entirely.
-        let mut publish_override: Option<AcpEvent> = None;
+        let mut publish_override: Option<AgentEvent> = None;
         let mut suppress = false;
         let mut guard = self.state.lock().unwrap();
         let st = &mut *guard;
@@ -1499,22 +1499,22 @@ impl Engine {
             // the match partially moves `event`). The mirror survives
             // slot death and feeds the UsageBar of lazy-resumed sessions
             // whose preview usage came from disk (Nexus `session.usage`).
-            if let AcpEvent::UsageUpdate { session_id, .. } = &event {
+            if let AgentEvent::UsageUpdate { session_id, .. } = &event {
                 if let Some(session) = st
                     .sessions
                     .iter_mut()
-                    .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                    .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                 {
                     let _ = session.usage.apply(&event);
                 }
             }
             match event {
-                AcpEvent::Initialized { .. } => {
-                    slot.status = AcpStatus::Connected;
+                AgentEvent::Initialized { .. } => {
+                    slot.status = AgentStatus::Connected;
                     slot.error.clear();
                     match slot.purpose.clone() {
                         SlotPurpose::NewLocal { cwd } => {
-                            let _ = slot.cmd.send(AcpCommand::NewSession {
+                            let _ = slot.cmd.send(AgentCommand::NewSession {
                                 cwd,
                                 model: global_model,
                             });
@@ -1522,14 +1522,14 @@ impl Engine {
                         SlotPurpose::LoadBackend { session_id, cwd } => {
                             slot.busy = true;
                             slot.last_activity = std::time::Instant::now();
-                            let _ = slot.cmd.send(AcpCommand::LoadSession {
+                            let _ = slot.cmd.send(AgentCommand::LoadSession {
                                 session_id,
                                 cwd,
                                 model: global_model,
                             });
                         }
                         SlotPurpose::NewRemote { cwd, .. } => {
-                            let _ = slot.cmd.send(AcpCommand::NewSession {
+                            let _ = slot.cmd.send(AgentCommand::NewSession {
                                 cwd,
                                 model: global_model,
                             });
@@ -1537,7 +1537,7 @@ impl Engine {
                         SlotPurpose::LoadRemote { session_id, cwd, .. } => {
                             slot.busy = true;
                             slot.last_activity = std::time::Instant::now();
-                            let _ = slot.cmd.send(AcpCommand::LoadSession {
+                            let _ = slot.cmd.send(AgentCommand::LoadSession {
                                 session_id,
                                 cwd,
                                 model: global_model,
@@ -1545,8 +1545,8 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::Disconnected { .. } => {
-                    slot.status = AcpStatus::Disconnected;
+                AgentEvent::Disconnected { .. } => {
+                    slot.status = AgentStatus::Disconnected;
                     slot.busy = false;
                     slot.last_activity = std::time::Instant::now();
                     slot.pending_prompt = None;
@@ -1567,15 +1567,15 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::SessionsList(_) => { /* the lister owns session/list */ }
-                AcpEvent::SessionReady {
+                AgentEvent::SessionsList(_) => { /* the lister owns session/list */ }
+                AgentEvent::SessionReady {
                     session_id,
                     modes,
                     config_options,
                     title,
                     current_mode_id,
                 } => {
-                    slot.status = AcpStatus::Connected;
+                    slot.status = AgentStatus::Connected;
                     slot.error.clear();
                     // The wake finished: the resuming overlay disappears.
                     slot.load_progress = None;
@@ -1586,7 +1586,7 @@ impl Engine {
                     slot.config_options = config_options.clone();
                     if let Some(i) = slot_session {
                         if let Some(session) = st.sessions.get_mut(i) {
-                            session.acp_session_id = Some(session_id.clone());
+                            session.agent_session_id = Some(session_id.clone());
                             if let Some(title) = title {
                                 if !title.is_empty() {
                                     session.name = title;
@@ -1640,7 +1640,7 @@ impl Engine {
                                     {
                                         opt.current_value = opt_value.clone();
                                     }
-                                    let _ = slot.cmd.send(AcpCommand::SetConfigOption {
+                                    let _ = slot.cmd.send(AgentCommand::SetConfigOption {
                                         session_id: session_id.clone(),
                                         key: opt_id,
                                         value: opt_value,
@@ -1650,7 +1650,7 @@ impl Engine {
                         }
                     }
                     if let Some((key, value)) = slot.pending_option.take() {
-                        let _ = slot.cmd.send(AcpCommand::SetConfigOption {
+                        let _ = slot.cmd.send(AgentCommand::SetConfigOption {
                             session_id: session_id.clone(),
                             key,
                             value,
@@ -1670,7 +1670,7 @@ impl Engine {
                             // send fails (dead worker channel).
                             if slot
                                 .cmd
-                                .send(AcpCommand::Prompt {
+                                .send(AgentCommand::Prompt {
                                     session_id,
                                     text,
                                     images: std::mem::take(&mut slot.pending_images),
@@ -1686,7 +1686,7 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::SessionHistory {
+                AgentEvent::SessionHistory {
                     session_id,
                     messages,
                     plan,
@@ -1714,17 +1714,17 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::UserMessageChunk { .. } => {}
+                AgentEvent::UserMessageChunk { .. } => {}
                 // Replay progress while a lazy session wakes (Nexus
                 // `SessionLoadProgress`, every 25 buffered updates).
-                AcpEvent::SessionLoadProgress { session_id, count } => {
+                AgentEvent::SessionLoadProgress { session_id, count } => {
                     slot.load_progress = Some(SessionLoadProgress {
                         session_id,
                         count,
                     });
                 }
-                AcpEvent::SessionError { context, message } => {
-                    slot.status = AcpStatus::Error;
+                AgentEvent::SessionError { context, message } => {
+                    slot.status = AgentStatus::Error;
                     slot.error = format!("{context}: {message}");
                     slot.busy = false;
                     slot.last_activity = std::time::Instant::now();
@@ -1770,7 +1770,7 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::MessageChunk {
+                AgentEvent::MessageChunk {
                     session_id,
                     message_id,
                     text,
@@ -1785,7 +1785,7 @@ impl Engine {
                     if out_text.is_empty() {
                         suppress = true;
                     } else {
-                        publish_override = Some(AcpEvent::MessageChunk {
+                        publish_override = Some(AgentEvent::MessageChunk {
                             session_id: session_id.clone(),
                             message_id,
                             text: out_text.clone(),
@@ -1793,10 +1793,10 @@ impl Engine {
                         if let Some(session) = st
                             .sessions
                             .iter_mut()
-                            .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                            .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                         {
                             // v0.13.7: a new agent messageId starts a new
-                            // agent message (Nexus `streamingState.acpMsgId`
+                            // agent message (Nexus `streamingState.agentMsgId`
                             // split) - intermediate texts of one turn no
                             // longer merge into a single giant bubble.
                             session.split_on_message(&mid);
@@ -1812,7 +1812,7 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::ThinkingChunk {
+                AgentEvent::ThinkingChunk {
                     session_id,
                     block_id,
                     text,
@@ -1825,7 +1825,7 @@ impl Engine {
                     if out_text.is_empty() {
                         suppress = true;
                     } else {
-                        publish_override = Some(AcpEvent::ThinkingChunk {
+                        publish_override = Some(AgentEvent::ThinkingChunk {
                             session_id: session_id.clone(),
                             block_id,
                             text: out_text.clone(),
@@ -1833,7 +1833,7 @@ impl Engine {
                         if let Some(session) = st
                             .sessions
                             .iter_mut()
-                            .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                            .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                         {
                             // v0.13.7: reasoning that arrives after a
                             // streamed text opens the NEXT agent message -
@@ -1856,11 +1856,11 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::ThinkingComplete { session_id } => {
+                AgentEvent::ThinkingComplete { session_id } => {
                     if let Some(session) = st
                         .sessions
                         .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         if let Some(msg) = session.messages.last_mut() {
                             let now = mistraldeck_core::types::now_ms();
@@ -1873,14 +1873,14 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::ToolCallStarted {
+                AgentEvent::ToolCallStarted {
                     session_id,
                     tool_call,
                 } => {
                     if let Some(session) = st
                         .sessions
                         .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         ensure_ai_message(session).tool_calls.push(tool_call);
                         // v0.10.2: tool activity means thinking is over
@@ -1888,7 +1888,7 @@ impl Engine {
                         finalize_session_thinking(session);
                     }
                 }
-                AcpEvent::ToolCallUpdated {
+                AgentEvent::ToolCallUpdated {
                     session_id,
                     tool_call_id,
                     status,
@@ -1898,7 +1898,7 @@ impl Engine {
                     if let Some(session) = st
                         .sessions
                         .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         for msg in session.messages.iter_mut().rev() {
                             for tc in &mut msg.tool_calls {
@@ -1930,7 +1930,7 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::ToolApprovalRequest {
+                AgentEvent::ToolApprovalRequest {
                     request_id,
                     method,
                     params_json,
@@ -1949,7 +1949,7 @@ impl Engine {
                         })
                         .unwrap_or(false);
                     if auto {
-                        let _ = slot.cmd.send(AcpCommand::Approve {
+                        let _ = slot.cmd.send(AgentCommand::Approve {
                             request_id,
                             option_id: "allow_once".into(),
                         });
@@ -1962,7 +1962,7 @@ impl Engine {
                         });
                     }
                 }
-                AcpEvent::AskUserQuestion {
+                AgentEvent::AskUserQuestion {
                     request_id,
                     question,
                     choices,
@@ -1973,7 +1973,7 @@ impl Engine {
                         choices,
                     });
                 }
-                AcpEvent::PlanUpdate {
+                AgentEvent::PlanUpdate {
                     session_id,
                     entries_json,
                 } => {
@@ -1983,7 +1983,7 @@ impl Engine {
                     let target = st
                         .sessions
                         .iter()
-                        .position(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .position(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                         .or(slot_session);
                     if let Some(i) = target {
                         if let Some(session) = st.sessions.get_mut(i) {
@@ -1992,10 +1992,10 @@ impl Engine {
                         }
                     }
                 }
-                AcpEvent::AvailableCommands { commands, .. } => {
+                AgentEvent::AvailableCommands { commands, .. } => {
                     slot.commands = commands;
                 }
-                AcpEvent::PromptCompleted { session_id, .. } => {
+                AgentEvent::PromptCompleted { session_id, .. } => {
                     slot.busy = false;
                     slot.last_activity = std::time::Instant::now();
                     // The turn really ended — clear the stopping marker
@@ -2006,7 +2006,7 @@ impl Engine {
                     if let Some(session) = st
                         .sessions
                         .iter_mut()
-                        .find(|s| s.acp_session_id.as_deref() == Some(session_id.as_str()))
+                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
                     {
                         for msg in &mut session.messages {
                             if msg.sender == MessageSender::Ai {
@@ -2021,10 +2021,10 @@ impl Engine {
                         complete_session_tool_calls(session);
                     }
                 }
-                AcpEvent::UsageUpdate { .. } => { /* handled above */ }
+                AgentEvent::UsageUpdate { .. } => { /* handled above */ }
                 // Wildcard: must not move out of `event` (the usage
                 // mirror borrows it after the match).
-                AcpEvent::DebugLog(_) => {}
+                AgentEvent::DebugLog(_) => {}
                 // L1: setup/account events are lister-scoped —
                 // slots never emit them.
                 _ => {}
@@ -2060,7 +2060,7 @@ impl Engine {
         // deduped variant for streamed text; fully deduped (empty) chunks
         // are dropped (nothing new to show).
         if !suppress {
-            self.publish(BusEvent::Acp(publish_override.unwrap_or(event_out)));
+            self.publish(BusEvent::Agent(publish_override.unwrap_or(event_out)));
         }
         // Anything structural (status, approvals, ready) -> refetch hint.
         self.publish(BusEvent::StructureChanged);
@@ -2074,7 +2074,7 @@ impl Engine {
 /// fresh worker via `reuse_slot_or_cleanup`.
 pub fn mark_prompt_failed(slot: &mut crate::types::SlotState) {
     slot.busy = false;
-    slot.status = AcpStatus::Disconnected;
+    slot.status = AgentStatus::Disconnected;
     slot.error = "Worker unavailable (process gone)".into();
 }
 
@@ -2228,7 +2228,7 @@ fn restore_session_chips(st: &mut EngineState) {
     if !session.config_options.is_empty() {
         return; // live (or already restored) — keep the recorded lists
     }
-    let acp_id = session.acp_session_id.clone();
+    let agent_id = session.agent_session_id.clone();
     let wd = session.working_directory.clone();
     let mut model = session.last_model.clone();
     let mut mode = session.last_mode.clone();
@@ -2236,7 +2236,7 @@ fn restore_session_chips(st: &mut EngineState) {
     // Missing last* values come from the unified store on disk (Nexus
     // `vibeSessionLastConfig`: newest generation with an active_model).
     if model.is_none() || mode.is_none() || thinking.is_none() {
-        if let Some(last) = acp_id
+        if let Some(last) = agent_id
             .as_deref()
             .and_then(mistraldeck_vibe::load_session_last_config)
         {
@@ -2393,7 +2393,7 @@ pub fn reap_idle_slots(
         .collect();
     for id in &ids {
         if let Some(slot) = st.slots.remove(id) {
-            let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+            let _ = slot.cmd.send(mistraldeck_core::proto::AgentCommand::Stop);
         }
         st.slot_of.retain(|_, sid| sid != id);
     }
@@ -2404,16 +2404,16 @@ pub fn reap_idle_slots(
 mod idle_reaper_tests {
     use super::*;
     use crate::types::{SlotPurpose, SlotState, EngineState};
-    use mistraldeck_core::proto::AcpCommand;
-    use mistraldeck_core::snapshot::AcpStatus;
+    use mistraldeck_core::proto::AgentCommand;
+    use mistraldeck_core::snapshot::AgentStatus;
     use std::sync::mpsc;
 
-    fn slot(busy: bool, age: std::time::Duration) -> (SlotState, mpsc::Receiver<AcpCommand>) {
+    fn slot(busy: bool, age: std::time::Duration) -> (SlotState, mpsc::Receiver<AgentCommand>) {
         let (tx, rx) = mpsc::channel();
         let s = SlotState {
             cmd: tx,
             purpose: SlotPurpose::NewLocal { cwd: "/tmp".into() },
-            status: AcpStatus::Disconnected,
+            status: AgentStatus::Disconnected,
             error: String::new(),
             busy,
             last_activity: std::time::Instant::now()
@@ -2456,7 +2456,7 @@ mod idle_reaper_tests {
         // slot_of no longer references the stopped slot
         assert!(!st.slot_of.values().any(|sid| *sid == 1));
         // the stopped worker received the Stop command
-        assert!(matches!(idle_rx.try_recv(), Ok(AcpCommand::Stop)));
+        assert!(matches!(idle_rx.try_recv(), Ok(AgentCommand::Stop)));
     }
 
     #[test]
@@ -2496,12 +2496,12 @@ pub fn reuse_slot_or_cleanup(
 ) -> Option<u64> {
     let slot_id = st.slot_of_session(session_key)?;
     if let Some(slot) = st.slots.get(&slot_id) {
-        if slot.status != mistraldeck_core::snapshot::AcpStatus::Disconnected {
+        if slot.status != mistraldeck_core::snapshot::AgentStatus::Disconnected {
             return Some(slot_id);
         }
     }
     if let Some(slot) = st.slots.remove(&slot_id) {
-        let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+        let _ = slot.cmd.send(mistraldeck_core::proto::AgentCommand::Stop);
     }
     st.slot_of.remove(session_key);
     None
@@ -2515,7 +2515,7 @@ pub fn force_release_stopping(st: &mut crate::types::EngineState, key: &str) -> 
     }
     if let Some(slot_id) = st.slot_of.remove(key) {
         if let Some(slot) = st.slots.remove(&slot_id) {
-            let _ = slot.cmd.send(mistraldeck_core::proto::AcpCommand::Stop);
+            let _ = slot.cmd.send(mistraldeck_core::proto::AgentCommand::Stop);
         }
         let _ = slot_id;
     }
@@ -2535,11 +2535,11 @@ pub fn force_release_stopping(st: &mut crate::types::EngineState, key: &str) -> 
 mod zombie_tests {
     use super::*;
     use crate::types::{EngineState, SlotPurpose, SlotState};
-    use mistraldeck_core::proto::AcpCommand;
-    use mistraldeck_core::snapshot::AcpStatus;
+    use mistraldeck_core::proto::AgentCommand;
+    use mistraldeck_core::snapshot::AgentStatus;
     use std::sync::mpsc;
 
-    fn slot(status: AcpStatus, busy: bool) -> (SlotState, mpsc::Receiver<AcpCommand>) {
+    fn slot(status: AgentStatus, busy: bool) -> (SlotState, mpsc::Receiver<AgentCommand>) {
         let (tx, rx) = mpsc::channel();
         let s = SlotState {
             cmd: tx,
@@ -2566,15 +2566,15 @@ mod zombie_tests {
     #[test]
     fn reuse_skips_disconnected_and_keeps_connected() {
         let mut st = EngineState::default();
-        let (dead, dead_rx) = slot(AcpStatus::Disconnected, false);
+        let (dead, dead_rx) = slot(AgentStatus::Disconnected, false);
         st.slots.insert(1, dead);
         st.slot_of.insert("s-dead".into(), 1);
         assert_eq!(reuse_slot_or_cleanup(&mut st, "s-dead"), None);
         assert!(st.slots.is_empty());
         assert!(st.slot_of.is_empty());
-        assert!(matches!(dead_rx.try_recv(), Ok(AcpCommand::Stop)));
+        assert!(matches!(dead_rx.try_recv(), Ok(AgentCommand::Stop)));
 
-        let (alive, _alive_rx) = slot(AcpStatus::Connected, false);
+        let (alive, _alive_rx) = slot(AgentStatus::Connected, false);
         st.slots.insert(2, alive);
         st.slot_of.insert("s-alive".into(), 2);
         assert_eq!(reuse_slot_or_cleanup(&mut st, "s-alive"), Some(2));
@@ -2584,7 +2584,7 @@ mod zombie_tests {
     #[test]
     fn force_release_clears_stopping_and_kills_slot() {
         let mut st = EngineState::default();
-        let (hung, hung_rx) = slot(AcpStatus::Connected, true);
+        let (hung, hung_rx) = slot(AgentStatus::Connected, true);
         st.slots.insert(1, hung);
         st.slot_of.insert("s-key".into(), 1);
         st.stopping.insert("s-key".to_string());
@@ -2593,7 +2593,7 @@ mod zombie_tests {
         assert!(st.slots.is_empty());
         assert!(st.slot_of.is_empty());
         assert!(st.stopping.is_empty());
-        assert!(matches!(hung_rx.try_recv(), Ok(AcpCommand::Stop)));
+        assert!(matches!(hung_rx.try_recv(), Ok(AgentCommand::Stop)));
         // A second watchdog (or a turn that already ended) is a no-op.
         assert!(!force_release_stopping(&mut st, "s-key"));
     }
@@ -2702,8 +2702,8 @@ mod dedupe_tests {
 mod prompt_unblock_tests {
     use super::*;
     use crate::types::{SlotPurpose, SlotState};
-    use mistraldeck_core::proto::AcpCommand;
-    use mistraldeck_core::snapshot::AcpStatus;
+    use mistraldeck_core::proto::AgentCommand;
+    use mistraldeck_core::snapshot::AgentStatus;
     use std::sync::mpsc;
 
     #[test]
@@ -2713,7 +2713,7 @@ mod prompt_unblock_tests {
         let mut s = SlotState {
             cmd: tx,
             purpose: SlotPurpose::NewLocal { cwd: "/tmp".into() },
-            status: AcpStatus::Connected,
+            status: AgentStatus::Connected,
             error: String::new(),
             busy: true,
             last_activity: std::time::Instant::now(),
@@ -2731,7 +2731,7 @@ mod prompt_unblock_tests {
         };
         let failed = s
             .cmd
-            .send(AcpCommand::Prompt {
+            .send(AgentCommand::Prompt {
                 session_id: "x".into(),
                 text: "hi".into(),
                 images: Vec::new(),
@@ -2740,7 +2740,7 @@ mod prompt_unblock_tests {
         assert!(failed);
         mark_prompt_failed(&mut s);
         assert!(!s.busy);
-        assert_eq!(s.status, AcpStatus::Disconnected);
+        assert_eq!(s.status, AgentStatus::Disconnected);
         assert!(!s.error.is_empty());
     }
 }

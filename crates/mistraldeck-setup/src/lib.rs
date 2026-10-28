@@ -2,7 +2,7 @@
 //!
 //! The Mistral Vibe CLI is a Python tool installed with `uv`:
 //! `uv tool install mistral-vibe` provides `vibe`, `vibe-app-server` and
-//! the legacy `vibe-acp` entry points. This crate locates existing
+//! the legacy CLI entry points. This crate locates existing
 //! installs (PATH + the default uv tool locations on each platform) and
 //! can install/upgrade everything. The app talks to the agent through
 //! `vibe-app-server` only (see `detect_appserver`).

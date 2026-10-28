@@ -52,7 +52,7 @@ pub fn SetupView() -> Element {
         let step2_num = if uv_ok { "1" } else { "2" };
         rsx! {
             div { class: "setup-body",
-                p { class: "setup-desc", "{tr(&lang, \"vibeAcpNotDetected\")}" }
+                p { class: "setup-desc", "{tr(&lang, \"cliNotDetected\")}" }
                 div { class: "setup-steps",
                     div { class: "{step1_cls}",
                         span { class: "step-num", "{step1_num}" }

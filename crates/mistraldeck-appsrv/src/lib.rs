@@ -1,5 +1,5 @@
 //! Client transport for the `vibe-app-server` protocol (the engine's
-//! only agent transport; replaces the legacy `mistraldeck-acp`).
+//! only agent transport; the legacy ACP transport was removed.
 
 pub mod conn;
 pub mod patch;

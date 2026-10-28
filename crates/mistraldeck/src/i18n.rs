@@ -26,7 +26,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Close"),
         ("settings", "Settings"),
         ("general", "General"),
-        ("acpAgent", "ACP / Agent"),
         ("sandbox", "Sandbox"),
         ("agents", "Agents"),
         ("name", "Name"),
@@ -575,7 +574,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Zamknij"),
         ("settings", "Ustawienia"),
         ("general", "Ogólne"),
-        ("acpAgent", "ACP / Agent"),
         ("sandbox", "Sandbox"),
         ("agents", "Agenci"),
         ("name", "Nazwa"),
@@ -1124,7 +1122,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Fermer"),
         ("settings", "Paramètres"),
         ("general", "Général"),
-        ("acpAgent", "ACP / Agent"),
         ("sandbox", "Sandbox"),
         ("agents", "Agents"),
         ("name", "Nom"),
@@ -1632,7 +1629,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Cerrar"),
         ("settings", "Configuración"),
         ("general", "General"),
-        ("acpAgent", "ACP / Agente"),
         ("sandbox", "Sandbox"),
         ("agents", "Agentes"),
         ("name", "Nombre"),
@@ -2140,7 +2136,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Schließen"),
         ("settings", "Einstellungen"),
         ("general", "Allgemein"),
-        ("acpAgent", "ACP / Agent"),
         ("sandbox", "Sandbox"),
         ("agents", "Agenten"),
         ("name", "Name"),
@@ -2648,7 +2643,6 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
         ("close", "Chiudi"),
         ("settings", "Impostazioni"),
         ("general", "Generale"),
-        ("acpAgent", "ACP / Agente"),
         ("sandbox", "Sandbox"),
         ("agents", "Agenti"),
         ("name", "Nome"),
@@ -3135,7 +3129,7 @@ pub const TRANSLATIONS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 
-// Localized display names + descriptions for ACP config option
+// Localized display names + descriptions for agent config options
 // values (mode / thinking) — port of Nexus i18n/terms.ts.
 const MODE_TERMS: &[(&str, &[(&str, &str, &str)])] = &[
     ("en", &[

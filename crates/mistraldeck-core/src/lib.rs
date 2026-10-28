@@ -3,11 +3,11 @@
 //! Unofficial community project. Not affiliated with Mistral AI.
 //! `mistraldeck-core` holds the shared domain types (messages, sessions,
 //! tool calls) and the event/command protocol used between the UI
-//! layer and the ACP worker layer.
+//! layer and the agent worker layer.
 
 pub mod proto;
 pub mod snapshot;
 pub mod types;
 
-pub use proto::{AcpCommand, AcpEvent};
+pub use proto::{AgentCommand, AgentEvent};
 pub use types::*;

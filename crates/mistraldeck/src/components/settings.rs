@@ -1,4 +1,4 @@
-//! Settings view: General (language / theme / sidebar limit), ACP (paths +
+//! Settings view: General (language / theme / sidebar limit), Agent (paths +
 //! status), Remote control (login + port + enabled), and the Vibe CLI
 //! configuration tabs: Providers, Models, MCP, Tools, Skills, Agents,
 //! Prompts and raw TOML editing. Data flows through token-gated server
@@ -2580,7 +2580,7 @@ pub fn SettingsView() -> Element {
                 }
                 div { class: "field",
                     div { class: "field-label", "{agent_lbl}" }
-                    div { class: "acp-status {status}",
+                    div { class: "agent-status {status}",
                         span { class: "status-dot" }
                         span { class: "status-label", "{status}" }
                     }

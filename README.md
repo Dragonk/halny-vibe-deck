@@ -4,7 +4,7 @@
 > product and is **not** affiliated with, endorsed by, or supported by Mistral AI.
 > "Mistral" and "Vibe" are trademarks of their respective owners.
 > Halny Vibe Deck is an independent desktop GUI for the open-source
-> **Mistral Vibe CLI** (`vibe-acp`).
+> **Mistral Vibe CLI** (`vibe-app-server`).
 
 **Halny Vibe Deck (Rust edition) — fast GUI for the Mistral Vibe CLI, built with Rust.**
 
@@ -46,7 +46,7 @@ unpack anywhere and run.
   `sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0`; glibc-based distro.
 - **Windows:** 10/11 with WebView2 (preinstalled on current systems; otherwise
   install it from Microsoft).
-- **Vibe CLI / `vibe-acp`** — see the first-run Setup in the app.
+- **Vibe CLI / `vibe-app-server`** — see the first-run Setup in the app.
 
 ## Usage
 

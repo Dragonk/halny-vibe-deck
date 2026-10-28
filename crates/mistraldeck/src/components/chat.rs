@@ -20,7 +20,7 @@ pub fn ChatView() -> Element {
     let plan = s.snapshot.current_plan.clone();
     let busy = s.snapshot.busy;
     let status = s.snapshot.status.clone();
-    let acp_error = s.snapshot.acp_error.clone();
+    let agent_error = s.snapshot.agent_error.clone();
     // Stop feedback (Nexus v0.10.5): session/cancel in flight — the busy
     // row label switches to "Stopping…".
     let stopping = s
@@ -36,11 +36,11 @@ pub fn ChatView() -> Element {
     // Lazy-resume overlay (Nexus isResuming): the current session's agent
     // is waking via session/load — spinner + "Resuming session… (N)" with
     // the replay chunk count.
-    let current_acp_id = s
+    let current_agent_id = s
         .snapshot
         .current
         .and_then(|i| s.snapshot.sessions.get(i))
-        .and_then(|m| m.acp_session_id.clone());
+        .and_then(|m| m.agent_session_id.clone());
     let load_progress = s.snapshot.session_load_progress.clone();
     // CLI notice translation (Nexus translateCliNotice): technical
     // model names resolve to display names from the model option.
@@ -57,7 +57,7 @@ pub fn ChatView() -> Element {
         })
         .unwrap_or_default();
     drop(s);
-    let is_resuming = current_acp_id
+    let is_resuming = current_agent_id
         .as_deref()
         .zip(load_progress.as_ref().map(|p| p.session_id.as_str()))
         .map(|(a, p)| a == p)
@@ -168,8 +168,8 @@ pub fn ChatView() -> Element {
                             crate::components::brand::BrandMark { size: 0.98, class: "chat-empty-icon".to_string() }
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
                             div { class: "chat-empty-subtitle", "{subtitle}" }
-                            if status == "error" && !acp_error.is_empty() {
-                                div { class: "chat-error-banner", span { "⚠" } " {acp_error}" }
+                            if status == "error" && !agent_error.is_empty() {
+                                div { class: "chat-error-banner", span { "⚠" } " {agent_error}" }
                             }
                         }
                     } else {
@@ -191,8 +191,8 @@ pub fn ChatView() -> Element {
                     // v0.13.1: the error banner renders also when the chat
                     // already has messages (Nexus ChatView), not only in the
                     // empty state.
-                    if !messages.is_empty() && !acp_error.is_empty() {
-                        div { class: "chat-error-banner", span { "⚠" } " {acp_error}" }
+                    if !messages.is_empty() && !agent_error.is_empty() {
+                        div { class: "chat-error-banner", span { "⚠" } " {agent_error}" }
                     }
                     // L1: rate-limit banner (turn.error + rateLimitAction CTA).
                     {rate_limit_el}
@@ -925,7 +925,7 @@ fn translate_tool_title(title: &str, lang: &str) -> String {
 }
 
 /// Port of Nexus `rawFunctionNameToTitleFromInput`: display title built from
-/// the raw ACP function name + parsed input (file names, commands, patterns).
+/// the raw agent tool name + parsed input (file names, commands, patterns).
 fn raw_function_name_to_title(
     title: &str,
     input: &serde_json::Value,
@@ -1134,7 +1134,7 @@ fn ToolCallPathChip(path: String) -> Element {
     }
 }
 
-/// Port of Nexus `EditDiffBlock`: structured edit diffs (ACP diff content
+/// Port of Nexus `EditDiffBlock`: structured edit diffs (app-server diff content
 /// blocks / edit tool input) rendered as git-style hunks with line numbers,
 /// `@@` headers, +/- coloring and an error/success footer.
 fn edit_diff_block(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Element {
@@ -2046,7 +2046,7 @@ fn tool_call_rich(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Option<
     if !tc.diffs.is_empty() {
         return Some(edit_diff_block(tc, lang));
     }
-    // Canonical tool name from the ACP `_meta` — precise routing before the
+    // Canonical tool name from the app-server `_meta` — precise routing before the
     // title/input heuristics below.
     if tn == "bash" || tn == "file_system.bash" {
         return Some(bash_block(tc));
@@ -2324,12 +2324,12 @@ fn TaskToolBlock(tc: mistraldeck_core::types::ToolCall) -> Element {
         json_str_field(&input, "agent").unwrap_or_else(|| "subagent".to_string());
     let task = json_str_field(&input, "task").unwrap_or_default();
 
-    let parent_acp_id = {
+    let parent_agent_id = {
         let s = state.read();
         s.snapshot
             .current
             .and_then(|i| s.snapshot.sessions.get(i))
-            .and_then(|m| m.acp_session_id.clone())
+            .and_then(|m| m.agent_session_id.clone())
     };
 
     // Auto-load once the call completes (Nexus does it with a 600ms flush
@@ -2338,7 +2338,7 @@ fn TaskToolBlock(tc: mistraldeck_core::types::ToolCall) -> Element {
         auto_loaded.set(true);
         fetch_subagent_sessions(
             state.clone(),
-            parent_acp_id.clone(),
+            parent_agent_id.clone(),
             agent_name.clone(),
             task.clone(),
             sessions.clone(),
@@ -2384,7 +2384,7 @@ fn TaskToolBlock(tc: mistraldeck_core::types::ToolCall) -> Element {
                 onclick: {
                     let mut expanded = expanded.clone();
                     let state = state.clone();
-                    let parent = parent_acp_id.clone();
+                    let parent = parent_agent_id.clone();
                     let agent_c = agent_name.clone();
                     let task_c = task.clone();
                     let sessions = sessions.clone();

@@ -1,4 +1,4 @@
-//! Header: brand, ACP activity status with tooltip, dock toggle,
+//! Header: brand, agent activity status with tooltip, dock toggle,
 //! theme cycle (auto -> dark -> light). Ported 1:1 from Nexus Header.tsx
 //! (window buttons are Electron-only and stay out of the web build).
 
@@ -13,7 +13,7 @@ pub fn Header() -> Element {
     let s = state.read();
     let lang = lang(&state);
     let status = s.snapshot.status.clone();
-    let acp_error = s.snapshot.acp_error.clone();
+    let agent_error = s.snapshot.agent_error.clone();
     let theme = s.snapshot.config.theme.clone();
     let dock_open = s.snapshot.config.dock_open;
     let limit = s.snapshot.config.sidebar_sessions_limit.unwrap_or(0);
@@ -25,7 +25,7 @@ pub fn Header() -> Element {
         "connecting" => ("activity-connecting", tr(&lang, "statusConnecting").to_string()),
         "error" => (
             "activity-error",
-            tf(&lang, "statusError", &[("error", acp_error.as_str())]),
+            tf(&lang, "statusError", &[("error", agent_error.as_str())]),
         ),
         _ => ("activity-disconnected", tr(&lang, "statusDisconnected").to_string()),
     };
@@ -108,8 +108,8 @@ pub fn Header() -> Element {
                         if status == "connected" {
                             div { style: "margin-top:2px;", "{tr(&lang, \"agentLabel\")}" }
                         }
-                        if status == "error" && !acp_error.is_empty() {
-                            div { style: "margin-top:2px;color:#f87171;", "{acp_error}" }
+                        if status == "error" && !agent_error.is_empty() {
+                            div { style: "margin-top:2px;color:#f87171;", "{agent_error}" }
                         }
                     }
                 }

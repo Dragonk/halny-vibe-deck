@@ -962,7 +962,7 @@ pub fn InputBar() -> Element {
                 }
             }
             div { class: "input-status-bar",
-                div { class: "acp-status {status}",
+                div { class: "agent-status {status}",
                     span { class: "status-dot" }
                     span { class: "status-label", "{tr(&lang, status_label_key(&status))}" }
                 }

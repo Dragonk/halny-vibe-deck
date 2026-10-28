@@ -1,5 +1,5 @@
 //! Reducer: project vibe-app-server notifications into the
-//! GUI-facing [`AcpEvent`] stream + maintain the session mirror.
+//! GUI-facing [`AgentEvent`] stream + maintain the session mirror.
 //!
 //! Port of the reference `ClientProjection` semantics
 //! (`vibe/app_server/events.py`) at the fidelity the GUI needs:
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use mistraldeck_core::proto::AcpEvent;
+use mistraldeck_core::proto::AgentEvent;
 use mistraldeck_core::types::{ToolCall, ToolStatus};
 use mistraldeck_core::types::Message;
 
@@ -49,14 +49,14 @@ impl Projection {
 
     /// Apply an authoritative snapshot (session/start, session/resume,
     /// session/read, session/snapshot). Replaces the mirror.
-    pub fn apply_snapshot(&mut self, state: SessionState) -> Vec<AcpEvent> {
+    pub fn apply_snapshot(&mut self, state: SessionState) -> Vec<AgentEvent> {
         let mut events = Vec::new();
         self.last_event_id = state.event_id.unwrap_or(self.last_event_id);
         self.response_watermark = self.last_event_id;
         self.emitted_len.clear();
         if let Some(s) = &state.session {
             self.session_id = s.id.clone();
-            events.push(AcpEvent::SessionReady {
+            events.push(AgentEvent::SessionReady {
                 session_id: s.id.clone(),
                 modes: Vec::new(),
                 config_options: Vec::new(),
@@ -66,7 +66,7 @@ impl Projection {
         }
         if let Some(entries) = &state.history {
             let msgs: Vec<Message> = entries.iter().map(entry_to_message).collect();
-            events.push(AcpEvent::SessionHistory {
+            events.push(AgentEvent::SessionHistory {
                 session_id: self.session_id.clone(),
                 messages: msgs,
                 plan: Vec::new(),
@@ -100,7 +100,7 @@ impl Projection {
 
     /// Map one notification (method + params) to zero or more
     /// GUI events. Unknown methods are ignored (tolerant).
-    pub fn consume(&mut self, method: &str, params: &Value) -> Vec<AcpEvent> {
+    pub fn consume(&mut self, method: &str, params: &Value) -> Vec<AgentEvent> {
         let mut events = Vec::new();
         match method {
             "session/snapshot" => {
@@ -180,7 +180,7 @@ impl Projection {
                         _ => ("", ""),
                     };
                     if !code.is_empty() {
-                        events.push(AcpEvent::TurnFailed {
+                        events.push(AgentEvent::TurnFailed {
                             session_id: self.session_id.clone(),
                             code: code.to_string(),
                             message: message.to_string(),
@@ -188,7 +188,7 @@ impl Projection {
                     }
                 }
                 self.current_turn = None;
-                events.push(AcpEvent::PromptCompleted {
+                events.push(AgentEvent::PromptCompleted {
                     session_id: self.session_id.clone(),
                     stop_reason,
                 });
@@ -204,7 +204,7 @@ impl Projection {
                     .get("context_window")
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0);
-                events.push(AcpEvent::UsageUpdate {
+                events.push(AgentEvent::UsageUpdate {
                     session_id: self.session_id.clone(),
                     prompt_tokens: prompt,
                     completion_tokens: completion,
@@ -230,7 +230,7 @@ impl Projection {
                 if let Ok(st) = serde_json::from_value::<SessionState>(
                     params.get("state").cloned().unwrap_or(Value::Null),
                 ) {
-                    events.push(AcpEvent::DebugLog(format!(
+                    events.push(AgentEvent::DebugLog(format!(
                         "{method}: session handoff (compact/context clear)"
                     )));
                     events.extend(self.apply_snapshot(st));
@@ -239,18 +239,18 @@ impl Projection {
             "turn/queueUpdated" => {
                 // native queue — the GUI gets prompts queued while
                 // busy for free; v1 logs it (queue UI arrives with F5)
-                events.push(AcpEvent::DebugLog(
+                events.push(AgentEvent::DebugLog(
                     "app-server: turn queue updated".into(),
                 ));
             }
             "runtime/updated" => {
-                events.push(AcpEvent::DebugLog(
+                events.push(AgentEvent::DebugLog(
                     "app-server: runtime updated".into(),
                 ));
             }
             "warning" => {
                 if let Some(m) = params.get("message").and_then(Value::as_str) {
-                    events.push(AcpEvent::DebugLog(format!(
+                    events.push(AgentEvent::DebugLog(format!(
                         "app-server warning: {m}"
                     )));
                 }
@@ -269,7 +269,7 @@ impl Projection {
         events
     }
 
-    fn push_entry(&mut self, entry: &HistoryEntry, events: &mut Vec<AcpEvent>) {
+    fn push_entry(&mut self, entry: &HistoryEntry, events: &mut Vec<AgentEvent>) {
         let id = entry.id.clone().unwrap_or_default();
         // mirror into doc.history
         let v = serde_json::to_value(entry).unwrap_or(Value::Null);
@@ -281,7 +281,7 @@ impl Projection {
                 let text = entry.text_content();
                 self.emitted_len.insert(id.clone(), text.len());
                 if !text.is_empty() {
-                    events.push(AcpEvent::MessageChunk {
+                    events.push(AgentEvent::MessageChunk {
                         session_id: self.session_id.clone(),
                         message_id: id,
                         text,
@@ -292,7 +292,7 @@ impl Projection {
                 let text = entry.text.clone().unwrap_or_default();
                 self.emitted_len.insert(id.clone(), text.len());
                 if !text.is_empty() {
-                    events.push(AcpEvent::ThinkingChunk {
+                    events.push(AgentEvent::ThinkingChunk {
                         session_id: self.session_id.clone(),
                         block_id: id,
                         text,
@@ -302,7 +302,7 @@ impl Projection {
             "message" if entry.role.as_deref() == Some("user") => {
                 let text = entry.text_content();
                 if !text.is_empty() {
-                    events.push(AcpEvent::UserMessageChunk {
+                    events.push(AgentEvent::UserMessageChunk {
                         session_id: self.session_id.clone(),
                         text,
                     });
@@ -337,14 +337,14 @@ impl Projection {
         _path: &str,
         entry_id: &str,
         entry: &HistoryEntry,
-    ) -> Vec<AcpEvent> {
+    ) -> Vec<AgentEvent> {
         let mut events = Vec::new();
         let known = self.emitted_len.get(entry_id).cloned().unwrap_or(0);
         match entry.kind.as_str() {
             "message" if entry.role.as_deref() == Some("assistant") => {
                 let text = entry.text_content();
                 if text.len() > known {
-                    events.push(AcpEvent::MessageChunk {
+                    events.push(AgentEvent::MessageChunk {
                         session_id: self.session_id.clone(),
                         message_id: entry_id.to_string(),
                         text: text[known..].to_string(),
@@ -356,7 +356,7 @@ impl Projection {
             "reasoning" => {
                 let text = entry.text.clone().unwrap_or_default();
                 if text.len() > known {
-                    events.push(AcpEvent::ThinkingChunk {
+                    events.push(AgentEvent::ThinkingChunk {
                         session_id: self.session_id.clone(),
                         block_id: entry_id.to_string(),
                         text: text[known..].to_string(),
@@ -400,12 +400,12 @@ impl Projection {
     pub(crate) fn callback_event(
         &mut self,
         cb: &crate::proto::CallbackEntry,
-    ) -> Option<AcpEvent> {
+    ) -> Option<AgentEvent> {
         let callback_id = cb.callback_id.clone();
         self.callback_sessions
             .insert(callback_id.clone(), self.session_id.clone());
         match cb.detail_kind.as_deref() {
-            Some("approval") => Some(AcpEvent::ToolApprovalRequest {
+            Some("approval") => Some(AgentEvent::ToolApprovalRequest {
                 request_id: callback_id,
                 method: "callback/approval".into(),
                 params_json: serde_json::to_string(
@@ -440,7 +440,7 @@ impl Projection {
                             .collect()
                     })
                     .unwrap_or_default();
-                Some(AcpEvent::AskUserQuestion {
+                Some(AgentEvent::AskUserQuestion {
                     request_id: callback_id,
                     question,
                     choices,
@@ -488,7 +488,7 @@ fn effect_events(
     session_id: &str,
     entry: &HistoryEntry,
     started: bool,
-) -> Vec<AcpEvent> {
+) -> Vec<AgentEvent> {
     let id = entry
         .id
         .clone()
@@ -514,12 +514,12 @@ fn effect_events(
         started_at: 0,
     };
     vec![if started {
-        AcpEvent::ToolCallStarted {
+        AgentEvent::ToolCallStarted {
             session_id: session_id.to_string(),
             tool_call: tc,
         }
     } else {
-        AcpEvent::ToolCallUpdated {
+        AgentEvent::ToolCallUpdated {
             session_id: session_id.to_string(),
             tool_call_id: id,
             status,
@@ -584,7 +584,7 @@ mod tests {
         let evs = p.consume("session/snapshot", &snapshot_json("s1"));
         assert!(evs
             .iter()
-            .any(|e| matches!(e, AcpEvent::SessionReady { session_id, .. } if session_id == "s1")));
+            .any(|e| matches!(e, AgentEvent::SessionReady { session_id, .. } if session_id == "s1")));
         assert_eq!(p.last_event_id, 5);
         assert_eq!(p.session_id, "s1");
     }
@@ -601,7 +601,7 @@ mod tests {
                       "content": [{"type": "text", "text": "Hello"}]}
         });
         let evs = p.consume("history/entryAdded", &added);
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::MessageChunk { text, .. } if text == "Hello")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::MessageChunk { text, .. } if text == "Hello")));
 
         let updated = json!({
             "eventId": 7, "sessionId": "s1", "entryId": "e1",
@@ -609,7 +609,7 @@ mod tests {
                        "value": " world"}]
         });
         let evs = p.consume("history/entryUpdated", &updated);
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::MessageChunk { text, .. } if text == " world")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::MessageChunk { text, .. } if text == " world")));
         // a patch that does NOT grow the text emits no delta (append
         // semantics: a repeated append really extends the text)
         let evs = p.consume("history/entryUpdated", &json!({
@@ -617,7 +617,7 @@ mod tests {
             "patch": [{"op": "replace", "path": "/history/0/content/0/text",
                        "value": "Hello world"}]
         }));
-        assert!(evs.iter().all(|e| !matches!(e, AcpEvent::MessageChunk { .. })));
+        assert!(evs.iter().all(|e| !matches!(e, AgentEvent::MessageChunk { .. })));
     }
 
     /// Reasoning streams as ThinkingChunks.
@@ -632,7 +632,7 @@ mod tests {
             "eventId": 7, "entryId": "r1",
             "patch": [{"op": "append", "path": "/history/0/text", "value": "king"}]
         }));
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::ThinkingChunk { text, .. } if text == "king")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::ThinkingChunk { text, .. } if text == "king")));
     }
 
     /// Turn lifecycle: turn/started arms the interrupt target, turn/completed
@@ -647,7 +647,7 @@ mod tests {
         let evs = p.consume("turn/completed", &json!({
             "eventId": 7, "turn": {"id": "t1", "status": {"type": "completed"},
                                    "stopReason": "end_turn"}}));
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::PromptCompleted { stop_reason, .. } if stop_reason == "end_turn")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::PromptCompleted { stop_reason, .. } if stop_reason == "end_turn")));
     }
 
     /// L1: wire `turn.error` is an object `{code, message}` — the
@@ -660,15 +660,15 @@ mod tests {
             "eventId": 7, "turn": {"id": "t1", "status": {"type": "failed"},
                                    "stopReason": "error",
                                    "error": {"code": "rate_limit", "message": "Limit reached"}}}));
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::TurnFailed { code, message, .. }
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::TurnFailed { code, message, .. }
             if code == "rate_limit" && message == "Limit reached")));
         // stop_reason still reaches the UI (no regression).
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::PromptCompleted { stop_reason, .. } if stop_reason == "error")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::PromptCompleted { stop_reason, .. } if stop_reason == "error")));
         // A turn without an error emits no TurnFailed.
         let evs = p.consume("turn/completed", &json!({
             "eventId": 8, "turn": {"id": "t2", "status": {"type": "completed"},
                                    "stopReason": "end_turn"}}));
-        assert!(evs.iter().all(|e| !matches!(e, AcpEvent::TurnFailed { .. })));
+        assert!(evs.iter().all(|e| !matches!(e, AgentEvent::TurnFailed { .. })));
         assert!(p.current_turn.is_none());
     }
 
@@ -684,7 +684,7 @@ mod tests {
             "context_window": 128000
         }));
         match &evs[0] {
-            AcpEvent::UsageUpdate {
+            AgentEvent::UsageUpdate {
                 prompt_tokens, completion_tokens, total_tokens, cost,
                 context_size, ..
             } => {
@@ -708,7 +708,7 @@ mod tests {
             "summaryLength": 100
         }));
         assert_eq!(p.session_id, "s2");
-        assert!(evs.iter().any(|e| matches!(e, AcpEvent::SessionReady { session_id, .. } if session_id == "s2")));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::SessionReady { session_id, .. } if session_id == "s2")));
     }
 
     /// F3 AC: a gap/replayed event_id (stale cursor) flips resync_needed —
@@ -737,7 +737,7 @@ mod tests {
                                    "detail": {"toolName": "bash", "choices": ["approve", "deny"]}}}
         }));
         match &evs[0] {
-            AcpEvent::ToolApprovalRequest { request_id, tool_name, .. } => {
+            AgentEvent::ToolApprovalRequest { request_id, tool_name, .. } => {
                 assert_eq!(request_id, "cb-1");
                 assert_eq!(tool_name.as_deref(), Some("bash"));
             }
@@ -753,7 +753,7 @@ mod tests {
                                                            "choices": [{"label": "Yes"}]}}}}
         }));
         match &evs[0] {
-            AcpEvent::AskUserQuestion { request_id, question, choices } => {
+            AgentEvent::AskUserQuestion { request_id, question, choices } => {
                 assert_eq!(request_id, "cb-2");
                 assert_eq!(question, "Continue?");
                 assert_eq!(choices, &vec!["Yes".to_string()]);
