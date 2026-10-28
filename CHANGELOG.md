@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.30 — 2026-10-28
+
+### Fixed
+
+- **Headless serve: the systemd watchdog restart loop.** The v1.0.28/1.0.29
+  sd_notify implementation never sent a single byte - Node's dgram has no
+  unix_dgram support, createSocket("unix_dgram") throws, and the silent
+  try/catch hid it. A perfectly healthy service was restarted every
+  WatchdogSec (90 s) while serving fine in between. Notifications now go
+  through the systemd-notify helper (--no-block; abstract and filesystem
+  NOTIFY_SOCKET paths handled natively).
+- **Web client (mobile): the floating buttons are mutually exclusive.** An
+  open sessions panel hides the preview-dock FAB and an open preview dock
+  hides the sessions FAB; each panel closes with its own X button.
+
 ## 1.0.29 — 2026-10-28
 
 ### Fixed

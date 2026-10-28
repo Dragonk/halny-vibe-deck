@@ -6070,9 +6070,12 @@ code {
     }
     .dock-resize-handle { display: none; }
     .dock-tabs { overflow-x: auto; padding-right: 46px; padding-left: 56px; }
-    /* v1.0.28: the panel that owns the corner hides its floating button */
+    /* v1.0.30: the floating buttons are mutually exclusive - an open
+       panel hides BOTH fabs; each panel closes with its own X button. */
     .web-fab-left.panel-open { display: none; }
     .web-fab-right.dock-open { display: none; }
+    .web-fab-left.dock-open { display: none; }
+    .web-fab-right.sidebar-open { display: none; }
     .sidebar .sidebar-brand { padding-right: 56px; }
     .sidebar, .dock { padding-bottom: env(safe-area-inset-bottom, 0px); }
     .dock-tab-name {

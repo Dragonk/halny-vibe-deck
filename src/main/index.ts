@@ -3,7 +3,7 @@ import { join, dirname } from "path";
 import * as pathMod from "path";
 import fs from "fs";
 import os from "os";
-import dgram from "node:dgram";
+import { spawn } from "node:child_process";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { applyPortableUpdate, cleanupStaleUpdateDirs } from "./updateCmd";
@@ -327,50 +327,35 @@ function showFailedUpdateNotice(): void {
 
 const cliKey = argVal("key");
 
-// v1.0.28: best-effort sd_notify(3) over $NOTIFY_SOCKET. With Type=notify +
-// WatchdogSec a wedged main loop (port open, nothing served) stops the
-// WATCHDOG=1 pings and systemd restarts the unit instead of a silent 521.
-// Node typings do not know the "unix_dgram" socket type, but it works in
-// Electron (same trick systemd-cat style helpers use) - declare the tiny
-// surface we need and cast.
-interface UnixDgramSocketLike {
-  on(event: "error", listener: (err: Error) => void): void;
-  send(
-    msg: Buffer,
-    offset: number,
-    length: number,
-    path: string,
-    callback: (err: Error | null, bytes: number) => void
-  ): void;
-  close(): void;
-}
+// v1.0.30: sd_notify(3) via the systemd-notify helper. The v1.0.28 raw-dgram
+// implementation never sent a single byte: Node's dgram has no unix_dgram
+// support, createSocket("unix_dgram") throws "Bad socket type specified",
+// the silent try/catch hid it, and with Type=notify + WatchdogSec systemd
+// restarted a perfectly healthy service every 90 s. The helper handles
+// abstract and filesystem NOTIFY_SOCKET paths and cgroup credentials
+// natively; --no-block keeps every call fire-and-forget.
+let sdNotifyFailureLogged = false;
 
 function sdNotify(message: string): void {
-  const socketPath = process.env["NOTIFY_SOCKET"];
-  if (!socketPath) return;
+  if (!process.env["NOTIFY_SOCKET"]) return;
   try {
-    const target = socketPath.startsWith("@")
-      ? "\0" + socketPath.slice(1)
-      : socketPath;
-    const client = dgram.createSocket(
-      "unix_dgram" as unknown as dgram.SocketType
-    ) as unknown as UnixDgramSocketLike;
-    client.on("error", () => {
-      try {
-        client.close();
-      } catch {
-        /* already closed */
+    const child = spawn("systemd-notify", ["--no-block", message], {
+      stdio: "ignore",
+      detached: true,
+    });
+    child.on("error", (err) => {
+      if (!sdNotifyFailureLogged) {
+        sdNotifyFailureLogged = true;
+        console.log(`[systemd] systemd-notify failed: ${err.message}`);
       }
     });
-    client.send(Buffer.from(message, "utf8"), 0, message.length, target, () => {
-      try {
-        client.close();
-      } catch {
-        /* already closed */
-      }
-    });
-  } catch {
+    child.unref();
+  } catch (err) {
     /* best effort - never block app startup */
+    if (!sdNotifyFailureLogged) {
+      sdNotifyFailureLogged = true;
+      console.log(`[systemd] sd_notify failed: ${String(err)}`);
+    }
   }
 }
 
