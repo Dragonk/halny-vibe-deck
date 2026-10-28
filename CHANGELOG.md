@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.36 — 2026-10-28
+
+### Fixed
+
+- **Model, mode and thinking can now be changed on a session that has not been
+  resumed yet (sidebar preview).** A lazy session has no ACP session in the
+  CLI worker, so session/set_config_option always failed with
+  "Session not found" — v1.0.35 made that failure loud, which surfaced the
+  gap. Selecting a value on a lazy session now records it on the session and
+  applies it inside session/new|load (main process, before any prompt can
+  race it); the chip self-corrects to the CLI-confirmed value once the load
+  settles.
+- **The answer of the first prompt after a resume is no longer swallowed.**
+  The recorded-model apply inside session/load makes the CLI emit a
+  checkpoint tool call that seeded the streaming state before the replayed
+  SessionHistory replaced the message array — every later ThinkingChunk and
+  MessageChunk then appended to a deleted message id and the UI looked
+  frozen. The streaming state is now cleared when a replay replaces a
+  session, and chunk handlers verify their target bubble still exists
+  before appending.
+- **The user's own prompt bubble survives a resume replay.** The optimistic
+  echo could be wiped by the SessionHistory replace when the session/load
+  result was processed before the replay event: the re-add check saw the
+  echo still present, skipped, and the replace then deleted it.
+  applySessionHistory now preserves trailing local user messages the
+  replay does not know about, whichever side of the race wins.
+- **Renderer event-handler exceptions are no longer swallowed silently.**
+  The web bridge catches listener errors with an empty catch; the App's
+  ACP event handler is now wrapped so a throwing case logs to the console
+  instead of invisibly eating a stream of events.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.35...v1.0.36
+
 ## 1.0.35 — 2026-10-28
 
 ### Fixed

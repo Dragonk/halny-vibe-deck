@@ -298,6 +298,12 @@ export default function App(): React.JSX.Element {
           const title = d.title as string | undefined
           if (messages) {
             store.applySessionHistory(d.sessionId as string, messages, title)
+            // v1.0.36: the replay replace deleted every streamed message -
+            // including one a checkpoint ToolCall seeded mid-load (the
+            // recorded model apply runs inside session/load). Drop its
+            // streamingState entry or later chunks append to a ghost id.
+            const replayedId = store.getSessionByAcpId(d.sessionId as string)?.id
+            if (replayedId) streamingState.current.delete(replayedId)
             // v0.11.1: the main process assembles the replayed plan state -
             // restore it so the checklist survives a session resume.
             store.setSessionPlan(d.sessionId as string, (d.plan as PlanEntry[] | undefined) ?? [])
@@ -400,6 +406,18 @@ export default function App(): React.JSX.Element {
           const text = d.text as string
           const acpMsgId = d.messageId as string | undefined
           let state = streamingState.current.get(localId)
+          // v1.0.36: the streaming bubble may have been deleted by a
+          // replay replace (a checkpoint ToolCall seeded it mid-load,
+          // before the SessionHistory event landed) - appending to a
+          // ghost message id silently swallowed the whole answer.
+          // Re-open a fresh bubble instead.
+          if (state) {
+            const ghostId = state.msgId
+            if (!store.sessions.some((s) => s.id === localId && s.messages.some((m) => m.id === ghostId))) {
+              state = undefined
+              streamingState.current.delete(localId)
+            }
+          }
           // A new messageId from the agent means a new agent message
           if (state && acpMsgId && state.acpMsgId && acpMsgId !== state.acpMsgId) {
             store.finalizeAiMessage(localId, state.msgId)
@@ -434,6 +452,15 @@ export default function App(): React.JSX.Element {
             armBusyVerify(localId)
           }
           let state = streamingState.current.get(localId)
+          // v1.0.36: same ghost-bubble guard as MessageChunk - the replay
+          // replace may have deleted the bubble this state points at.
+          if (state) {
+            const ghostId = state.msgId
+            if (!store.sessions.some((s) => s.id === localId && s.messages.some((m) => m.id === ghostId))) {
+              state = undefined
+              streamingState.current.delete(localId)
+            }
+          }
           // v0.13.7: reasoning that arrives after a streamed text segment opens
           // the NEXT agent message - finalize the current one so the thought
           // block lands above its own text, not glued under the previous text.
@@ -785,7 +812,15 @@ export default function App(): React.JSX.Element {
 
   // Listen for ACP events
   useEffect(() => {
-    const unsub = window.api.acp.onEvent(handleAcpEvent)
+    // v1.0.36: webBridge swallows listener exceptions - surface them so a
+    // throwing case never silently eats a stream of events.
+    const unsub = window.api.acp.onEvent((event) => {
+      try {
+        handleAcpEvent(event)
+      } catch (err) {
+        console.error('[acp] handleAcpEvent threw for ' + event.type + ':', err)
+      }
+    })
     return unsub
   }, [handleAcpEvent])
 

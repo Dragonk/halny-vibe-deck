@@ -1257,6 +1257,14 @@ export default function InputBar({ config }: Props): React.JSX.Element {
             : { lastThinking: value }
       useStore.getState().updateSession(sess.id, patch)
     }
+    // v1.0.36: a lazy session (sidebar preview - visible history but not
+    // yet resumed) has no ACP session in the worker. set_config_option
+    // would fail with "Session not found" and the v1.0.35 revert would
+    // then throw away the user's choice. The recorded last* value is
+    // applied by the main process inside session/new|load
+    // (applyRecordedConfig), and ConfigOptionsUpdate syncs the chip to
+    // the CLI-confirmed value once the load settles.
+    if (sess?.acpSessionId && !useStore.getState().liveSessions.includes(sess.id)) return
     const acpSessId = useStore.getState().activeAcpSessionId ?? sess?.acpSessionId
     await window.api.acp
       .setConfigOption(key, value, acpSessId ?? undefined, sess?.remoteId ?? undefined)

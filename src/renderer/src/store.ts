@@ -1853,6 +1853,25 @@ export const useStore = create<AppStore>((set, get) => ({
         toolCalls,
       });
     });
+    // v1.0.36: the resume replay can RACE the optimistic echo of a
+    // just-sent prompt - the retry path (sendPrompt failed with
+    // "Session not found" -> session/load -> resend) loads the session
+    // while the user's own bubble is still on screen. When the
+    // session/load result is processed before the SessionHistory event,
+    // the InputBar re-add check sees the echo still present and skips;
+    // the replay replace then wipes it and the user's prompt visually
+    // vanished (the reply still arrived). Preserve trailing local user
+    // messages the replay does not know about - whichever side of the
+    // race wins, the echo survives.
+    const keepEcho: Message[] = [];
+    for (let i = local.messages.length - 1; i >= 0; i--) {
+      const m = local.messages[i];
+      if (m.sender !== 'user') break;
+      const inReplay = history.some((h) => h.role === 'user' && h.content === m.content);
+      if (!inReplay) keepEcho.unshift(m);
+      else break;
+    }
+    messages.push(...keepEcho);
     const updates: Partial<Session> = {
       messages,
       lastActive: Date.now(),
