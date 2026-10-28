@@ -67,7 +67,10 @@ test('login: reject, accept, then logout', async ({ page }) => {
   // Web client: theme + logout live at the bottom of the sessions list
   const logout = page.locator('.sidebar-logout-btn')
   await expect(logout).toBeVisible({ timeout: 30_000 })
-  await logout.click()
+  // The sessions panel keeps animating/scrolls, so Playwright's stability
+  // wait never settles — scroll it into view and force the click.
+  await logout.scrollIntoViewIfNeeded()
+  await logout.click({ force: true })
   await page.waitForURL(/\/login/, { timeout: 30_000 })
 })
 
