@@ -25,9 +25,9 @@ pub fn Shell() -> Element {
                 // Layout probe: only the desktop webview keeps the header
                 // (the SSR pass and the browser both render the web layout,
                 // so hydration stays stable).
-                let desktop = crate::state::is_desktop();
-                if desktop {
-                    state.write().desktop_mode = true;
+                if crate::state::is_desktop() {
+                    let mut st = state;
+                    st.write().desktop_mode = true;
                 }
             });
         }
