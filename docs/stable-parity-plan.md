@@ -32,8 +32,8 @@ the full logo — "HALNY / VIBE DECK" wordmark text.
 | Header brand (top-left) | `src/renderer/src/components/Header.tsx` → `<img src="./icon.png">` + app name; Sidebar brand row on web | `components/brand.rs` rewritten to the exact stable geometry (rects + paths, hardcoded stable colors — **not** theme variables) | Pixel-identical geometry/colors to stable's `BrandIcon` at the same sizes |
 | Chat empty state | `ChatView.tsx` → `<BrandIcon size=72>` | `chat.rs` empty state uses the same rewritten mark | Same |
 | Setup screen | `SetupView.tsx` → `<BrandIcon size=32>` | `setup.rs` | Same |
-| App icon (window/taskbar/exe) | `resources/halny-icon.svg` → `scripts/make-icons.js` (sharp + png-to-ico: 512/256/128/64/48/32/16) | Regenerate `crates/mistraldeck-app/assets/icon.png` (512) + `icon.ico` (multi-size) + `crates/mistraldeck/assets/icon.ico.b64` (PWA) from the stable SVG | Rendered icon matches stable exe/PWA icon |
-| PWA manifest | stable `manifest.webmanifest` has 512 + 256 icons, `id` field | `pwa.rs`: add a 512 icon route, keep 256, add `id` (fixes stable-bugs LOW #14 remainder) | Lighthouse/PWA install shows both sizes |
+| App icon (window/taskbar/exe) | `resources/halny-icon.svg` → `scripts/make-icons.js` (sharp + png-to-ico: 512/256/128/64/48/32/16) | Regenerate `crates/mistraldeck/assets/icon.ico.b64` (multi-size ICO, Windows PE resource + PWA 256) and add `icon-512.png.b64` — rasterized in Docker (cairosvg + Pillow) from the stable SVG | Rendered icon matches stable exe/PWA icon |
+| PWA manifest | stable `manifest.webmanifest` has 512 + 256 icons, `id` field | `pwa.rs`: manifest gains `"id": "/"` and the 512 icons (any + maskable); `/icon-512.png` route added to router + SW cacheable list | PWA install shows both sizes |
 
 Implementation note: keep the mark as a Dioxus component (inline SVG) for the
 crisp UI renders, and generate the binary assets (png/ico/b64) **in CI or a

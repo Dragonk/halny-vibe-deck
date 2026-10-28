@@ -1,8 +1,9 @@
 //! PWA static routes + gzip middleware (Nexus `serve` / v0.13.4 parity).
 //!
-//! - `/sw.js`, `/manifest.webmanifest` and `/icon-256.png` are served from
-//!   the binary itself (no extra files to ship next to the exe; the icon is
-//!   re-encoded from the repo's `assets/icon.ico.b64` via the `image` crate).
+//! - `/sw.js`, `/manifest.webmanifest` and `/icon-256.png` / `/icon-512.png`
+//!   are served from the binary itself (no extra files to ship next to the
+//!   exe; the 256 icon is re-encoded from the repo's `assets/icon.ico.b64`
+//!   via the `image` crate, the 512 icon ships as `assets/icon-512.png.b64`).
 //! - The service worker is cache-first for hashed assets and network-first
 //!   for the app shell, so a new release is never pinned by a stale
 //!   `index.html` (v0.7.2 fix carried over from Nexus).
@@ -77,7 +78,8 @@ self.addEventListener('fetch', (event) => {
             p === '/' ||
             p === '/index.html' ||
             p === '/manifest.webmanifest' ||
-            p === '/icon-256.png'
+            p === '/icon-256.png' ||
+            p === '/icon-512.png'
           if (cacheable) {
             const copy = res.clone()
             caches.open(CACHE).then((c) => c.put(req, copy))
@@ -91,9 +93,10 @@ self.addEventListener('fetch', (event) => {
 "#;
 
 const MANIFEST: &str = r##"{
+  "id": "/",
   "name": "Halny Vibe Deck",
-  "short_name": "HalnyVibeDeck",
-  "description": "Halny Vibe Deck - client for the Mistral Vibe agent",
+  "short_name": "Halny",
+  "description": "Halny Vibe Deck \u2014 unofficial client for the Mistral Vibe coding agent",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -108,8 +111,20 @@ const MANIFEST: &str = r##"{
       "purpose": "any"
     },
     {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/icon-256.png",
       "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
     }
@@ -215,6 +230,28 @@ async fn serve_icon_png() -> Response {
     static_response("image/png", png)
 }
 
+/// The 512×512 PWA icon, shipped as base64 text and decoded on request
+/// (same artwork as the ICO / window icon — the stable edition's
+/// `resources/halny-icon.svg`).
+static ICON_512_PNG: OnceLock<Vec<u8>> = OnceLock::new();
+
+fn icon_512_png() -> &'static [u8] {
+    ICON_512_PNG.get_or_init(|| decode_base64(include_str!("../assets/icon-512.png.b64").trim()))
+}
+
+async fn serve_icon_512_png() -> Response {
+    let png = icon_512_png().to_vec();
+    if png.is_empty() {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"))],
+            "icon unavailable",
+        )
+            .into_response();
+    }
+    static_response("image/png", png)
+}
+
 /// Add the PWA static routes to the app router. Explicit routes win over
 /// the dioxus SSR fallback, and the files ship inside the binary — no
 /// `public/` entries to keep in sync.
@@ -250,6 +287,7 @@ pub fn install_pwa_routes(router: Router) -> Router {
         .route("/sw.js", get(serve_sw_js))
         .route("/manifest.webmanifest", get(serve_manifest))
         .route("/icon-256.png", get(serve_icon_png))
+        .route("/icon-512.png", get(serve_icon_512_png))
 }
 
 // ---------------------------------------------------------------------------

@@ -97,7 +97,7 @@ pub fn Header() -> Element {
                     }
                 }
                 div { class: "header-brand",
-                    crate::components::brand::BrandMark { size: 0.24, class: "header-brand-mark".to_string() }
+                    crate::components::brand::BrandMark { size: 16.0, class: "header-brand-mark".to_string() }
                     span { class: "header-brand-name", "{tr(&lang, \"appName\")}" }
                 }
                 div { class: "{activity_cls}",

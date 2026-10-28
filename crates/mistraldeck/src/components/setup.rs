@@ -240,13 +240,7 @@ pub fn SetupView() -> Element {
             div { class: "setup-card",
                 div { class: "setup-header",
                     div { class: "setup-logo",
-                        svg {
-                            xmlns: "http://www.w3.org/2000/svg",
-                            width: "32", height: "32",
-                            view_box: "0 0 24 24",
-                            fill: "var(--accent)",
-                            path { d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z" }
-                        }
+                        crate::components::brand::BrandMark { size: 32.0, class: "setup-logo-mark".to_string() }
                     }
                     div {
                         div { class: "setup-title", "{tr(&lang, \"appName\")}" }

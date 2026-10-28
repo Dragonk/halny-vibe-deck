@@ -165,7 +165,7 @@ pub fn ChatView() -> Element {
                 div { class: "chat-inner",
                     if messages.is_empty() && !is_resuming {
                         div { class: "chat-empty",
-                            crate::components::brand::BrandMark { size: 0.98, class: "chat-empty-icon".to_string() }
+                            crate::components::brand::BrandMark { size: 72.0, class: "chat-empty-icon".to_string() }
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
                             div { class: "chat-empty-subtitle", "{subtitle}" }
                             if status == "error" && !agent_error.is_empty() {
