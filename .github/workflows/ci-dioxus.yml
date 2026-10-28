@@ -107,6 +107,7 @@ jobs:
 
       - name: Prepare config (login + remote listener)
         run: |
+          chmod +x scripts/e2e/stub-agent.py
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
           BIN="${CARGO_TARGET_DIR:-target}/debug/halny-vibe-deck-appserver"
           test -x "$BIN" || BIN="target/debug/halny-vibe-deck-appserver"
@@ -115,11 +116,12 @@ jobs:
           CFG="$XDG_CONFIG_HOME/halny-vibe-deck/config.json"
           test -f "$CFG" || { mkdir -p "$(dirname "$CFG")"; echo '{}' > "$CFG"; }
           python3 - "$CFG" <<'EOF'
-          import json, sys
+          import json, os, sys
           p = sys.argv[1]
           cfg = json.load(open(p))
           cfg["remote_enabled"] = True
           cfg["remote_port"] = 8443
+          cfg["agent_path"] = os.path.abspath("scripts/e2e/stub-agent.py")
           json.dump(cfg, open(p, "w"), indent=2)
           EOF
           cat "$CFG"
@@ -154,7 +156,14 @@ jobs:
         env:
           VD_LOCAL_URL: http://127.0.0.1:8080
           VD_REMOTE_URL: https://127.0.0.1:8443
-        run: npx playwright test
+        run: |
+          set +e
+          npx playwright test 2>&1 | tee ../.e2e-tests.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            while IFS= read -r line; do echo "::error::test: $line"; done < <(tail -60 ../.e2e-tests.log)
+          fi
+          exit $rc
 
       - name: Server log
         if: always()
