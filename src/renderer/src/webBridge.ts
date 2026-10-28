@@ -166,6 +166,7 @@ function buildApi(): AppAPI {
         invoke('acp:is-running', [remoteId ?? undefined]) as Promise<boolean>,
       // v1.0.13: sessions running a turn right now (boot/reconnect sync)
       busySessions: (): Promise<unknown> => invoke('acp:busy-sessions', []),
+      refreshSessions: (): Promise<void> => invoke('acp:refresh-sessions', []).then(() => undefined),
       getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
         invoke('acp:get-context-summary', [messages, remoteId ?? undefined]) as Promise<string>,
       onEvent: (cb: (event: unknown) => void): (() => void) => {

@@ -250,11 +250,11 @@ export default function Sidebar(): React.JSX.Element {
     // new messages. Load from disk until the history IS loaded (the flag
     // is per client and set by applySessionHistory) - the file preview is
     // a ~20 ms read, idempotent, and the disk state wins.
-    if (
-      !historyLoadedSessions.includes(id) &&
-      !session.loading &&
-      !busySessions.includes(id)
-    ) {
+    // v1.0.25: ALWAYS re-read the history from disk on a session switch
+    // (a ~20 ms read) - the per-client loaded-flag went stale when the
+    // session was worked on from ANOTHER device; only a locally
+    // streaming session keeps its live tail untouched.
+    if (!busySessions.includes(id) && !session.loading) {
       await useStore.getState().previewSession(id)
     }
     // v0.12: rebuild the chip option lists AFTER the preview so they use
@@ -277,10 +277,16 @@ export default function Sidebar(): React.JSX.Element {
     if (wd !== '' && hiddenProjects.includes(wd)) return false
     return true
   })
-  const displayedSessions =
+  const displayedSessions = visibleSessions
+  // v1.0.25: the per-project limit is applied at RENDER time (each group
+  // shows its N newest sessions) - the old global slice is gone.
+
+  // v1.0.25: the sidebar limit is PER PROJECT - the N newest sessions of
+  // every project group (and the no-project group) are shown.
+  const perProjectLimit =
     config.sidebarSessionsLimit && config.sidebarSessionsLimit > 0
-      ? visibleSessions.slice(0, config.sidebarSessionsLimit)
-      : visibleSessions
+      ? config.sidebarSessionsLimit
+      : null
 
   const remoteConns: RemoteConnection[] = (config.remoteConnections ?? []).filter(
     (c) => c.enabled,
@@ -467,7 +473,7 @@ export default function Sidebar(): React.JSX.Element {
                   >
                     ＋ {tr.newSessionHere}
                   </button>
-                  {group.sessions.map(renderSession)}
+                  {(perProjectLimit ? group.sessions.slice(0, perProjectLimit) : group.sessions).map(renderSession)}
                 </>
               )}
             </div>

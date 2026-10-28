@@ -295,10 +295,35 @@ export default function SettingsView(): React.JSX.Element {
   const projectCwd = scope === 'project' && scopeTarget !== 'global' ? scopeTarget : sessionCwd
   const projectRemoteId: string | null = scope === 'project' && scopeAgent !== 'local' ? scopeAgent : null
   const vibeRemoteId: string | undefined = scopeAgent === 'local' ? undefined : scopeAgent
+  // v1.0.25: removed/archived projects must not offer themselves in the
+  // agent/prompt configuration - keep only folders that still EXIST
+  // (checked once per scope switch; a missing folder is silently dropped).
+  const [existingOk, setExistingOk] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    const candidates = (scopeAgent === 'local'
+      ? (config.recentFolders ?? [])
+      : (remoteConn?.locations ?? [])
+    ).filter((p, i, arr) => p && arr.indexOf(p) === i)
+    let alive = true
+    void (async () => {
+      const results: Record<string, boolean> = {}
+      for (const p of candidates) {
+        try {
+          const st = (await window.api.fs.stat(p, scopeAgent === 'local' ? undefined : scopeAgent)) as { exists?: boolean }
+          results[p] = Boolean(st?.exists)
+        } catch {
+          results[p] = false
+        }
+      }
+      if (alive) setExistingOk(results)
+    })()
+    return () => { alive = false }
+  }, [scopeAgent, config.recentFolders, remoteConn])
+
   const scopeProjects = (scopeAgent === 'local'
     ? (config.recentFolders ?? [])
     : (remoteConn?.locations ?? [])
-  ).filter((p, i, arr) => p && arr.indexOf(p) === i)
+  ).filter((p, i, arr) => p && arr.indexOf(p) === i && existingOk[p] !== false)
   const localExtraWd = scopeAgent === 'local' && sessionCwd !== '' && !scopeProjects.includes(sessionCwd) ? sessionCwd : null
   const scopeProjectOptions = localExtraWd !== null ? [localExtraWd, ...scopeProjects] : scopeProjects
 

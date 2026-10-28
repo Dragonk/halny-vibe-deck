@@ -140,6 +140,7 @@ const api = {
       ipcRenderer.invoke('acp:answer-question', requestId, answer, remoteId ?? undefined),
     stop: (): Promise<void> => ipcRenderer.invoke('acp:stop'),
     isRunning: (remoteId?: string): Promise<boolean> => ipcRenderer.invoke('acp:is-running', remoteId ?? undefined),
+    refreshSessions: (): Promise<void> => ipcRenderer.invoke('acp:refresh-sessions'),
     busySessions: (): Promise<Array<{ acpSessionId: string; remoteId: string | null }>> =>
       ipcRenderer.invoke('acp:busy-sessions'),
     getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>

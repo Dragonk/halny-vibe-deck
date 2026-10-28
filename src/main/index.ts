@@ -595,6 +595,15 @@ app.whenReady().then(() => {
     return { ok: true };
   });
 
+  // v1.0.25: re-pull the CLI's session list into the sidebar - a client
+  // returning from the background imports sessions created on other
+  // devices while it was away (the manager emits SessionsList).
+  ipcMain.handle("acp:refresh-sessions", async (_e, remoteId?: string) => {
+    const mgr = remoteId ? getRemoteManager(remoteId) : acpManager;
+    await mgr.listSessions().catch(() => {});
+    return { ok: true };
+  });
+
   ipcMain.handle("acp:busy-sessions", () => {
     const out: Array<{ acpSessionId: string; remoteId: string | null }> = []
     for (const sid of acpManager.busySessionIds()) out.push({ acpSessionId: sid, remoteId: null })

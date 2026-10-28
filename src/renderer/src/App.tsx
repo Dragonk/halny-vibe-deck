@@ -870,11 +870,16 @@ export default function App(): React.JSX.Element {
   // Android kept it alive) - events streamed while away were missed
   // even with a live WS. Every return to visibility pulls the full
   // state again; closing the PWA never stops anything server-side.
+  // v1.0.25: on wake the client ALSO re-pulls the session list from the
+  // server (sessions created on other devices while this client was
+  // away appear here automatically).
   useEffect(() => {
     if (!isWebMode()) return
     const onVis = (): void => {
       if (document.visibilityState === 'visible') {
-        void useStore.getState().resyncAfterReconnect()
+        const st = useStore.getState()
+        void st.resyncAfterReconnect()
+        void window.api.acp.refreshSessions()
       }
     }
     document.addEventListener('visibilitychange', onVis)

@@ -937,6 +937,19 @@ export const useStore = create<AppStore>((set, get) => ({
         .filter((s) => !get().busySessions.includes(s.id) && !s.loading)
         .map((s) => get().previewSession(s.id)),
     );
+    // v1.0.25: the server-owned queue view + the current session's chips
+    // (model/mode/thinking may have changed on ANOTHER device while this
+    // client was away).
+    try {
+      const q = (await window.api.queue.list()) as never;
+      get().setQueue(q);
+    } catch {
+      /* queue sync is best-effort */
+    }
+    const cur2 = get().currentSession();
+    if (cur2?.acpSessionId) {
+      void get().syncSessionChips(cur2.id).catch(() => {});
+    }
     void get().refreshRemoteData();
   },
 
