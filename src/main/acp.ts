@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import { BrowserWindow } from 'electron'
 import * as readline from 'readline'
+import * as os from 'os'
 import { randomUUID } from 'crypto'
 import { broadcastToWeb } from './bus'
 
@@ -879,6 +880,9 @@ export class AcpManager {
 
     this.remote = remote ?? null
     this.lastAcpPath = acpPath
+    // v1.0.27: keep the worker's stderr tail so the exit error can explain
+    // WHY the process died (issue #1).
+    let stderrTail: string[] = []
     let proc: ChildProcess
     if (remote) {
       const tokens = remote.sshCmd.trim().split(/\s+/).filter(Boolean)
@@ -890,7 +894,14 @@ export class AcpManager {
         windowsHide: true
       })
     } else {
+      // v1.0.27 (issue #1): without an explicit cwd the worker inherits the
+      // app's working directory. When the app is launched from an
+      // all-users install the cwd is the install dir (Program Files), and
+      // the CLI exits with code 1 there as a standard user before ever
+      // answering `initialize`. Pin the cwd to the user's home directory,
+      // which is always writable.
       proc = spawn(acpPath, [], {
+        cwd: os.homedir(),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
       })
@@ -901,7 +912,10 @@ export class AcpManager {
     rl.on('line', (line) => this.handleLine(line))
 
     proc.stderr!.on('data', (d: Buffer) => {
-      this.emit({ type: 'DebugLog', data: { message: 'stderr: ' + d.toString().trim() } })
+      const msg = d.toString().trim()
+      stderrTail.push(msg)
+      if (stderrTail.length > 15) stderrTail.shift()
+      this.emit({ type: 'DebugLog', data: { message: 'stderr: ' + msg } })
     })
 
     proc.on('exit', (code) => {
@@ -912,7 +926,15 @@ export class AcpManager {
         // v1.0.3: a dead worker must never leave requests hanging - reject
         // every pending call so the UI fails fast instead of spinning until
         // the request timeout (an hour for session/prompt) with no feedback.
-        const err = new Error('ACP worker exited before responding (code ' + (code ?? -1) + ')')
+        let err = new Error('ACP worker exited before responding (code ' + (code ?? -1) + ')')
+        // v1.0.27 (issue #1): surface the worker's stderr tail so startup
+        // failures are diagnosable without a debugger.
+        if (stderrTail.length > 0) {
+          err = new Error(
+            'ACP worker exited before responding (code ' + (code ?? -1) + '). Last stderr:\n' +
+              stderrTail.join('\n'),
+          )
+        }
         for (const [, pr] of this.pending) {
           try {
             pr.reject(err)

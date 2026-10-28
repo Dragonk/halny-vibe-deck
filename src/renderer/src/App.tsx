@@ -73,6 +73,10 @@ export default function App(): React.JSX.Element {
     markSessionIdle,
     mobileSidebarOpen,
     setMobileSidebarOpen,
+    acpStatus,
+    dockOpen,
+    dockWidth,
+    setDockOpen,
   } = useStore()
 
   const tr = useTranslation(config.language)
@@ -1084,7 +1088,41 @@ export default function App(): React.JSX.Element {
     >
       {/* v1.0.13: native-style "press back again to exit" toast */}
       {backToast && <div className="back-toast">{tr.backExitToast}</div>}
-      <Header />
+      {/* v1.0.27: the web client has no title bar - the sidebar owns the
+          brand, the floating buttons own panel toggling. */}
+      {!isWebMode() && <Header />}
+      {isWebMode() && (
+        <>
+          {/* Sessions panel toggle - floating, top-left corner (phone). */}
+          <button
+            className="web-fab web-fab-left"
+            title={tr.menuLabel}
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+            <span className={`web-fab-dot ${acpStatus === 'connected' ? 'ok' : acpStatus === 'error' ? 'err' : 'off'}`} />
+          </button>
+          {/* Preview panel toggle - floating, right edge, above the chat at
+              ANY screen width (the web client has no header bar). When the
+              dock is open the button slides left of it instead of covering
+              the dock tabs. */}
+          <button
+            className={`web-fab web-fab-right ${dockOpen && currentView === 'chat' ? 'active' : ''}`}
+            style={dockOpen && currentView === 'chat' ? { right: (dockWidth ?? 420) + 20 } : undefined}
+            title={tr.dockToggle}
+            onClick={() => setDockOpen(!dockOpen)}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="15" y1="3" x2="15" y2="21" />
+            </svg>
+          </button>
+        </>
+      )}
       {!updateInfo.dismissed &&
         ((updateInfo.app?.updateAvailable ?? false) || (updateInfo.cli?.updateAvailable ?? false)) && (
           <div className="update-banner">

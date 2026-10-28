@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useStore } from '../store'
 import { useTranslation, t } from '../i18n'
+import { isWebMode } from '../webBridge'
 import NewProjectModal from './NewProjectModal'
 import type { Session, RemoteConnection } from '../types'
 
@@ -51,8 +52,52 @@ export default function Sidebar(): React.JSX.Element {
     setMobileSidebarOpen,
     liveSessions,
     closeSession,
+    theme,
+    toggleTheme,
+    acpStatus,
+    acpError,
   } = useStore()
   const tr = useTranslation(config.language)
+  // v1.0.27: in the browser the top title bar is gone - the sidebar owns
+  // the brand row, the activity dot and the logout / theme controls.
+  const web = isWebMode()
+
+  const handleLogout = async (): Promise<void> => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      /* best effort */
+    }
+    window.location.href = '/login'
+  }
+
+  const getThemeIcon = (): string => {
+    if (theme === 'auto') return '◑'
+    return theme === 'dark' ? '☀' : '☾'
+  }
+
+  const getThemeTitle = (): string => {
+    if (theme === 'auto') return tr.themeAuto
+    if (theme === 'dark') return tr.themeDark
+    return tr.themeLight
+  }
+
+  const statusText =
+    acpStatus === 'connected'
+      ? tr.statusConnected
+      : acpStatus === 'connecting'
+        ? tr.statusConnecting
+        : acpStatus === 'error'
+          ? t(tr, 'statusError', { error: acpError ?? '' })
+          : tr.statusDisconnected
+  const statusClass =
+    acpStatus === 'connected'
+      ? 'activity-connected'
+      : acpStatus === 'connecting'
+        ? 'activity-connecting'
+        : acpStatus === 'error'
+          ? 'activity-error'
+          : 'activity-disconnected'
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
@@ -409,6 +454,18 @@ export default function Sidebar(): React.JSX.Element {
       {/* v1.0.9: no ✕ on the mobile sessions panel - the user closes it
           with the back gesture / swipe, or by picking a session. */}
 
+      {/* v1.0.27: web only - the title bar is gone, so the brand lives
+          here at the very top of the sessions panel. */}
+      {web && (
+        <div className="sidebar-brand">
+          <img src="./icon.png" alt="" className="sidebar-brand-img" />
+          <span className="sidebar-brand-name">{tr.appName}</span>
+          <span className={`header-activity ${statusClass}`} style={{ marginLeft: 'auto' }}>
+            <span className="activity-icon" />
+          </span>
+        </div>
+      )}
+
       <div className="sidebar-sessions-header">
         <span className="sidebar-sessions-label">{tr.sessions}</span>
         {/* v1.0.7: the bottom duplicate of this button was removed - the
@@ -647,6 +704,16 @@ export default function Sidebar(): React.JSX.Element {
         >
           {tr.settings}
         </button>
+        {web && (
+          <>
+            <button className="sidebar-nav-item sidebar-theme-btn" onClick={toggleTheme} title={getThemeTitle()}>
+              {getThemeIcon()} {getThemeTitle().split('(')[0].trim()}
+            </button>
+            <button className="sidebar-nav-item sidebar-logout-btn" onClick={() => void handleLogout()} title={tr.logoutLabel}>
+              ⏻ {tr.logoutLabel}
+            </button>
+          </>
+        )}
       </nav>
 
       <div className="sidebar-resize-handle" onPointerDown={handlePointerDown} />
