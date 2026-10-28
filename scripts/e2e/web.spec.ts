@@ -59,8 +59,13 @@ test('web shell renders the brand and the sidebar bottom controls', async ({ pag
   await expect(page.locator('header .header-brand-name')).toContainText('Halny')
   // Web-only bottom controls (stable v1.0.33 placement)
   await expect(page.locator('.sidebar-logout-btn')).toBeVisible()
-  // No fatal client errors during hydration
-  expect(errors.filter((e) => !/favicon|manifest/i.test(e))).toEqual([])
+  // No fatal client errors during hydration. The dioxus hot-reload socket
+  // (`/_dioxus`) only exists under `dx serve`, and the PWA icon/manifest
+  // fetches are allowed to 404 in dev — everything else must be clean.
+  const fatal = errors.filter(
+    (e) => !/favicon|manifest|_dioxus|WebSocket/i.test(e),
+  )
+  expect(fatal).toEqual([])
 })
 
 test('remote login flow: reject, accept, logout', async ({ page }) => {
