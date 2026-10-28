@@ -1,4 +1,4 @@
-import { execSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
@@ -35,17 +35,58 @@ function augmentedEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-export function tryExec(cmd: string): string | null {
-  try {
-    return execSync(cmd, {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000,
-      env: augmentedEnv()
-    }).trim()
-  } catch {
-    return null
-  }
+// v1.0.29: async replacement for the old execSync helper. execSync ran in
+// the MAIN process and blocked the whole event loop; with a shell that
+// died but left grandchildren holding the stdio pipes it hung FOREVER
+// (the loop stopped pumping while the port stayed open - the silent 521
+// behind the reverse proxy). This version never blocks and kills the
+// entire process group on timeout, so no descendant can keep it alive.
+export function tryExecAsync(cmd: string, timeoutMs = 5000): Promise<string | null> {
+  return new Promise((resolve) => {
+    let out = ''
+    let settled = false
+    const done = (v: string | null): void => {
+      if (!settled) {
+        settled = true
+        clearTimeout(timer)
+        resolve(v)
+      }
+    }
+    let proc: ReturnType<typeof spawn>
+    try {
+      // detached on POSIX = own process group, killable as a group below
+      proc = spawn(cmd, [], {
+        shell: true,
+        env: augmentedEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      })
+    } catch {
+      resolve(null)
+      return
+    }
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform === 'win32') proc.kill()
+        else process.kill(-proc.pid!, 'SIGKILL')
+      } catch {
+        try {
+          proc.kill('SIGKILL')
+        } catch {
+          /* already gone */
+        }
+      }
+      done(null)
+    }, timeoutMs)
+    proc.stdout?.on('data', (d: Buffer) => {
+      out += d.toString()
+    })
+    proc.stderr?.on('data', (d: Buffer) => {
+      out += d.toString()
+    })
+    proc.on('error', () => done(null))
+    proc.on('close', (code) => done(code === 0 ? out.trim() : null))
+  })
 }
 
 // Candidate filesystem paths for a binary (in order of priority)
@@ -69,9 +110,9 @@ function candidatePaths(name: string): string[] {
   }
 }
 
-export function findBinary(name: string): string | null {
+export async function findBinaryAsync(name: string): Promise<string | null> {
   // 1. Check PATH (with augmented env)
-  const whereResult = tryExec(
+  const whereResult = await tryExecAsync(
     process.platform === 'win32' ? `where "${name}"` : `which "${name}"`
   )
   if (whereResult) return whereResult.split('\n')[0].trim()
@@ -83,9 +124,9 @@ export function findBinary(name: string): string | null {
   return null
 }
 
-export function checkSetup(): SetupStatus {
-  const vibAcpPath = findBinary('vibe-acp')
-  const uvPath = findBinary('uv')
+export async function checkSetupAsync(): Promise<SetupStatus> {
+  const vibAcpPath = await findBinaryAsync('vibe-acp')
+  const uvPath = await findBinaryAsync('uv')
   return {
     vibAcpFound: vibAcpPath !== null,
     vibAcpPath,
@@ -139,7 +180,7 @@ async function installUv(onProgress: ProgressCallback): Promise<string> {
     await runCommand('sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh'], onProgress)
   }
 
-  const uvPath = findBinary('uv')
+  const uvPath = await findBinaryAsync('uv')
   if (!uvPath) {
     throw new Error(
       'uv nie znaleziono po instalacji. Uruchom aplikację ponownie lub zainstaluj uv ręcznie.'
@@ -153,7 +194,7 @@ export async function installDependencies(
   onProgress: ProgressCallback
 ): Promise<{ success: boolean; vibAcpPath: string | null }> {
   try {
-    const status = checkSetup()
+    const status = await checkSetupAsync()
 
     // Step 1: uv
     let uvPath = status.uvPath
@@ -169,7 +210,7 @@ export async function installDependencies(
     onProgress('mistral-vibe zainstalowano.', 'success')
 
     // Step 3: locate vibe-acp
-    const vibAcpPath = findBinary('vibe-acp')
+    const vibAcpPath = await findBinaryAsync('vibe-acp')
     if (vibAcpPath) {
       onProgress(`vibe-acp gotowy: ${vibAcpPath}`, 'success')
       return { success: true, vibAcpPath }

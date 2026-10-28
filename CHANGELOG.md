@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.29 — 2026-10-28
+
+### Fixed
+
+- **Headless serve: the event loop can no longer be wedged by CLI version
+  checks.** setup/update checks ran execSync (`which`, `vibe --version`)
+  in the main process - when the spawned shell died but its grandchildren
+  kept the stdio pipes open, the whole loop froze forever: port open,
+  zero responses - the silent 521 behind the reverse proxy. All of
+  these now run asynchronously with process-group kills on timeout;
+  nothing in the serve path blocks the loop anymore.
+- **Self-update on a systemd deployment no longer kills the service.**
+  The Linux self-update used app.relaunch() + exit(0): under a user unit
+  the relaunched child dies with the cgroup and exit(0) reads as success,
+  so Restart=on-failure never fired. The updater now asks systemd to
+  restart the unit (NOTIFY_SOCKET detection, v1.0.28+ deployments) and
+  exits non-zero as a failsafe.
+
+### Added
+
+- Event-loop lag monitor: stalls over 2 s are logged to the journal as
+  postmortem evidence for watchdog restarts.
+- Windows: the failed-update notice dialog is skipped in headless mode.
 ## 1.0.28 — 2026-10-28
 
 ### Fixed

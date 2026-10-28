@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import fs from "fs"
 import { app } from "electron"
-import { findBinary, tryExec } from "./setup"
+import { findBinaryAsync, tryExecAsync } from "./setup"
 import { sshRun } from "./remote"
 import { loadConfig } from "./config"
 import type { RemoteConnection } from "./config"
@@ -180,9 +180,9 @@ function extractVersion(out: string): string | null {
   return m ? m[0] : null
 }
 
-function localCliVersion(): string | null {
+async function localCliVersion(): Promise<string | null> {
   const candidates: string[] = []
-  const fromPath = findBinary("vibe")
+  const fromPath = await findBinaryAsync("vibe")
   if (fromPath) candidates.push(fromPath)
   // v0.11.0: GUI launches often lack the user's shell PATH - the configured
   // vibe-acp sits next to the `vibe` binary in the same uv tool bin dir.
@@ -195,7 +195,7 @@ function localCliVersion(): string | null {
     /* config unavailable */
   }
   for (const candidate of candidates) {
-    const out = tryExec('"' + candidate + '" --version')
+    const out = await tryExecAsync('"' + candidate + '" --version')
     if (out) {
       const v = extractVersion(out)
       if (v) return v
@@ -207,7 +207,7 @@ function localCliVersion(): string | null {
 export async function checkCliUpdate(): Promise<CliUpdateInfo> {
   let current: string | null = null
   try {
-    current = localCliVersion()
+    current = await localCliVersion()
   } catch {
     current = null
   }
@@ -300,13 +300,13 @@ export interface CliUpgradeResult {
 }
 
 export async function upgradeLocalCli(): Promise<CliUpgradeResult> {
-  const uv = findBinary("uv")
+  const uv = await findBinaryAsync("uv")
   if (!uv) return { version: null, error: "uv not found - install it first (https://docs.astral.sh/uv/)" }
   const r = await runAsync(uv, ["tool", "upgrade", PYPI_PACKAGE], 300000)
   if (r.code !== 0) {
     return { version: null, error: "uv tool upgrade failed: " + (r.stderr || r.stdout).trim().slice(0, 500) }
   }
-  return { version: localCliVersion(), error: null }
+  return { version: await localCliVersion(), error: null }
 }
 
 export async function upgradeRemoteCli(conn: RemoteConnection): Promise<CliUpgradeResult> {
@@ -630,6 +630,29 @@ export async function updateApp(onProgress?: (p: UpdateProgress) => void): Promi
         return { ok: false, error: "unzip failed: " + (r.stderr || r.stdout).trim().slice(0, 500) }
       }
       emit({ phase: "relaunch", received: size, total: size, percent: 100 })
+      // v1.0.29: under systemd (NOTIFY_SOCKET set by a Type=notify user
+      // unit) app.relaunch() + exit(0) is a trap: the relaunched child
+      // dies with the unit cgroup and exit(0) reads as success, so
+      // Restart=on-failure never fires and the endpoint is left dead.
+      // Ask systemd to restart the unit (it re-executes the freshly
+      // unzipped binary) and exit non-zero as a failsafe.
+      if (process.env["NOTIFY_SOCKET"]) {
+        console.log("[update] systemd unit detected - restarting service into the new version")
+        try {
+          const child = spawn("systemctl", ["--user", "restart", "halny-vibe-deck"], {
+            detached: true,
+            stdio: "ignore",
+          })
+          child.on("error", () => {
+            /* failsafe: the non-zero exit below still triggers Restart=on-failure */
+          })
+          child.unref()
+        } catch {
+          /* failsafe below */
+        }
+        setTimeout(() => app.exit(1), 500)
+        return { ok: true, error: null }
+      }
       app.relaunch()
       app.exit(0)
       return { ok: true, error: null }

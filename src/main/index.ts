@@ -4,6 +4,7 @@ import * as pathMod from "path";
 import fs from "fs";
 import os from "os";
 import dgram from "node:dgram";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { applyPortableUpdate, cleanupStaleUpdateDirs } from "./updateCmd";
 import {
@@ -27,7 +28,7 @@ import {
   loadSessionLastConfig,
   loadSessionPreview,
 } from "./vibeStats";
-import { checkSetup, installDependencies } from "./setup";
+import { checkSetupAsync, installDependencies } from "./setup";
 import {
   loadVibeConfig,
   saveVibeConfig,
@@ -307,7 +308,8 @@ const cliCert = argVal("cert");
 // the temp dir when a self-update could not finish; surface it once on the
 // next launch so update failures are never silent again.
 function showFailedUpdateNotice(): void {
-  if (process.platform !== "win32") return
+  // v1.0.29: never raise a dialog from a headless server instance
+  if (process.platform !== "win32" || headless) return
   try {
     const failPath = join(os.tmpdir(), "nexus-update-failed.txt")
     if (!fs.existsSync(failPath)) return
@@ -382,8 +384,31 @@ function startSystemdNotify(): void {
   console.log(`[systemd] notify active, watchdog ping every ${intervalMs}ms`);
 }
 
+// v1.0.29: postmortem evidence for watchdog restarts. If anything ever
+// stalls the loop again, the journal gets a line with the measured lag
+// instead of a silent wedge.
+function startLoopDiagnostics(): void {
+  try {
+    const hist = monitorEventLoopDelay({ resolution: 50 });
+    hist.enable();
+    const timer = setInterval(() => {
+      const maxMs = hist.max / 1e6;
+      if (maxMs > 2000) {
+        console.log(
+          `[loop] event-loop lag in the last 30s: mean ${(hist.mean / 1e6).toFixed(0)}ms, max ${maxMs.toFixed(0)}ms`,
+        );
+      }
+      hist.reset();
+    }, 30000);
+    timer.unref();
+  } catch {
+    /* diagnostics only - never block startup */
+  }
+}
+
 app.whenReady().then(() => {
   startSystemdNotify();
+  startLoopDiagnostics();
   // v0.14.0 rebrand: one-time migration of user data from the legacy
   // "mistral-vibe-nexus" directory so settings survive the rename.
   try {
@@ -1065,13 +1090,13 @@ app.whenReady().then(() => {
   });
 
   // Setup / installation
-  ipcMain.handle("setup:check", () => checkSetup());
+  ipcMain.handle("setup:check", () => checkSetupAsync());
 
   ipcMain.handle("setup:install", async () => {
     await installDependencies((message, type) => {
       win?.webContents.send("setup:progress", { message, type });
     });
-    return checkSetup();
+    return checkSetupAsync();
   });
 
   // Vibe config (config.toml) — global (~/.vibe) or project (<cwd>/.vibe) scope
