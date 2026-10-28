@@ -44,6 +44,21 @@ pub async fn api_snapshot(token: String) -> Result<Snapshot, ServerFnError> {
     Ok(mistraldeck_engine::Engine::global().snapshot())
 }
 
+/// Re-read the current session from the agent before the client refreshes.
+///
+/// Called on visibility-resync (hidden tab, sleeping laptop, dropped
+/// websocket). Without it a client-side snapshot refetch only sees what the
+/// server projection already knew — messages the agent emitted during the
+/// gap would stay missing until the user reloaded the page (the stable
+/// edition's bug). The engine answers immediately; the authoritative state
+/// arrives as bus events and the client's refresh picks it up.
+#[server]
+pub async fn api_resync_current(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().resync_current_session();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // L1: login & account (setup/* + account/read + identity/read)
 // ---------------------------------------------------------------------------

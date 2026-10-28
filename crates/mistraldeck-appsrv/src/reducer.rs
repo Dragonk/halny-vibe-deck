@@ -635,6 +635,44 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, AgentEvent::ThinkingChunk { text, .. } if text == "king")));
     }
 
+    /// The e2e stub agent (scripts/e2e/stub-agent.py) streams a reply by
+    /// replacing an assistant entry's content through `history/entryUpdated`
+    /// json-patch ops. This test pins that shape: only the appended part
+    /// becomes a MessageChunk (no duplicated text).
+    #[test]
+    fn entry_update_patch_emits_only_the_delta() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let added = p.consume(
+            "history/entryAdded",
+            &json!({"entry": {"type": "message", "role": "assistant", "id": "e1",
+                              "content": [{"type": "text", "text": "Working"}]}}),
+        );
+        assert!(added
+            .iter()
+            .any(|e| matches!(e, AgentEvent::MessageChunk { text, .. } if text == "Working")));
+
+        let evs = p.consume(
+            "history/entryUpdated",
+            &json!({
+                "entryId": "e1",
+                "patch": [{
+                    "op": "replace",
+                    "path": "/history/0/content",
+                    "value": [{"type": "text", "text": "Working on it."}],
+                }],
+            }),
+        );
+        let deltas: Vec<String> = evs
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::MessageChunk { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec![" on it.".to_string()]);
+    }
+
     /// Turn lifecycle: turn/started arms the interrupt target, turn/completed
     /// emits PromptCompleted and clears it (W9).
     #[test]

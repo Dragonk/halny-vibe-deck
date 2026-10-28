@@ -99,8 +99,16 @@ pub fn Shell() -> Element {
                     move |_| {
                         let state = state.clone();
                         async move {
-                            // Full snapshot + queued prompts: the tab
-                            // may have missed any number of events.
+                            // Ask the agent for the authoritative session
+                            // state first: the tab may have missed events
+                            // that never reached this server's projection
+                            // (the stable-edition "15 minutes missing until
+                            // reload" bug), then refetch the snapshot.
+                            let token = state.read().token.clone().unwrap_or_default();
+                            let _ = crate::api::api_resync_current(token).await;
+                            // Let the resume response land on the bus
+                            // before the snapshot is read.
+                            crate::state::sleep_ms(250).await;
                             refresh(state).await;
                             crate::state::drain_queue(state).await;
                         }

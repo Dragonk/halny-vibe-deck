@@ -1250,6 +1250,35 @@ impl Engine {
         }
     }
 
+    /// Re-read the current session from the agent (`session/resume`).
+    ///
+    /// The browser view can miss events (hidden tab, sleeping laptop, a
+    /// dropped websocket). A client-side snapshot refetch alone only sees
+    /// this server's projection, so anything the agent emitted while the
+    /// stream was broken stays missing until the user reloads the page —
+    /// exactly the stable-edition bug we must not repeat. Asking the agent
+    /// for the authoritative session state closes that hole: the projection
+    /// is replaced, the UI receives the backfilled history on its refresh.
+    pub fn resync_current_session(&self) {
+        let st = self.state.lock().unwrap();
+        let target = st
+            .current_session()
+            .and_then(|s| st.slot_of_session(&s.id))
+            .or_else(|| st.slots.iter().next().map(|(id, _)| *id))
+            .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()));
+        let agent_session_id = st
+            .current_session()
+            .and_then(|s| s.agent_session_id.clone());
+        drop(st);
+        if let (Some(cmd), Some(session_id)) = (target, agent_session_id) {
+            let _ = cmd.send(AgentCommand::ResumeSession {
+                session_id,
+                cwd: String::new(),
+                model: None,
+            });
+        }
+    }
+
     // ---------------- setup install (local dependencies) ----------------
 
     /// Current install state (progress lines + running/finished flags).
