@@ -359,12 +359,66 @@ function sdNotify(message: string): void {
   }
 }
 
+// v1.0.31: Chromium (the browser process) migrates itself into a
+// transient app-*.scope a few seconds after startup (StartTransientUnit
+// with PIDs=[self]) - fine for desktop apps, fatal for a Type=notify
+// service: sd_notify messages sent from the scope are attributed to the
+// scope and ignored by the service unit, so the watchdog killed a
+// perfectly healthy service every WatchdogSec. Self-heal: remember the
+// cgroup we were born in; before every notify call, if we have been
+// moved, write our pid back into it (cgroup v2 allows a process to do
+// this for user-manager-owned cgroups).
+let serviceCgroupPath = "";
+let cgroupHealWarned = false;
+
+function readSelfCgroup(): string {
+  try {
+    const line =
+      fs.readFileSync("/proc/self/cgroup", "utf8").trim().split("\n").pop() ??
+      "";
+    return line.startsWith("0::") ? line.slice(3) : "";
+  } catch {
+    return "";
+  }
+}
+
+function initCgroupHeal(): void {
+  const own = readSelfCgroup();
+  // Only engage when we started inside a service-managed cgroup -
+  // outside systemd (manual runs, dev) there is nothing to heal.
+  if (!own || own.endsWith(".scope") || !own.endsWith(".service")) return;
+  serviceCgroupPath = own;
+}
+
+function ensureServiceCgroup(): void {
+  if (!serviceCgroupPath) return;
+  const own = readSelfCgroup();
+  if (!own || own === serviceCgroupPath) return;
+  try {
+    fs.writeFileSync(
+      `/sys/fs/cgroup${serviceCgroupPath}/cgroup.procs`,
+      `${process.pid}`
+    );
+    console.log(`[systemd] self-heal: moved out to ${own}, rejoined ${serviceCgroupPath}`);
+  } catch (err) {
+    if (!cgroupHealWarned) {
+      cgroupHealWarned = true;
+      console.log(`[systemd] cgroup self-heal failed: ${String(err)}`);
+    }
+  }
+}
+
 function startSystemdNotify(): void {
+  initCgroupHeal();
+  ensureServiceCgroup();
   sdNotify("READY=1");
   const usec = Number.parseInt(process.env["WATCHDOG_USEC"] ?? "0", 10);
   if (!Number.isFinite(usec) || usec <= 0) return;
   const intervalMs = Math.max(Math.floor(usec / 3_000_000), 5) * 1000;
-  const timer = setInterval(() => sdNotify("WATCHDOG=1"), intervalMs);
+  const timer = setInterval(() => {
+    ensureServiceCgroup();
+    sdNotify("WATCHDOG=1");
+  }, intervalMs);
   timer.unref();
   console.log(`[systemd] notify active, watchdog ping every ${intervalMs}ms`);
 }

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.31 — 2026-10-28
+
+### Fixed
+
+- **Headless serve: the watchdog restart loop, properly this time.**
+  Chromium migrates the browser process into a transient app-*.scope a
+  few seconds after startup; sd_notify messages sent from the scope are
+  ignored by the service unit, so even with the v1.0.30 systemd-notify
+  fix the watchdog never saw a single ping and restarted the healthy
+  service every WatchdogSec (90 s). The app now remembers the service
+  cgroup it was born in and moves itself back before every notify call,
+  so READY and WATCHDOG pings always arrive attributed to the unit.
+- **Web client (mobile): no more empty gaps beside open panels.** The
+  sessions header and the preview-dock tabs no longer reserve space for
+  the floating buttons, which stay hidden while a panel is open.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.30...v1.0.31
+
 ## 1.0.30 — 2026-10-28
 
 ### Fixed
