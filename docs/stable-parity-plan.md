@@ -135,15 +135,24 @@ path (only historical changelog entries and the migration doc's history);
 - **L2/L3** from the TUI plan (queue/steer/retry UI, checkpoints/subagents/lease)
   proceed after stable parity blocks above are green.
 
-## 7. Order of work (round 2)
+## 7. Order of work (round 2) — status
 
-1. **ACP decoupling** (§5) — structural, removes dead code before parity work.
-2. Branding 1:1 (`brand.rs`, icons, PWA manifest) — small, user-visible, unblocks screenshots.
-3. Stable v1.0.32–34 parity ports (sidebar logout/theme, SSH pill, reconnect
-   parking, false-timeout audit, empty-resume guard).
-4. Remaining HIGH parity bugs (#1 update-in-flight, #2 systemd serve recovery, #3 touch resize).
-5. E2E: mock backend + Playwright suite + CI `e2e` job; golden run against stable in its repo.
-6. F4-UI pickers, then MEDIUM/LOW parity leftovers.
+1. **ACP decoupling** (§5) — **DONE** (`619ff8d`): the ACP client, the legacy
+   egui app and the legacy release workflow are gone; `Acp*` names renamed.
+2. **Branding 1:1** — **DONE** (`22cfe71`): stable pixel-art mark in the header,
+   chat empty state and setup screen; icons regenerated from the stable SVG;
+   PWA manifest with `id` + 256/512 any+maskable.
+3. **Stable v1.0.32–34 parity** — **DONE** (`c84af4f`, `e7fba6a`): web sidebar
+   theme + logout (inline SVG power icon), no false request timeout (agent-exit
+   probe), empty-resume keeps the chat, resume retries once on a transport
+   hiccup.
+4. **Remaining HIGH parity bugs** — **DONE** (`0994cd6`): systemd-aware
+   self-update + bind retry + `sd_notify`, PWA back gesture, approval wrapping;
+   #1/#3/#7/#13 were already fixed and the audit was stale.
+5. **E2E** — **DONE** (`4e2f170` + fixes; green on `03afa3c`): Playwright suite
+   against the real headless server with a stub `vibe-app-server`, `e2e` CI job.
+6. **F4-UI pickers** — **DONE** (verified): chips come from the config-derived
+   `config_options`; `runtime/read` remains an optional live-refresh upgrade.
 
 Each step: CI green (`cargo test --workspace`, e2e job) before moving on; dev
 builds land as v1.99.x tag artifacts per AGENTS.md.
