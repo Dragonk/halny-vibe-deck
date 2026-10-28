@@ -1,7 +1,7 @@
 //! The app-server worker: owns the `vibe-app-server` subprocess,
 //! executes [`AcpCommand`]s from the engine and streams [`AcpEvent`]s
-//! back — the exact surface of `mistraldeck_acp::AcpHandle`, so the
-//! engine can swap transports without touching the UI layer.
+//! back — the same surface the engine drives, so the UI layer never
+//! touches the wire protocol.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -45,8 +45,7 @@ pub const CLIENT_NAME: &str = "Halny Vibe Deck";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Handle held by the engine — identical shape to `AcpHandle`
-/// (`send` / `cmd_sender` / `events`).
+/// Handle held by the engine (`send` / `cmd_sender` / `events`).
 pub struct ApsHandle {
     cmd_tx: Sender<AcpCommand>,
     event_rx: Mutex<Receiver<AcpEvent>>,
@@ -238,6 +237,8 @@ impl Worker {
             AcpCommand::SetupSubmitChoices => self.submit_choices(),
             AcpCommand::IdentityRead => self.read_identity(),
             AcpCommand::AccountRead => self.read_account(),
+            // Engine-side (local uv install); never reaches a transport.
+            AcpCommand::SetupInstall => {}
         }
     }
 
@@ -441,18 +442,22 @@ impl Worker {
         text: &str,
         images: Vec<mistraldeck_core::proto::PromptImage>,
     ) {
-        // TODO(v1.0.8 app-server parity): images are dropped here.
-        // The app-server wire shape for an inline image is uncertain —
-        // appserver-protocol.md §6 gives `{"type":"image","attachment":{...}}`
-        // while the TUI uses `ContentBlock {type:"image", uri, mediaType}`;
-        // the exact inline-source payload (`source: {kind:"inline", ...}`)
-        // needs verification against protocol.py before enabling.
-        let _ = &images;
+        // Inline images travel as `SessionImageContentBlock`s (models.py):
+        // a data URI plus the media type — the server decodes it back into
+        // an inline ImageAttachment (app_server/_turn_input.py).
+        let mut content = vec![json!({"type": "text", "text": text})];
+        for img in images {
+            content.push(json!({
+                "type": "image",
+                "uri": format!("data:{};base64,{}", img.mime, img.data_base64),
+                "mediaType": img.mime,
+                "altText": "image",
+            }));
+        }
         let params = json!({
             "sessionId": session_id,
             "entries": [
-                {"role": "user",
-                 "content": [{"type": "text", "text": text}]}
+                {"role": "user", "content": content}
             ],
         });
         if let Err(e) = self.call(
@@ -660,7 +665,17 @@ impl Worker {
     }
 
     fn read_identity(&mut self) {
-        let res = match self.call_res("identity/read", json!({}), "identity/read") {
+        // `identity/read` requires `sessionId` (IdentityReadParams) —
+        // it is only meaningful once a session is attached; skip
+        // silently before that (the engine re-asks on SessionReady).
+        if self.proj.session_id.is_empty() {
+            return;
+        }
+        let res = match self.call_res(
+            "identity/read",
+            json!({ "sessionId": self.proj.session_id }),
+            "identity/read",
+        ) {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {
@@ -681,14 +696,16 @@ impl Worker {
     }
 
     fn read_account(&mut self) {
-        // `{sessionId}` wg raportu (AccountView request); gdy brak sesji —
-        // puste params (serwer przyjmuje, TUI woła po starcie sesji).
-        let params = if self.proj.session_id.is_empty() {
-            json!({})
-        } else {
-            json!({ "sessionId": self.proj.session_id })
-        };
-        let res = match self.call_res("account/read", params, "account/read") {
+        // `sessionId` is REQUIRED (AccountReadParams) — skip before a
+        // session exists (the engine re-asks on SessionReady).
+        if self.proj.session_id.is_empty() {
+            return;
+        }
+        let res = match self.call_res(
+            "account/read",
+            json!({ "sessionId": self.proj.session_id }),
+            "account/read",
+        ) {
             Ok(v) => v,
             Err((code, message)) => {
                 if Self::is_method_not_found(code, &message) {

@@ -1,5 +1,5 @@
-//! Client transport for the `vibe-app-server` protocol — the
-//! drop-in alternative to `mistraldeck-acp` (docs/migration-appserver.md).
+//! Client transport for the `vibe-app-server` protocol (the engine's
+//! only agent transport; replaces the legacy `mistraldeck-acp`).
 
 pub mod conn;
 pub mod patch;

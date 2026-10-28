@@ -17,6 +17,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 mistraldeck-engine = { workspace = true, optional = true }
+mistraldeck-setup = { workspace = true, optional = true }
 mistraldeck-vibe = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 tokio = { version = "1", features = ["time"] }
@@ -56,5 +57,5 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:mistraldeck-engine", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2"]
+server = ["dioxus/server", "dep:mistraldeck-engine", "dep:mistraldeck-setup", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2"]
 gui = ["dep:wry", "dep:tao"]

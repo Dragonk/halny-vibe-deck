@@ -1,9 +1,11 @@
 //! First-run dependency handling for Halny Vibe Deck.
 //!
 //! The Mistral Vibe CLI is a Python tool installed with `uv`:
-//! `uv tool install mistral-vibe` provides both `vibe` and `vibe-acp`.
-//! This crate locates existing installs (PATH + the default uv tool
-//! locations on each platform) and can install/upgrade everything.
+//! `uv tool install mistral-vibe` provides `vibe`, `vibe-app-server` and
+//! the legacy `vibe-acp` entry points. This crate locates existing
+//! installs (PATH + the default uv tool locations on each platform) and
+//! can install/upgrade everything. The app talks to the agent through
+//! `vibe-app-server` only (see `detect_appserver`).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,7 +16,8 @@ use anyhow::{anyhow, bail, Result};
 #[derive(Clone, Debug, Default)]
 pub struct SetupStatus {
     pub uv_path: Option<PathBuf>,
-    pub vibe_acp_path: Option<PathBuf>,
+    /// The `vibe-app-server` entry point (the only agent transport).
+    pub appserver_path: Option<PathBuf>,
     pub vibe_cli_version: Option<String>,
 }
 
@@ -100,7 +103,7 @@ fn is_executable(path: &Path) -> bool {
 /// Detect everything the app needs.
 pub fn check_setup() -> SetupStatus {
     let uv_path = find_binary("uv");
-    let vibe_acp_path = find_binary("vibe-acp");
+    let appserver_path = detect_appserver();
     let vibe_cli_version = find_binary("vibe").and_then(|vibe| {
         let mut cmd = Command::new(vibe);
         cmd.arg("--version").stdin(Stdio::null());
@@ -118,9 +121,49 @@ pub fn check_setup() -> SetupStatus {
     });
     SetupStatus {
         uv_path,
-        vibe_acp_path,
+        appserver_path,
         vibe_cli_version,
     }
+}
+
+/// Locate the `vibe-app-server` binary (the agent transport the app
+/// spawns): PATH first, then the standard uv tool install locations
+/// (`uv tool dir` when `uv` is available, plus the fixed defaults).
+pub fn detect_appserver() -> Option<PathBuf> {
+    let mut found = find_binary("vibe-app-server");
+    if found.is_none() {
+        // `uv tool dir` covers non-default uv install roots.
+        if let Some(uv) = find_binary("uv") {
+            if let Ok(out) = Command::new(uv).args(["tool", "dir"]).output() {
+                let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if out.status.success() && !dir.is_empty() {
+                    let exe = if cfg!(windows) {
+                        "vibe-app-server.exe"
+                    } else {
+                        "vibe-app-server"
+                    };
+                    let candidate = PathBuf::from(dir)
+                        .join("mistral-vibe")
+                        .join("bin")
+                        .join(exe);
+                    if is_executable(&candidate) {
+                        found = Some(candidate);
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Human-readable install instructions (shown when detection fails).
+pub fn install_instructions() -> Vec<String> {
+    vec![
+        "Install the Mistral Vibe CLI with uv:".into(),
+        "  curl -LsSf https://astral.sh/uv/install.sh | sh".into(),
+        "  uv tool install mistral-vibe".into(),
+        "or set agent_path in the config file to an existing vibe-app-server binary.".into(),
+    ]
 }
 
 fn run(cmd: &str, args: &[&str], on_line: &mut impl FnMut(SetupProgress)) -> Result<()> {
@@ -191,7 +234,7 @@ pub fn install_dependencies(mut on_progress: impl FnMut(SetupProgress)) -> Resul
     };
 
     // Step 2: mistral-vibe (fresh install, or upgrade when already present).
-    if find_binary("vibe").is_some() || find_binary("vibe-acp").is_some() {
+    if find_binary("vibe").is_some() || find_binary("vibe-app-server").is_some() {
         on_progress(SetupProgress::Info("Upgrading mistral-vibe…".into()));
         run(
             uv_path.to_string_lossy().as_ref(),
@@ -209,18 +252,18 @@ pub fn install_dependencies(mut on_progress: impl FnMut(SetupProgress)) -> Resul
         on_progress(SetupProgress::Success("mistral-vibe installed.".into()));
     }
 
-    // Step 3: locate vibe-acp
+    // Step 3: locate vibe-app-server
     let final_status = check_setup();
-    match final_status.vibe_acp_path.clone() {
+    match final_status.appserver_path.clone() {
         Some(p) => {
             on_progress(SetupProgress::Success(format!(
-                "vibe-acp ready: {}",
+                "vibe-app-server ready: {}",
                 p.display()
             )));
         }
         None => {
             on_progress(SetupProgress::Error(
-                "vibe-acp not found after installation. Restart the app or install it manually."
+                "vibe-app-server not found after installation. Restart the app or install it manually."
                     .into(),
             ));
         }
@@ -266,13 +309,18 @@ mod tests {
 
     #[test]
     fn candidate_paths_are_absolute() {
-        for p in candidate_paths("vibe-acp") {
+        for p in candidate_paths("vibe-app-server") {
             assert!(
                 p.is_absolute(),
                 "candidate path not absolute: {}",
                 p.display()
             );
         }
+    }
+
+    #[test]
+    fn install_instructions_are_non_empty() {
+        assert!(install_instructions().iter().all(|l| !l.trim().is_empty()));
     }
 
     #[test]

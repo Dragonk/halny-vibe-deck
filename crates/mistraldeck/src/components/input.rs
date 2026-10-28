@@ -97,6 +97,17 @@ fn loc(lang: &str, pl: &str, en: &str) -> String {
     }
 }
 
+/// i18n key for the wire status string (Nexus InputBar status bar:
+/// connected / connecting / error / disconnected).
+fn status_label_key(status: &str) -> &'static str {
+    match status {
+        "connected" => "connected",
+        "connecting" => "connecting",
+        "error" => "error",
+        _ => "disconnected",
+    }
+}
+
 pub fn InputBar() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let mut draft = use_signal(String::new);
@@ -492,6 +503,62 @@ pub fn InputBar() -> Element {
                                     }
                                 }
                             } else {
+                                // Nexus sendQueuedNow: idle → force-send this
+                                // prompt immediately; busy → move it to the
+                                // front of the queue and break the current
+                                // turn (it is delivered by the next drain).
+                                button {
+                                    class: "msg-queue-btn",
+                                    title: "{tr(&lang, \"mqSendNow\")}",
+                                    onclick: {
+                                        let state = state.clone();
+                                        let editing_idx = editing_idx.clone();
+                                        move |_| {
+                                            let state = state.clone();
+                                            let mut editing_idx = editing_idx.clone();
+                                            let busy_now = state.read().snapshot.busy;
+                                            // None → item vanished, do nothing;
+                                            // Some(None) → busy: break the turn;
+                                            // Some(Some(text)) → idle: force-send.
+                                            let action: Option<Option<String>> = {
+                                                let mut st = state.clone();
+                                                let mut s = st.write();
+                                                if idx >= s.queue.len() {
+                                                    None
+                                                } else if busy_now {
+                                                    let msg = s.queue.remove(idx);
+                                                    s.queue.insert(0, msg);
+                                                    Some(None)
+                                                } else {
+                                                    Some(Some(s.queue.remove(idx)))
+                                                }
+                                            };
+                                            editing_idx.set(None);
+                                            async move {
+                                                match action {
+                                                    Some(Some(text)) => {
+                                                        let tok = crate::state::token(&state);
+                                                        let _ = crate::api::api_send_message(tok, text).await;
+                                                    }
+                                                    Some(None) => {
+                                                        let tok = crate::state::token(&state);
+                                                        let _ = crate::api::api_cancel(tok).await;
+                                                    }
+                                                    None => {}
+                                                }
+                                            }
+                                        }
+                                    },
+                                    svg {
+                                        xmlns: "http://www.w3.org/2000/svg",
+                                        width: "14", height: "14",
+                                        view_box: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        fill: "none",
+                                        path { d: "M13 2L4.5 13.5H11L9.5 22L19.5 9.5H13.5L13 2Z" }
+                                    }
+                                }
                                 button {
                                     class: "msg-queue-btn",
                                     title: "{tr(&lang, \"mqEdit\")}",
@@ -576,7 +643,7 @@ pub fn InputBar() -> Element {
         div { class: "input-card-wrap",
             div { class: "input-card",
                 {queue_panel.iter().cloned()}
-                div { class: "input-editor-wrap",
+                div { class: "input-card-textarea-wrap",
                     textarea {
                         class: "input-card-editor",
                         rows: "1",
@@ -894,12 +961,14 @@ pub fn InputBar() -> Element {
                     }
                 }
             }
-            crate::components::usagebar::UsageBar {}
             div { class: "input-status-bar",
                 div { class: "acp-status {status}",
                     span { class: "status-dot" }
-                    span { class: "status-label", "{status}" }
+                    span { class: "status-label", "{tr(&lang, status_label_key(&status))}" }
                 }
+                // v0.13.5 parity: the usage bar lives inline in the
+                // status bar (single row: status · usage · cwd).
+                crate::components::usagebar::UsageBar {}
                 if !cwd.is_empty() {
                     span { class: "status-cwd", title: "{cwd}", "{project_label}" }
                 }

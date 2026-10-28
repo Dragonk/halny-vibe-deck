@@ -1,6 +1,6 @@
 [package]
 name = "mistraldeck-setup"
-description = "Dependency detection and installation (uv, mistral-vibe, vibe-acp) for Halny Vibe Deck"
+description = "Dependency detection and installation (uv, mistral-vibe, vibe-app-server) for Halny Vibe Deck"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

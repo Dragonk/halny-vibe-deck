@@ -137,6 +137,7 @@ pub fn main_dispatch(force_headless: bool) {
             println!("mistraldeck: local UI at http://127.0.0.1:{port}");
             let local_router = router
                 .clone()
+                .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))
                 .layer(axum::middleware::from_fn(crate::pwa::gzip_mw));
             tokio::spawn(async move {
                 if let Err(e) = axum::serve(local, local_router).await {
@@ -144,7 +145,7 @@ pub fn main_dispatch(force_headless: bool) {
                 }
             });
             if start_remote {
-                let remote_router = router.clone();
+                let remote_router = router.clone().layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
                 tokio::spawn(async move {
                     if let Err(e) = crate::serve::run_remote(remote_router, remote_port).await {
                         eprintln!("mistraldeck: remote HTTPS server error: {e}");

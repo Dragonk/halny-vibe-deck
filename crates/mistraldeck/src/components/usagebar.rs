@@ -78,8 +78,24 @@ pub fn UsageBar() -> Element {
     }
     let info = model_info.read().clone();
 
+    // v0.13.14 parity: keep the slot visible (the web client reloads
+    // often and the bar must not vanish before the first usage_update
+    // arrives) — an empty gauge track, no numbers.
     if u.updates == 0 && u.total_tokens == 0.0 {
-        return VNode::empty();
+        return rsx! {
+            div { class: "usage-bar",
+                span { class: "usage-bar-item",
+                    svg {
+                        class: "usage-gauge",
+                        width: "16",
+                        height: "16",
+                        view_box: "0 0 16 16",
+                        "aria-hidden": "true",
+                        circle { class: "usage-gauge-track", cx: "8", cy: "8", r: "6" }
+                    }
+                }
+            }
+        };
     }
 
     // v0.13.5: window ONLY from the model config; no window = no gauge.

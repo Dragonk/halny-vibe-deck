@@ -77,13 +77,10 @@ pub fn random_hex(n_bytes: usize) -> String {
 /// JSON round-trip.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EngineConfig {
+    /// Explicit agent binary override (`vibe-app-server`). Empty =
+    /// auto-detect (PATH, then the standard uv tool locations).
     #[serde(default)]
-    pub acp_path: String,
-    /// Agent transport (docs/migration-appserver.md F7): "appserver"
-    /// (vibe-app-server, default) or "acp" (vibe-acp, legacy fallback
-    /// for older CLIs without the app-server entry point).
-    #[serde(default = "default_transport")]
-    pub transport: String,
+    pub agent_path: String,
     #[serde(default)]
     pub working_directory: String,
     #[serde(default)]
@@ -110,13 +107,9 @@ pub struct EngineConfig {
     pub hidden_sessions: Vec<String>,
     #[serde(default)]
     pub hidden_projects: Vec<String>,
-    /// SSH remotes where vibe-acp runs (Nexus remote connections).
+    /// SSH remotes where the agent runs (Nexus remote connections).
     #[serde(default)]
     pub remote_connections: Vec<mistraldeck_core::snapshot::RemoteConnection>,
-}
-
-fn default_transport() -> String {
-    "appserver".to_string()
 }
 
 fn default_remote_port() -> u16 {

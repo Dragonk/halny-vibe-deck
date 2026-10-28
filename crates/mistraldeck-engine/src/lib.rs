@@ -1,10 +1,10 @@
-//! Halny Vibe Deck engine - the headless core between ACP workers and any UI
-//! (desktop webview, remote browser, mobile). Every session that talks
-//! to an agent owns a **dedicated vibe-acp process** (a "slot"), so any
-//! number of sessions can stream in parallel. A separate lightweight
-//! worker (the "lister") only runs `session/list` for the CLI history.
-//! Every change is published on a broadcast bus so any number of UI
-//! clients stays in sync.
+//! Halny Vibe Deck engine - the headless core between agent workers and
+//! any UI (desktop webview, remote browser, mobile). Every session that
+//! talks to an agent owns a **dedicated vibe-app-server process** (a
+//! "slot"), so any number of sessions can stream in parallel. A separate
+//! lightweight worker (the "lister") only runs `session/list` for the
+//! CLI history. Every change is published on a broadcast bus so any
+//! number of UI clients stays in sync.
 
 pub mod auth_browser;
 pub mod config;
@@ -23,11 +23,14 @@ pub use mistraldeck_core::snapshot::{
 };
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use tokio::sync::broadcast;
 
-use crate::types::TransportHandle;
+use mistraldeck_appsrv::ApsHandle;
 use mistraldeck_core::proto::{AcpCommand, AcpEvent};
+use mistraldeck_core::snapshot::SetupInstallState;
 use mistraldeck_core::types::{
     now_ms, new_id, Attachment, ChatSession, Message, MessageSender, ThinkingBlock, ToolCall,
     ToolStatus,
@@ -43,9 +46,16 @@ static ENGINE: OnceLock<Engine> = OnceLock::new();
 pub struct Engine {
     /// Lightweight worker for `session/list` (CLI history) + the global
     /// status shown when no session is open.
-    lister: TransportHandle,
+    lister: ApsHandle,
     global_status: Mutex<AcpStatus>,
     global_error: Mutex<String>,
+    /// Detected agent binary (None = not found / not checked yet) and
+    /// the install instructions surfaced while it is missing.
+    detected_agent: Mutex<Option<PathBuf>>,
+    agent_missing: Mutex<Option<String>>,
+    /// Local dependency-install state (`AcpCommand::SetupInstall`).
+    install: Mutex<SetupInstallState>,
+    install_started: AtomicBool,
     state: Mutex<EngineState>,
     tx: broadcast::Sender<BusEvent>,
     config: RwLock<EngineConfig>,
@@ -70,9 +80,13 @@ impl Engine {
     pub fn init(cfg: EngineConfig) -> &'static Engine {
         let (tx, _rx) = broadcast::channel(8192);
         let engine = Engine {
-            lister: TransportHandle::spawn(),
+            lister: ApsHandle::spawn(),
             global_status: Mutex::new(AcpStatus::Disconnected),
             global_error: Mutex::new(String::new()),
+            detected_agent: Mutex::new(None),
+            agent_missing: Mutex::new(None),
+            install: Mutex::new(SetupInstallState::default()),
+            install_started: AtomicBool::new(false),
             state: Mutex::new(EngineState::default()),
             tx,
             config: RwLock::new(cfg),
@@ -221,13 +235,43 @@ impl Engine {
 
     // ---------------- lifecycle ----------------
 
-    /// Spawn the lister worker (when configured) and connect.
-    pub fn start_agent(&self) {
-        *self.global_status.lock().unwrap() = AcpStatus::Connecting;
-        let acp_path = self.config().acp_path;
-        if !acp_path.is_empty() {
-            self.lister.send(AcpCommand::Start { argv: vec![acp_path] });
+    /// Resolve the agent binary: the explicit config override first,
+    /// then auto-detection (cached so prompts and snapshots stay cheap).
+    fn resolve_agent_path(&self) -> Option<PathBuf> {
+        let explicit = self.config().agent_path;
+        if !explicit.is_empty() {
+            return Some(PathBuf::from(explicit));
         }
+        {
+            let cached = self.detected_agent.lock().unwrap();
+            if cached.is_some() {
+                return cached.clone();
+            }
+        }
+        let detected = mistraldeck_setup::detect_appserver();
+        *self.detected_agent.lock().unwrap() = detected.clone();
+        detected
+    }
+
+    /// Spawn the lister worker and connect. When `vibe-app-server` is
+    /// not found, no Start goes out — the missing-agent state (with
+    /// install instructions) is published instead.
+    pub fn start_agent(&self) {
+        match self.resolve_agent_path() {
+            Some(path) => {
+                *self.agent_missing.lock().unwrap() = None;
+                *self.global_status.lock().unwrap() = AcpStatus::Connecting;
+                self.lister.send(AcpCommand::Start {
+                    argv: vec![path.display().to_string()],
+                });
+            }
+            None => {
+                let instructions = mistraldeck_setup::install_instructions().join("\n");
+                *self.global_status.lock().unwrap() = AcpStatus::Error;
+                *self.agent_missing.lock().unwrap() = Some(instructions);
+            }
+        }
+        self.publish_structure();
     }
 
     pub fn refresh_sessions(&self) {
@@ -237,25 +281,28 @@ impl Engine {
     /// Warm start: connect the agent and index CLI sessions up front, so
     /// the first snapshot request does not pay the discovery cost.
     pub fn prime(&self) {
-        if !self.config().acp_path.is_empty() {
-            self.start_agent();
-        }
+        self.start_agent();
         self.refresh_sessions();
     }
 
     // ---------------- slots ----------------
 
     /// Spawn a slot for the given session and start its process. Local
-    /// slots run `acp_path`; remote slots run the connection's ssh
-    /// command with `bash -lc "exec vibe-acp"` (same JSON-RPC protocol).
+    /// slots run the detected `vibe-app-server`; remote slots run the
+    /// connection's ssh command with `bash -lc "exec vibe-app-server"`
+    /// (same JSON-RPC protocol).
     fn ensure_slot(&self, session_key: &str, purpose: SlotPurpose) -> Option<u64> {
         let argv = match &purpose {
             SlotPurpose::NewLocal { .. } | SlotPurpose::LoadBackend { .. } => {
-                let acp_path = self.config().acp_path;
-                if acp_path.is_empty() {
+                // Missing agent: no Start, publish the install state instead.
+                let Some(path) = self.resolve_agent_path() else {
+                    *self.agent_missing.lock().unwrap() =
+                        Some(mistraldeck_setup::install_instructions().join("\n"));
+                    *self.global_status.lock().unwrap() = AcpStatus::Error;
+                    self.publish_structure();
                     return None;
-                }
-                vec![acp_path]
+                };
+                vec![path.display().to_string()]
             }
             SlotPurpose::NewRemote { conn_id, .. } | SlotPurpose::LoadRemote { conn_id, .. } => {
                 let cfg = self.config();
@@ -345,7 +392,7 @@ impl Engine {
             config: UiConfig {
                 language: cfg.language.clone(),
                 theme: cfg.theme.clone(),
-                acp_path: cfg.acp_path.clone(),
+                agent_path: cfg.agent_path.clone(),
                 working_directory: cfg.working_directory.clone(),
                 remote_enabled: cfg.remote_enabled,
                 remote_port: cfg.remote_port,
@@ -361,6 +408,14 @@ impl Engine {
             account: self.last_account.lock().unwrap().clone(),
             setup: self.last_setup.lock().unwrap().clone(),
             identity: self.last_identity.lock().unwrap().clone(),
+            agent_missing: self.agent_missing.lock().unwrap().clone(),
+            agent_detected_path: self
+                .detected_agent
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|p| p.display().to_string()),
+            setup_install: self.install.lock().unwrap().clone(),
         }
     }
 
@@ -611,7 +666,7 @@ impl Engine {
         let name = if title.is_empty() { "Remote session" } else { title };
         // v0.9.0 lazy remote resume (Nexus `loadRemoteSession` ->
         // `previewSession`): the remote unified store is read over SSH and
-        // NO vibe-acp is started on the remote host; the agent wakes on the
+        // NO agent process is started on the remote host; it wakes on the
         // first prompt (send_message_with -> LoadRemote).
         let preview = self
             .remote_connection(conn_id)
@@ -694,8 +749,11 @@ impl Engine {
         if text.is_empty() {
             return;
         }
-        if self.config().acp_path.is_empty() {
-            // No agent configured - tell the user instead of hanging.
+        if self.resolve_agent_path().is_none() {
+            // No agent binary - tell the user instead of hanging.
+            let instructions = mistraldeck_setup::install_instructions().join("\n");
+            *self.agent_missing.lock().unwrap() = Some(instructions.clone());
+            *self.global_status.lock().unwrap() = AcpStatus::Error;
             let mut st = self.state.lock().unwrap();
             if st.current.is_none() {
                 let cwd = self.workdir();
@@ -707,7 +765,9 @@ impl Engine {
             if let Some(session) = st.current_session_mut() {
                 session
                     .messages
-                    .push(Message::new_system("Configure the ACP binary in Settings to talk to an agent."));
+                    .push(Message::new_system(&format!(
+                        "Mistral Vibe CLI not found - install it to talk to an agent.\n{instructions}"
+                    )));
             }
             drop(st);
             self.publish(BusEvent::StructureChanged);
@@ -1031,11 +1091,12 @@ impl Engine {
         self.publish_structure();
     }
 
-    /// General settings (SettingsView general tab): acp path + the idle
-    /// auto-close timeout in minutes (the idle reaper itself is element 8).
-    pub fn set_general(&self, acp_path: String, auto_close_idle_minutes: u32) {
+    /// General settings (SettingsView general tab): the idle auto-close
+    /// timeout in minutes (the idle reaper itself is element 8). The
+    /// agent binary is auto-detected; the explicit `agent_path` lives
+    /// in the config file only.
+    pub fn set_general(&self, auto_close_idle_minutes: u32) {
         self.update_config(|c| {
-            c.acp_path = acp_path;
             c.auto_close_idle_minutes = if auto_close_idle_minutes > 0 {
                 Some(auto_close_idle_minutes)
             } else {
@@ -1067,25 +1128,18 @@ impl Engine {
     // ---------------- L1: login & account ----------------
 
     /// Login/account methods only exist on the app-server transport
-    /// (global methods, no session). The legacy ACP transport ignores
-    /// them — everything below refuses clearly instead of hanging.
-    fn lister_is_aps(&self) -> bool {
-        matches!(self.lister, TransportHandle::Aps(_))
-    }
-
+    /// (global methods, no session) — the engine refuses clearly until
+    /// the lister is connected instead of hanging.
     fn aps_not_connected() -> String {
         "app-server transport not connected (setup/* unavailable)".to_string()
     }
 
-    /// `setup/status` + `identity/read` + `account/read` — the L1
-    /// preflow. Also called once right after the lister `Initialized`.
+    /// `setup/status` — the L1 preflow, sessionless-safe on the
+    /// lister. `identity/read` + `account/read` REQUIRE a session
+    /// (`AccountReadParams.session_id`) — they go through a slot
+    /// with an attached session (`refresh_account`).
     pub fn setup_refresh(&self) {
-        if !self.lister_is_aps() {
-            return;
-        }
         self.lister.send(AcpCommand::SetupStatus);
-        self.lister.send(AcpCommand::IdentityRead);
-        self.lister.send(AcpCommand::AccountRead);
     }
 
     /// Provider name for `setup/store-credential` (None = server default).
@@ -1101,9 +1155,6 @@ impl Engine {
     /// Returns `(sign_in_url, expires_at_ms)` for the UI; the
     /// verifier never leaves the engine.
     pub fn login_browser_start(&self) -> Result<(String, i64), String> {
-        if !self.lister_is_aps() {
-            return Err(Self::aps_not_connected());
-        }
         if *self.global_status.lock().unwrap() != AcpStatus::Connected {
             return Err(Self::aps_not_connected());
         }
@@ -1158,9 +1209,6 @@ impl Engine {
     /// briefly waiting for the store outcome so the server-fn can
     /// return the exact error (env_var_error / save_error).
     pub fn login_with_api_key(&self, api_key: &str, custom_domain: Option<&str>) -> Result<(String, Option<String>), String> {
-        if !self.lister_is_aps() {
-            return Err(Self::aps_not_connected());
-        }
         if *self.global_status.lock().unwrap() != AcpStatus::Connected {
             return Err(Self::aps_not_connected());
         }
@@ -1186,12 +1234,88 @@ impl Engine {
     }
 
     /// Re-read account state (`account/read` + `identity/read`).
+    /// Both require a session, so they are routed through the
+    /// current session's slot (or any connected slot) — never the
+    /// sessionless lister.
     pub fn refresh_account(&self) {
-        if !self.lister_is_aps() {
+        let st = self.state.lock().unwrap();
+        let target = st.current_session().and_then(|s| st.slot_of_session(&s.id))
+            .or_else(|| st.slots.iter().next().map(|(id, _)| *id))
+            .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()));
+        drop(st);
+        if let Some(cmd) = target {
+            let _ = cmd.send(AcpCommand::IdentityRead);
+            let _ = cmd.send(AcpCommand::AccountRead);
+        }
+    }
+
+    // ---------------- setup install (local dependencies) ----------------
+
+    /// Current install state (progress lines + running/finished flags).
+    pub fn setup_install_state(&self) -> SetupInstallState {
+        self.install.lock().unwrap().clone()
+    }
+
+    /// Kick off the local dependency install (uv → mistral-vibe → verify
+    /// `vibe-app-server`) on a background thread. Idempotent while a run
+    /// is in flight; progress streams as `AcpEvent::SetupInstallLine`,
+    /// the terminal outcome as `AcpEvent::SetupInstallDone` (and is kept
+    /// in the snapshot for late joiners). On success the agent restarts
+    /// immediately — no app restart needed.
+    pub fn setup_install(&self) {
+        if self.install_started.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.lister.send(AcpCommand::IdentityRead);
-        self.lister.send(AcpCommand::AccountRead);
+        *self.install.lock().unwrap() = SetupInstallState {
+            lines: Vec::new(),
+            running: true,
+            finished: None,
+        };
+        self.publish_structure();
+        std::thread::Builder::new()
+            .name("mistraldeck-setup-install".into())
+            .spawn(move || {
+                let push_line = |message: String, kind: &str| {
+                    if let Some(e) = Engine::try_global() {
+                        let mut g = e.install.lock().unwrap();
+                        g.lines.push(mistraldeck_core::snapshot::SetupInstallLine {
+                            message: message.clone(),
+                            kind: kind.to_string(),
+                        });
+                        let _ = e.tx.send(BusEvent::Acp(AcpEvent::SetupInstallLine {
+                            message,
+                            kind: kind.to_string(),
+                        }));
+                    }
+                };
+                let ok = mistraldeck_setup::install_dependencies(|p| match p {
+                    mistraldeck_setup::SetupProgress::Info(m) => push_line(m, "info"),
+                    mistraldeck_setup::SetupProgress::Success(m) => push_line(m, "success"),
+                    mistraldeck_setup::SetupProgress::Error(m) => push_line(m, "error"),
+                    mistraldeck_setup::SetupProgress::Done(_) => {}
+                })
+                .map(|_| true)
+                .unwrap_or_else(|e| {
+                    push_line(format!("install failed: {e:#}"), "error");
+                    false
+                });
+                if let Some(e) = Engine::try_global() {
+                    {
+                        let mut g = e.install.lock().unwrap();
+                        g.running = false;
+                        g.finished = Some(ok);
+                    }
+                    let _ = e.tx.send(BusEvent::Acp(AcpEvent::SetupInstallDone { ok }));
+                    e.publish_structure();
+                    if ok {
+                        // Verified vibe-app-server: (re)connect right away.
+                        *e.detected_agent.lock().unwrap() = None;
+                        e.start_agent();
+                    }
+                    e.install_started.store(false, Ordering::SeqCst);
+                }
+            })
+            .ok();
     }
 
     /// Auto-close idle live sessions (Nexus v0.9.0): stop every slot whose
@@ -1260,7 +1384,7 @@ impl Engine {
             }
         });
         // If this key matches a live local session, stop its agent process
-        // so hidden sessions do not leak running vibe-acp workers.
+        // so hidden sessions do not leak running agent workers.
         {
             let mut st = self.state.lock().unwrap();
             let matched = st

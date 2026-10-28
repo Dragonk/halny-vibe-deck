@@ -1,62 +1,12 @@
 //! Internal engine state (single source of truth) - multi-slot edition:
-//! every session that talks to an agent owns a dedicated vibe-acp
-//! process (AcpHandle), so prompts in different sessions run in
+//! every session that talks to an agent owns a dedicated vibe-app-server
+//! process (ApsHandle), so prompts in different sessions run in
 //! parallel.
 
 use std::collections::HashMap;
 
-use mistraldeck_acp::AcpHandle;
 use mistraldeck_appsrv::ApsHandle;
-use mistraldeck_core::proto::{AcpCommand, AcpEvent};
-
-/// The agent transport behind a slot/lister — one enum, one surface
-/// (docs/migration-appserver.md §2). The variant is chosen once, from
-/// the engine config (`transport`: "appserver" | "acp").
-pub enum TransportHandle {
-    /// vibe-app-server (native protocol, default).
-    Aps(ApsHandle),
-    /// vibe-acp (legacy IDE protocol, fallback for older CLIs).
-    Acp(AcpHandle),
-}
-
-impl TransportHandle {
-    /// Spawn the worker thread for the configured transport. Cheap:
-    /// no subprocess starts until `AcpCommand::Start` arrives.
-    pub fn spawn() -> Self {
-        let transport = crate::Engine::try_global()
-            .map(|e| e.config().transport)
-            .unwrap_or_else(|| "appserver".to_string());
-        if transport == "acp" {
-            Self::Acp(AcpHandle::spawn())
-        } else {
-            Self::Aps(ApsHandle::spawn())
-        }
-    }
-
-    pub fn send(&self, cmd: AcpCommand) {
-        match self {
-            Self::Acp(h) => h.send(cmd),
-            Self::Aps(h) => h.send(cmd),
-        }
-    }
-
-    pub fn cmd_sender(&self) -> std::sync::mpsc::Sender<AcpCommand> {
-        match self {
-            Self::Acp(h) => h.cmd_sender(),
-            Self::Aps(h) => h.cmd_sender(),
-        }
-    }
-
-    pub fn events(&self) -> std::sync::MutexGuard<'_, std::sync::mpsc::Receiver<AcpEvent>> {
-        match self {
-            Self::Acp(h) => h.events(),
-            Self::Aps(h) => h.events(),
-        }
-    }
-}
-use mistraldeck_core::proto::{
-    AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo,
-};
+use mistraldeck_core::proto::{AcpSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
 use mistraldeck_core::snapshot::{
     AcpStatus, PendingApproval, PendingQuestion, SessionLoadProgress, UsageStats,
 };
@@ -80,7 +30,7 @@ pub enum SlotPurpose {
     },
 }
 
-/// One agent worker (a vibe-acp subprocess) bound to a local session.
+/// One agent worker (a vibe-app-server subprocess) bound to a local session.
 pub struct SlotState {
     /// Command channel straight to the worker thread (the pump thread
     /// owns the event receiver).
@@ -184,7 +134,7 @@ impl EngineState {
 /// Spawn a worker + its pump thread; returns (slot id, command sender).
 /// The pump forwards every event to `Engine::apply_slot_event`.
 pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
-    let handle = TransportHandle::spawn();
+    let handle = ApsHandle::spawn();
     let cmd = handle.cmd_sender();
     std::thread::Builder::new()
         .name(format!("mistraldeck-slot-{slot_id}"))

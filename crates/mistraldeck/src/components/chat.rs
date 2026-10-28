@@ -135,7 +135,7 @@ pub fn ChatView() -> Element {
         "connected" => tr(&lang, "agentReady").to_string(),
         "connecting" => tr(&lang, "statusConnecting").to_string(),
         "error" => tr(&lang, "agentConnectionError").to_string(),
-        _ => tr(&lang, "configureAcpInSettings").to_string(),
+        _ => tr(&lang, "cliNotInstalled").to_string(),
     };
 
     rsx! {
@@ -165,7 +165,7 @@ pub fn ChatView() -> Element {
                 div { class: "chat-inner",
                     if messages.is_empty() && !is_resuming {
                         div { class: "chat-empty",
-                            HalnyMark {}
+                            crate::components::brand::BrandMark { size: 0.98, class: "chat-empty-icon".to_string() }
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
                             div { class: "chat-empty-subtitle", "{subtitle}" }
                             if status == "error" && !acp_error.is_empty() {
@@ -210,27 +210,6 @@ pub fn ChatView() -> Element {
                 }
             }
             crate::components::input::InputBar {}
-        }
-    }
-}
-
-/// The Halny mark — Tatra ridge with the foehn-wind gusts (brand glyph of
-/// Halny Vibe Deck, matching the app icon).
-#[component]
-fn HalnyMark() -> Element {
-    rsx! {
-        svg {
-            class: "chat-empty-icon",
-            xmlns: "http://www.w3.org/2000/svg",
-            width: "95", height: "68",
-            view_box: "0 0 96 70",
-            path { d: "M14 12 H46 Q54 12 54 7", stroke: "var(--yellowbright-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
-            path { d: "M6 24 H60 Q70 24 70 17", stroke: "var(--orangebright-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
-            path { d: "M18 36 H48", stroke: "var(--orange-500)", stroke_width: "5", fill: "none", stroke_linecap: "round" }
-            path { d: "M34 66 L62 24 L94 66 Z", fill: "var(--red-700)", opacity: "0.85" }
-            path { d: "M2 66 L30 20 L58 66 Z", fill: "var(--accent)" }
-            path { d: "M30 20 L35 28.5 H25 Z", fill: "#ffffff", opacity: "0.92" }
-            path { d: "M62 24 L66.5 31.5 H57.5 Z", fill: "#ffffff", opacity: "0.92" }
         }
     }
 }

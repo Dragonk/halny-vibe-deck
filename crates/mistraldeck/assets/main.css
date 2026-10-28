@@ -208,6 +208,15 @@ code {
     letter-spacing: 0.02em;
 }
 
+/* Inline brand SVG (brand.rs BrandMark): block-level so the svg
+   baseline gap cannot push the header taller; scales with the
+   16px icon slot next to the brand name. */
+.header-brand-mark {
+    display: block;
+    flex-shrink: 0;
+    align-self: center;
+}
+
 .header-controls {
     display: flex;
     align-items: center;
@@ -3640,6 +3649,11 @@ code {
     align-items: center;
     gap: 10px;
     padding: 0 4px;
+}
+/* v0.13.5 parity: the usage bar lives inline in the status bar (single row) */
+.input-status-bar .usage-bar {
+    padding: 0;
+    height: 20px;
 }
 
 .status-cwd {

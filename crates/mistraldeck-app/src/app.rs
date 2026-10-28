@@ -958,14 +958,14 @@ impl MistraldeckApp {
         if self.setup_pane.autodetect {
             // Settings → auto-detect: fill in the path only.
             self.setup_pane.autodetect = false;
-            if let Some(p) = self.setup_pane.status.vibe_acp_path.clone() {
+            if let Some(p) = self.setup_pane.status.appserver_path.clone() {
                 self.settings.acp_path = p.to_string_lossy().to_string();
                 self.settings.save();
                 self.notify(self.tr().saved);
             }
         } else if self.settings.acp_path.is_empty() {
             // Startup probe: connect right away when vibe-acp is available.
-            if let Some(path) = self.setup_pane.status.vibe_acp_path.clone() {
+            if let Some(path) = self.setup_pane.status.appserver_path.clone() {
                 let path_str = path.to_string_lossy().to_string();
                 self.start_agent(&path_str);
                 self.view = View::Chat;

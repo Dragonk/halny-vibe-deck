@@ -379,7 +379,7 @@ pub fn now_ms() -> i64 {
 }
 
 /// Short random identifier (session/message ids are local-only;
-/// ACP session ids always come from the vibe-acp server).
+/// session ids always come from the agent server).
 pub fn new_id() -> String {
     let t = now_ms() as u128;
     // xorshift from the clock + address entropy: good enough for UI keys.

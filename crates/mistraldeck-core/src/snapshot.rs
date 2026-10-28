@@ -64,7 +64,7 @@ impl UsageStats {
     }
 }
 
-/// Connection state of the vibe-acp worker.
+/// Connection state of the agent worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpStatus {
@@ -179,7 +179,7 @@ impl From<&ChatSession> for SessionMeta {
     }
 }
 
-/// One SSH remote where vibe-acp runs (Codex-style remote projects;
+/// One SSH remote where the agent runs (Codex-style remote projects;
 /// mirrors Nexus `RemoteConnection`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RemoteConnection {
@@ -193,7 +193,7 @@ pub struct RemoteConnection {
     /// Remote working directories shown as sub-projects.
     #[serde(default)]
     pub locations: Vec<String>,
-    /// Optional custom install command for vibe-acp.
+    /// Optional custom install command for the CLI.
     #[serde(default)]
     pub install_command: String,
 }
@@ -202,9 +202,9 @@ pub struct RemoteConnection {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RemoteTestResult {
     pub reachable: bool,
-    pub acp_installed: bool,
+    pub agent_installed: bool,
     #[serde(default)]
-    pub acp_path: Option<String>,
+    pub agent_path: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
@@ -237,7 +237,7 @@ pub struct RemoteStatus {
     pub latency_ms: Option<u64>,
 }
 
-/// Result of installing vibe-acp on a remote host.
+/// Result of installing the CLI on a remote host.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RemoteInstallResult {
     #[serde(default)]
@@ -401,8 +401,10 @@ pub struct UiConfig {
     pub language: String,
     #[serde(default)]
     pub theme: String,
+    /// Explicit agent binary override (empty = auto-detect
+    /// `vibe-app-server`); not edited in the UI, config-file only.
     #[serde(default)]
-    pub acp_path: String,
+    pub agent_path: String,
     #[serde(default)]
     pub working_directory: String,
     #[serde(default)]
@@ -532,6 +534,31 @@ pub struct IdentityView {
     pub raw_json: String,
 }
 
+/// One progress line of the local dependency install (engine-side
+/// `AcpCommand::SetupInstall` flow).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SetupInstallLine {
+    #[serde(default)]
+    pub message: String,
+    /// info | success | error
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// Install state mirrored to every UI client: progress lines + whether
+/// the install is still running / how it finished.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SetupInstallState {
+    #[serde(default)]
+    pub lines: Vec<SetupInstallLine>,
+    #[serde(default)]
+    pub running: bool,
+    /// Some(true) = finished OK (vibe-app-server verified),
+    /// Some(false) = finished with an error.
+    #[serde(default)]
+    pub finished: Option<bool>,
+}
+
 /// Full state snapshot served to freshly-connected UI clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -572,6 +599,16 @@ pub struct Snapshot {
     /// L1: whoami (identity/read) — opcjonalne, do ustawień.
     #[serde(default)]
     pub identity: Option<IdentityView>,
+    /// The agent binary (`vibe-app-server`) was not found — carries the
+    /// install instructions. Cleared once the agent connects.
+    #[serde(default)]
+    pub agent_missing: Option<String>,
+    /// Detected `vibe-app-server` path (None = not found / not checked).
+    #[serde(default)]
+    pub agent_detected_path: Option<String>,
+    /// Local dependency-install state (setup screen / settings button).
+    #[serde(default)]
+    pub setup_install: SetupInstallState,
 }
 
 impl Default for Snapshot {
@@ -599,6 +636,9 @@ impl Default for Snapshot {
             account: None,
             setup: None,
             identity: None,
+            agent_missing: None,
+            agent_detected_path: None,
+            setup_install: SetupInstallState::default(),
         }
     }
 }

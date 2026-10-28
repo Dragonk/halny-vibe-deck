@@ -46,15 +46,24 @@ pub fn Header() -> Element {
         _ => (None, None),
     };
 
-    let (theme_icon, theme_title) = match theme.as_str() {
-        "auto" => ('\u{25D1}', tr(&lang, "themeAuto")),
-        "dark" => ('\u{263c}', tr(&lang, "themeDark")),
-        _ => ('\u{263e}', tr(&lang, "themeLight")),
+    // Theme naming: the config default is "" (no theme set) and the CLI
+    // world also says "system" — all three mean the OS preference
+    // (apply_theme falls back to prefers-color-scheme for anything that
+    // is not dark/light). The cycle persists the canonical "auto".
+    let theme_is_auto = matches!(theme.as_str(), "" | "system" | "auto");
+    let (theme_icon, theme_title) = if theme_is_auto {
+        ('\u{25D1}', tr(&lang, "themeAuto"))
+    } else if theme == "dark" {
+        ('\u{263c}', tr(&lang, "themeDark"))
+    } else {
+        ('\u{263e}', tr(&lang, "themeLight"))
     };
-    let next_theme = match theme.as_str() {
-        "auto" => "dark",
-        "dark" => "light",
-        _ => "auto",
+    let next_theme = if theme_is_auto {
+        "dark"
+    } else if theme == "dark" {
+        "light"
+    } else {
+        "auto"
     };
     let dock_cls = if dock_open {
         "header-btn dock-toggle-btn active".to_string()
@@ -88,6 +97,7 @@ pub fn Header() -> Element {
                     }
                 }
                 div { class: "header-brand",
+                    crate::components::brand::BrandMark { size: 0.24, class: "header-brand-mark".to_string() }
                     span { class: "header-brand-name", "{tr(&lang, \"appName\")}" }
                 }
                 div { class: "{activity_cls}",

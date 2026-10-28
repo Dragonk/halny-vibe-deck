@@ -1,6 +1,7 @@
 //! First-run setup screen (Nexus SetupView): detects uv, installs
-//! mistral-vibe through uv with a live progress log, saves the vibe-acp
-//! path to the engine config. Shown when vibe-acp is missing; skippable.
+//! mistral-vibe through uv with a live progress log; the engine then
+//! re-detects vibe-app-server and connects. Shown when the agent
+//! binary is missing; skippable.
 
 use dioxus::prelude::*;
 
@@ -166,7 +167,7 @@ pub fn SetupView() -> Element {
             rsx! {
                 div { class: "setup-actions",
                     div { class: "field-hint", style: "margin-bottom:8px;",
-                        "{loc(&lang, \"Zrestartuj serwer, aby połączyć vibe-acp.\", \"Restart the server to connect vibe-acp.\")}"
+                        "{loc(&lang, \"Zainstalowano — agent łączy się automatycznie.\", \"Installed — the agent connects automatically.\")}"
                     }
                     button {
                         class: "setup-btn-primary",
@@ -176,7 +177,7 @@ pub fn SetupView() -> Element {
                                 let mut state = state.clone();
                                 async move {
                                     if let Ok(st) = crate::setup::api_setup_status().await {
-                                        if st.vib_acp_found {
+                                        if st.agent_found {
                                             state.write().setup_needed = false;
                                             refresh(state).await;
                                         }

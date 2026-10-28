@@ -1,7 +1,7 @@
 //! SSH remote connections (Nexus parity): run commands over the user's
-//! `ssh` command, test/install vibe-acp on remote hosts and list remote
-//! CLI sessions by speaking the same JSON-RPC protocol vibe-acp uses
-//! locally - only over the ssh pipe.
+//! `ssh` command, test/install the CLI on remote hosts and list remote
+//! CLI sessions by speaking the same JSON-RPC protocol vibe-app-server
+//! uses locally - only over the ssh pipe.
 //!
 //! All functions are blocking (they spawn subprocesses); call them from
 //! `tokio::task::spawn_blocking` in server contexts.
@@ -154,7 +154,7 @@ pub fn ssh_run(conn: &RemoteConnection, remote_cmd: &str, timeout_ms: u64, stdin
     }
 }
 
-/// Test an (unsaved) connection draft: reachability + vibe-acp presence.
+/// Test an (unsaved) connection draft: reachability + agent presence.
 pub fn test_remote(conn: &RemoteConnection) -> RemoteTestResult {
     let ping = ssh_run(conn, "echo __MISTRALDECK_OK__", 12_000, None);
     if ping.code != 0 || !ping.stdout.contains("__MISTRALDECK_OK__") {
@@ -171,30 +171,30 @@ pub fn test_remote(conn: &RemoteConnection) -> RemoteTestResult {
         };
         return RemoteTestResult {
             reachable: false,
-            acp_installed: false,
-            acp_path: None,
+            agent_installed: false,
+            agent_path: None,
             version: None,
             error: Some(if err.is_empty() { "SSH connection failed".into() } else { err }),
         };
     }
     // Login shell: non-interactive ssh sessions do not include ~/.local/bin
     // in PATH (uv tool installs live there).
-    let which = ssh_run(conn, "bash -lc \"command -v vibe-acp\"", 10_000, None);
-    let acp_path = if which.code == 0 { which.stdout.trim().to_string() } else { String::new() };
-    if acp_path.is_empty() {
+    let which = ssh_run(conn, "bash -lc \"command -v vibe-app-server\"", 10_000, None);
+    let agent_path = if which.code == 0 { which.stdout.trim().to_string() } else { String::new() };
+    if agent_path.is_empty() {
         return RemoteTestResult {
             reachable: true,
-            acp_installed: false,
-            acp_path: None,
+            agent_installed: false,
+            agent_path: None,
             version: None,
             error: None,
         };
     }
-    let ver = ssh_run(conn, "bash -lc \"vibe-acp --version\" 2>/dev/null", 10_000, None);
+    let ver = ssh_run(conn, "bash -lc \"vibe-app-server --version\" 2>/dev/null", 10_000, None);
     RemoteTestResult {
         reachable: true,
-        acp_installed: true,
-        acp_path: Some(acp_path),
+        agent_installed: true,
+        agent_path: Some(agent_path),
         version: Some(ver.stdout.trim().to_string()).filter(|v| !v.is_empty()),
         error: None,
     }
@@ -202,8 +202,8 @@ pub fn test_remote(conn: &RemoteConnection) -> RemoteTestResult {
 
 const DEFAULT_INSTALL_CMD: &str = "sh -c 'if command -v uv >/dev/null 2>&1; then uv tool install mistral-vibe 2>/dev/null || uv tool upgrade mistral-vibe; else curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv tool install mistral-vibe; fi'";
 
-/// Install (or upgrade) vibe-acp on the remote host.
-pub fn install_remote_acp(conn: &RemoteConnection) -> RemoteInstallResult {
+/// Install (or upgrade) the Mistral Vibe CLI on the remote host.
+pub fn install_remote_agent(conn: &RemoteConnection) -> RemoteInstallResult {
     let cmd = conn.install_command.trim();
     let cmd = if cmd.is_empty() { DEFAULT_INSTALL_CMD } else { cmd };
     let res = ssh_run(conn, cmd, 300_000, None);
@@ -234,17 +234,17 @@ pub fn check_remote_status(conn: &RemoteConnection) -> RemoteStatus {
 }
 
 /// The agent argv for a remote slot: tokenized ssh command plus the
-/// remote command that starts vibe-acp in a login shell (so uv-installed
-/// binaries are on PATH). The ACP client then speaks JSON-RPC over the
-/// ssh pipe exactly like a local process.
+/// remote command that starts vibe-app-server in a login shell (so
+/// uv-installed binaries are on PATH). The client then speaks JSON-RPC
+/// over the ssh pipe exactly like a local process.
 pub fn remote_argv(conn: &RemoteConnection) -> Vec<String> {
     let mut argv = tokenize_cmd(&conn.ssh_cmd);
-    argv.push("bash -lc \"exec vibe-acp\"".to_string());
+    argv.push("bash -lc \"exec vibe-app-server\"".to_string());
     argv
 }
 
 /// List CLI sessions on the remote host by speaking JSON-RPC to a
-/// vibe-acp spawned over ssh (initialize -> session/list with cursor
+/// vibe-app-server spawned over ssh (initialize -> session/list with cursor
 /// pagination, port of Nexus `listRemoteSessions`).
 pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
     let tokens = tokenize_cmd(&conn.ssh_cmd);
@@ -252,7 +252,7 @@ pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
         return Vec::new();
     }
     let mut cmd = Command::new(&tokens[0]);
-    cmd.args(&tokens[1..]).arg("bash -lc \"exec vibe-acp\"");
+    cmd.args(&tokens[1..]).arg("bash -lc \"exec vibe-app-server\"");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -453,7 +453,7 @@ fn parse_remote_chunk_blocks(out: &str) -> Vec<serde_json::Value> {
 
 /// Lazy remote session preview (Nexus `loadRemoteSessionPreview`): read the
 /// unified session store on the remote host over SSH WITHOUT starting
-/// vibe-acp there (lazy resume). Phase 1 locates the session dir (direct id
+/// the CLI there (lazy resume). Phase 1 locates the session dir (direct id
 /// first, then a CURRENT+meta.json scan), cats the latest generation
 /// manifest and the session index; phase 2 cats the last 48 chunk files.
 /// `None` when the remote store has nothing usable. Blocking - call from

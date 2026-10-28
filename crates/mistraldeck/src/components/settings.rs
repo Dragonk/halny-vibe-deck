@@ -428,7 +428,8 @@ pub fn SettingsView() -> Element {
     let theme = s.snapshot.config.theme.clone();
     let dock_open = s.snapshot.config.dock_open;
     let limit = s.snapshot.config.sidebar_sessions_limit.unwrap_or(0);
-    let acp_path = s.snapshot.config.acp_path.clone();
+    let agent_detected = s.snapshot.agent_detected_path.clone();
+    let agent_missing = s.snapshot.agent_missing.clone();
     let wd = s.snapshot.config.working_directory.clone();
     let recent_folders = s.snapshot.config.recent_folders.clone();
     let auto_idle = s.snapshot.config.auto_close_idle_minutes.unwrap_or(60);
@@ -483,11 +484,12 @@ pub fn SettingsView() -> Element {
     let scope_agent = use_signal(|| "local".to_string());
     let scope_target = use_signal(|| "global".to_string());
     let scope_key = use_signal(String::new);
-    // Element 7 stage 7D: General-tab fields (acp path + idle timeout) and
-    // the raw side-by-side file list (config.toml + agents/prompts/skills).
-    let g_acp_init = acp_path.clone();
-    let mut g_acp = use_signal(move || g_acp_init);
+    // Element 7 stage 7D: General-tab fields (idle timeout) and the
+    // raw side-by-side file list (config.toml + agents/prompts/skills).
     let mut g_idle = use_signal(move || auto_idle.to_string());
+    // One-click agent install (general tab): busy flag + last log line.
+    let install_busy = use_signal(|| false);
+    let install_line = use_signal(String::new);
     let g_msg = use_signal(String::new);
     let raw_files = use_signal(|| Vec::<FileCard>::new());
     let mut raw_sel = use_signal(String::new);
@@ -909,7 +911,7 @@ pub fn SettingsView() -> Element {
                     }
                 }
                 div { class: "field-hint",
-                    "{loc(&lang, \"Połącz się przez SSH z innym serwerem i steruj agentem vibe-acp zdalnie — nowe sesje, historia CLI i podgląd postępu w grupie 📍 w pasku bocznym.\", \"Connect over SSH to another server and drive its vibe-acp agent remotely — new sessions, CLI history and live progress in the 📍 group in the sidebar.\")}"
+                    "{loc(&lang, \"Połącz się przez SSH z innym serwerem i steruj agentem (vibe-app-server) zdalnie — nowe sesje, historia CLI i podgląd postępu w grupie 📍 w pasku bocznym.\", \"Connect over SSH to another server and drive its vibe-app-server agent remotely — new sessions, CLI history and live progress in the 📍 group in the sidebar.\")}"
                 }
                 {ssh_conn_rows(state, lang.clone(), &ssh_conns, ssh_draft.clone(), ssh_msg.clone()).iter().cloned()}
                 if let Some(d) = ssh_draft.read().clone() {
@@ -2306,9 +2308,10 @@ pub fn SettingsView() -> Element {
             drop(upd);
             let desktop = crate::state::is_desktop();
             // Element 7 stage 7D: General-tab labels (precomputed pre-rsx).
-            let acp_lbl = tr(&lang, "vibeAcpPath");
-            let acp_hint = tr(&lang, "vibeAcpHint");
-            let acp_ph = tr(&lang, "vibeAcpPlaceholder");
+            let agent_lbl_detected = loc(&lang, "Wykryty agent", "Detected agent");
+            let agent_lbl_missing = loc(&lang, "Nie znaleziono Mistral Vibe CLI — zainstaluj", "Mistral Vibe CLI not found — install it");
+            let agent_install_lbl = loc(&lang, "Zainstaluj", "Install");
+            let agent_installing_lbl = loc(&lang, "Instalowanie…", "Installing…");
             let idle_lbl = tr(&lang, "autoCloseIdleLabel");
             let connect_lbl = tr(&lang, "connectToAgent");
             let disconnect_lbl = tr(&lang, "disconnect");
@@ -2316,8 +2319,8 @@ pub fn SettingsView() -> Element {
             let agent_lbl = loc(&lang, "Agent", "Agent");
             let reconnect_hint = loc(
                 &lang,
-                "Zmiana ścieżki ACP wymaga ponownego połączenia.",
-                "Changing the ACP path requires reconnecting the agent.",
+                "Ponowne połączenie wykrywa agenta (vibe-app-server).",
+                "Reconnecting re-detects the agent (vibe-app-server).",
             );
             let app_cur = app
                 .as_ref()
@@ -2446,7 +2449,9 @@ pub fn SettingsView() -> Element {
                                 }
                             }
                         },
-                        option { value: "auto", selected: theme == "auto", "{tr(&lang, \"auto\")}" }
+                        // "" (config default) and "system" mean the OS
+                        // preference — show them as the "auto" option.
+                        option { value: "auto", selected: theme == "auto" || theme.is_empty() || theme == "system", "{tr(&lang, \"auto\")}" }
                         option { value: "dark", selected: theme == "dark", "{tr(&lang, \"dark\")}" }
                         option { value: "light", selected: theme == "light", "{tr(&lang, \"light\")}" }
                     }
@@ -2477,17 +2482,59 @@ pub fn SettingsView() -> Element {
                     div { class: "field-hint", "0 = {loc(&lang, \"bez limitu\", \"no limit\")}" }
                 }
 
-                // ---- ACP agent (element 7 stage 7D; Nexus general tab) ----
+                // ---- Agent detection (element 7 stage 7D; Nexus general tab) ----
+                // The binary is auto-detected; this row only reports the
+                // status and offers a one-click install when it is missing.
                 div { class: "field",
-                    div { class: "field-label", "{acp_lbl}" }
-                    div { class: "field-hint", "{acp_hint}" }
-                    input {
-                        class: "field-input",
-                        r#type: "text",
-                        autocomplete: "off",
-                        placeholder: "{acp_ph}",
-                        value: "{g_acp.read()}",
-                        oninput: move |e| g_acp.set(e.value()),
+                    div { class: "field-label",
+                        if agent_missing.is_some() { "{agent_lbl_missing}" } else { "{agent_lbl_detected}" }
+                    }
+                    if let Some(path) = &agent_detected {
+                        div { class: "field-hint", style: "font-family:monospace;", "{path}" }
+                    } else if agent_missing.is_some() {
+                        div { class: "field-hint",
+                            "vibe-app-server — uv tool install mistral-vibe"
+                        }
+                    }
+                    if agent_missing.is_some() && !install_line.read().is_empty() {
+                        div { class: "field-hint", "{install_line.read()}" }
+                    }
+                    if agent_missing.is_some() {
+                        div { class: "field-row", style: "margin-top:6px;",
+                            button {
+                                class: "action-btn",
+                                disabled: *install_busy.read(),
+                                onclick: {
+                                    let state = state.clone();
+                                    move |_| {
+                                        let state = state.clone();
+                                        let mut install_busy = install_busy.clone();
+                                        let mut install_line = install_line.clone();
+                                        async move {
+                                            install_busy.set(true);
+                                            let _ = crate::setup::api_setup_install(token(&state)).await;
+                                            loop {
+                                                crate::state::sleep_ms(800).await;
+                                                match crate::setup::api_setup_log(token(&state)).await {
+                                                    Ok((ls, running, finished)) => {
+                                                        if let Some(last) = ls.last() {
+                                                            install_line.set(last.message.clone());
+                                                        }
+                                                        if finished.is_some() || !running {
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(_) => break,
+                                                }
+                                            }
+                                            install_busy.set(false);
+                                            refresh_after_save(state).await;
+                                        }
+                                    }
+                                },
+                                if *install_busy.read() { "{agent_installing_lbl}" } else { "{agent_install_lbl}" }
+                            }
+                        }
                     }
                 }
                 div { class: "field",
@@ -2504,19 +2551,16 @@ pub fn SettingsView() -> Element {
                         class: "save-btn",
                         onclick: {
                             let state = state.clone();
-                            let g_acp_c = g_acp.clone();
                             let g_idle_c = g_idle.clone();
                             let g_msg_c = g_msg.clone();
                             move |_| {
                                 let state = state.clone();
-                                let g_acp = g_acp_c.clone();
                                 let g_idle = g_idle_c.clone();
                                 let mut g_msg = g_msg_c.clone();
                                 async move {
                                     let minutes = g_idle.read().parse::<u32>().unwrap_or(60);
                                     match crate::api::api_set_general(
                                         token(&state),
-                                        g_acp.read().clone(),
                                         minutes,
                                     )
                                     .await
@@ -3028,17 +3072,17 @@ fn ssh_editor_el(
                                                 "❌ {}",
                                                 r.error.unwrap_or_else(|| "SSH connection failed".into())
                                             ));
-                                        } else if r.acp_installed {
+                                        } else if r.agent_installed {
                                             ssh_msg.set(format!(
-                                                "✅ {} — vibe-acp {} ({})",
+                                                "✅ {} — vibe-app-server {} ({})",
                                                 loc(&lang, "Połączenie OK", "Connection OK"),
                                                 r.version.unwrap_or_default(),
-                                                r.acp_path.unwrap_or_default(),
+                                                r.agent_path.unwrap_or_default(),
                                             ));
                                         } else {
                                             ssh_msg.set(format!(
                                                 "⚠️ {} — {}",
-                                                loc(&lang, "Połączono, ale vibe-acp nie jest zainstalowany", "Connected, but vibe-acp is not installed"),
+                                                loc(&lang, "Połączono, ale vibe-app-server nie jest zainstalowany", "Connected, but vibe-app-server is not installed"),
                                                 loc(&lang, "użyj Install", "use Install"),
                                             ));
                                         }
@@ -3069,12 +3113,12 @@ fn ssh_editor_el(
                             spawn(async move {
                                 ssh_busy.set(true);
                                 ssh_msg.set(loc(&lang, "Instaluję (do 5 min)...", "Installing (up to 5 min)..."));
-                                let res = crate::api::api_install_remote_acp(token(&state), d.to_conn()).await;
+                                let res = crate::api::api_install_remote_cli(token(&state), d.to_conn()).await;
                                 match res {
                                     Ok(r) if r.ok => {
                                         ssh_msg.set(format!(
                                             "✅ {}",
-                                            loc(&lang, "Zainstalowano vibe-acp na zdalnym serwerze", "vibe-acp installed on the remote host"),
+                                            loc(&lang, "Zainstalowano vibe-app-server na zdalnym serwerze", "vibe-app-server installed on the remote host"),
                                         ));
                                     }
                                     Ok(r) => {

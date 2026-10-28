@@ -1,4 +1,4 @@
-//! Setup view: dependency status (uv, mistral-vibe, vibe-acp) with
+//! Setup view: dependency status (uv, mistral-vibe, vibe-app-server) with
 //! one-click install/upgrade, streaming progress.
 
 use std::sync::mpsc::Receiver;
@@ -102,7 +102,7 @@ pub fn show(app: &mut MistraldeckApp, ui: &mut Ui) {
         .spacing([16.0, 6.0])
         .show(ui, |ui| {
             row(ui, "uv", &app.setup_pane.status.uv_path, t);
-            row(ui, "vibe-acp", &app.setup_pane.status.vibe_acp_path, t);
+            row(ui, "vibe-app-server", &app.setup_pane.status.appserver_path, t);
             let vibe_version = app
                 .setup_pane
                 .status
@@ -154,7 +154,7 @@ pub fn show(app: &mut MistraldeckApp, ui: &mut Ui) {
     });
 
     // After a successful install, offer to connect immediately.
-    if let Some(path) = app.setup_pane.status.vibe_acp_path.clone() {
+    if let Some(path) = app.setup_pane.status.appserver_path.clone() {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new(t.setup_done).color(egui::Color32::from_rgb(0x50, 0xc8, 0x78)),

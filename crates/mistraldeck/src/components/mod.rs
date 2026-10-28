@@ -1,3 +1,4 @@
+pub mod brand;
 pub mod chat;
 pub mod code_editor;
 pub mod dock;

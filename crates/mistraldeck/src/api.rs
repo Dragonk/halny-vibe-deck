@@ -215,15 +215,14 @@ pub async fn api_set_prefs(
     Ok(())
 }
 
-/// General settings (SettingsView general tab): acp path + idle timeout.
+/// General settings (SettingsView general tab): idle timeout.
 #[server]
 pub async fn api_set_general(
     token: String,
-    acp_path: String,
     auto_close_idle_minutes: u32,
 ) -> Result<(), ServerFnError> {
     check(&token)?;
-    mistraldeck_engine::Engine::global().set_general(acp_path, auto_close_idle_minutes);
+    mistraldeck_engine::Engine::global().set_general(auto_close_idle_minutes);
     Ok(())
 }
 
@@ -489,7 +488,7 @@ pub async fn api_save_remote_connections(
     Ok(())
 }
 
-/// Test an (unsaved) connection draft: reachability + vibe-acp presence.
+/// Test an (unsaved) connection draft: reachability + agent presence.
 #[server]
 pub async fn api_test_remote(
     token: String,
@@ -501,16 +500,16 @@ pub async fn api_test_remote(
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
 
-/// Install (or upgrade) vibe-acp on the remote host.
-/// LOCAL-ONLY (Nexus WEB_BLOCKED has remote:install-acp).
+/// Install (or upgrade) the Mistral Vibe CLI on the remote host.
+/// LOCAL-ONLY (Nexus WEB_BLOCKED remote install).
 #[server]
-pub async fn api_install_remote_acp(
+pub async fn api_install_remote_cli(
     token: String,
     conn: mistraldeck_core::snapshot::RemoteConnection,
 ) -> Result<mistraldeck_core::snapshot::RemoteInstallResult, ServerFnError> {
     check(&token)?;
     require_local()?;
-    tokio::task::spawn_blocking(move || mistraldeck_engine::remote::install_remote_acp(&conn))
+    tokio::task::spawn_blocking(move || mistraldeck_engine::remote::install_remote_agent(&conn))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -556,8 +555,7 @@ pub async fn api_check_local_cli_update(
     token: String,
 ) -> Result<mistraldeck_core::snapshot::CliUpdateInfo, ServerFnError> {
     check(&token)?;
-    let acp_path = mistraldeck_engine::Engine::global().config().acp_path;
-    tokio::task::spawn_blocking(move || mistraldeck_engine::updates::check_local_cli_update(&acp_path))
+    tokio::task::spawn_blocking(mistraldeck_engine::updates::check_local_cli_update)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }
@@ -575,8 +573,7 @@ pub async fn api_upgrade_local_cli(
             error: Some("A turn is running — update refused".into()),
         });
     }
-    let acp_path = mistraldeck_engine::Engine::global().config().acp_path;
-    tokio::task::spawn_blocking(move || mistraldeck_engine::updates::upgrade_local_cli(&acp_path))
+    tokio::task::spawn_blocking(mistraldeck_engine::updates::upgrade_local_cli)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))
 }

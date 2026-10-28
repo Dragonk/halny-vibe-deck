@@ -93,11 +93,11 @@ pub async fn refresh(mut state: Signal<ClientState>) {
         Err(_e) => { /* snapshot fetch failed; next event will retry */ }
     }
     // One-shot first-run check: show the setup screen when the
-    // vibe-acp binary is missing (any login state).
+    // vibe-app-server binary is missing (any login state).
     if !state.read().setup_checked {
         state.write().setup_checked = true;
         if let Ok(st) = crate::setup::api_setup_status().await {
-            state.write().setup_needed = !st.vib_acp_found;
+            state.write().setup_needed = !st.agent_found;
         }
     }
 }

@@ -42,7 +42,7 @@ pub struct ConfigOptionChoice {
     pub description: String,
 }
 
-/// A session config option advertised by vibe-acp
+/// A session config option advertised by the agent
 /// (model / mode / thinking / …) with its current value and choices.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigOption {
@@ -75,12 +75,12 @@ pub struct AvailableCommand {
     pub hint: String,
 }
 
-/// Events emitted by the ACP worker towards the UI.
+/// Events emitted by the agent worker towards the UI.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AcpEvent {
     /// `initialize` handshake finished.
     Initialized { protocol_version: u32 },
-    /// The vibe-acp subprocess terminated.
+    /// The agent subprocess terminated.
     Disconnected { code: Option<i32> },
     /// `session/list` result.
     SessionsList(Vec<AcpSessionInfo>),
@@ -89,7 +89,7 @@ pub enum AcpEvent {
         session_id: String,
         modes: Vec<ModeInfo>,
         /// model / mode / thinking / … — the source of truth for the
-        /// toolbar pickers (vibe-acp ≥ 3.0 reports these as
+        /// toolbar pickers (agent ≥ 3.0 reports these as
         /// `configOptions`; older servers fall back to `models`/`modes`).
         config_options: Vec<ConfigOption>,
         title: Option<String>,
@@ -110,7 +110,7 @@ pub enum AcpEvent {
         context_used: f64,
         context_size: f64,
         /// Session cost from the wire (`update.cost.amount`, USD) —
-        /// vibe-acp ≥ 3.0 reports it with every usage update.
+        /// the agent reports it with every usage update.
         #[serde(default)]
         cost: f64,
     },
@@ -230,15 +230,22 @@ pub enum AcpEvent {
         code: String,
         message: String,
     },
+
+    // --- Setup install (engine-side `AcpCommand::SetupInstall` flow) ---
+    /// One progress line of the local dependency install (kind: info |
+    /// success | error).
+    SetupInstallLine { message: String, kind: String },
+    /// The local dependency install finished (`ok` = vibe-app-server verified).
+    SetupInstallDone { ok: bool },
 }
 
-/// Commands from the UI to the ACP worker.
+/// Commands from the UI to the agent worker.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AcpCommand {
     /// Spawn the agent from `argv` and run the `initialize` handshake.
-    /// For local sessions this is `[acp_path]`; for SSH remotes it is the
-    /// tokenized `ssh` command with `bash -lc "exec vibe-acp"` appended -
-    /// the JSON-RPC protocol is identical over the ssh pipe.
+    /// For local sessions this is `[vibe-app-server]`; for SSH remotes it
+    /// is the tokenized `ssh` command with `bash -lc "exec vibe-app-server"`
+    /// appended - the JSON-RPC protocol is identical over the ssh pipe.
     Start {
         argv: Vec<String>,
     },
@@ -301,4 +308,8 @@ pub enum AcpCommand {
     IdentityRead,
     /// account/read — AccountView (plan.title, planOffer, rateLimitAction, apiKey.preview).
     AccountRead,
+    /// Local dependency install (uv → mistral-vibe → verify
+    /// vibe-app-server). Handled engine-side (never reaches a
+    /// transport): the CLI is a prerequisite for starting any agent.
+    SetupInstall,
 }

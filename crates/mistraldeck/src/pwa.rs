@@ -25,14 +25,21 @@ const SW_JS: &str = r#"/* Halny Vibe Deck service worker (serve mode / PWA).
  * Cache-first for assets, network-first for the app shell (a stale cached
  * index.html would pin users to the previous release forever); the API and
  * the websocket upgrade are never cached. */
-const CACHE = 'halny-vibe-deck-shell-v1'
+const CACHE = 'halny-vibe-deck-shell-__VERSION__'
 
 self.addEventListener('install', () => {
   self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
+  // Purge caches from previous releases — a stale cached shell pins
+  // users to the old build (asset names are content-hashed, so the
+  // only way back is a cache that still holds the old shell/assets).
+  event.waitUntil((async () => {
+    const keys = await caches.keys()
+    await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+    await self.clients.claim()
+  })())
 })
 
 self.addEventListener('fetch', (event) => {
@@ -182,10 +189,10 @@ fn static_response(content_type: &'static str, body: Vec<u8>) -> Response {
 }
 
 async fn serve_sw_js() -> Response {
-    static_response(
-        "application/javascript",
-        SW_JS.as_bytes().to_vec(),
-    )
+    // inject the crate version into the cache name so every release
+    // gets a fresh cache and the activate handler purges the old one
+    let sw = SW_JS.replace("__VERSION__", env!("CARGO_PKG_VERSION"));
+    static_response("application/javascript", sw.into_bytes())
 }
 
 async fn serve_manifest() -> Response {
@@ -211,6 +218,33 @@ async fn serve_icon_png() -> Response {
 /// Add the PWA static routes to the app router. Explicit routes win over
 /// the dioxus SSR fallback, and the files ship inside the binary — no
 /// `public/` entries to keep in sync.
+/// The SSR app shell must never come from a cache: a stale index.html
+/// references the previous (content-hashed) asset bundle, and the old
+/// assets are still in the SW cache — the user gets pinned to the old
+/// build. HTML responses get `no-store`; the content-hashed asset
+/// bundles keep their own caching.
+pub async fn no_store_html_mw(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let resp = next.run(req).await;
+    let is_html = resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("text/html"))
+        .unwrap_or(false);
+    if is_html {
+        let (mut parts, body) = resp.into_parts();
+        parts.headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        return axum::response::Response::from_parts(parts, body);
+    }
+    resp
+}
+
 pub fn install_pwa_routes(router: Router) -> Router {
     router
         .route("/sw.js", get(serve_sw_js))
@@ -307,7 +341,7 @@ mod tests {
 
     #[test]
     fn sw_shell_is_network_first_and_skips_api() {
-        assert!(SW_JS.contains("const CACHE = 'halny-vibe-deck-shell-v1'"));
+        assert!(SW_JS.contains("const CACHE = 'halny-vibe-deck-shell-__VERSION__'"));
         // network-first navigation
         assert!(SW_JS.contains("url.pathname === '/' || url.pathname === '/index.html'"));
         // api / login / sw self-fetch never cached

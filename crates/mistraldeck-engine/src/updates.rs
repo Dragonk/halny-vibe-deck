@@ -232,18 +232,15 @@ fn find_on_path(bin: &str) -> Option<String> {
 }
 
 /// Local mistral-vibe CLI version (Nexus `localCliVersion`): `vibe` from
-/// PATH first, then the sibling of the configured vibe-acp (the GUI launch
-/// often lacks the shell PATH; both binaries live in the same uv tool bin).
-pub fn local_cli_version(acp_path: &str) -> Option<String> {
+/// PATH first, then the uv tool install locations (the GUI launch often
+/// lacks the shell PATH; mistraldeck-setup covers both).
+pub fn local_cli_version() -> Option<String> {
     let mut candidates: Vec<String> = Vec::new();
     if let Some(p) = find_on_path("vibe") {
         candidates.push(p);
     }
-    if !acp_path.is_empty() {
-        if let Some(dir) = std::path::Path::new(acp_path).parent() {
-            let exe = if cfg!(target_os = "windows") { "vibe.exe" } else { "vibe" };
-            candidates.push(dir.join(exe).to_string_lossy().to_string());
-        }
+    if let Some(p) = mistraldeck_setup::find_binary("vibe") {
+        candidates.push(p.to_string_lossy().to_string());
     }
     for c in candidates {
         if let Some((code, out, _)) = run_capture(&c, &["--version"], 15_000) {
@@ -259,8 +256,8 @@ pub fn local_cli_version(acp_path: &str) -> Option<String> {
 
 /// Local CLI update check (Nexus `checkCliUpdate`): PyPI latest with cache.
 /// Blocking - call from `tokio::task::spawn_blocking`.
-pub fn check_local_cli_update(acp_path: &str) -> CliUpdateInfo {
-    let current = local_cli_version(acp_path);
+pub fn check_local_cli_update() -> CliUpdateInfo {
+    let current = local_cli_version();
     match pypi_latest() {
         Ok(latest) => {
             let update_available = current
@@ -289,7 +286,7 @@ pub fn check_local_cli_update(acp_path: &str) -> CliUpdateInfo {
 
 /// Upgrade the local CLI with uv (Nexus `upgradeLocalCli`, up to 5 minutes).
 /// Blocking - call from `tokio::task::spawn_blocking`.
-pub fn upgrade_local_cli(acp_path: &str) -> CliUpgradeResult {
+pub fn upgrade_local_cli() -> CliUpgradeResult {
     let Some(uv) = find_on_path("uv") else {
         return CliUpgradeResult {
             version: None,
@@ -314,7 +311,7 @@ pub fn upgrade_local_cli(acp_path: &str) -> CliUpgradeResult {
         };
     }
     CliUpgradeResult {
-        version: local_cli_version(acp_path),
+        version: local_cli_version(),
         error: None,
     }
 }
