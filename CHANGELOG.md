@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.99.1 — stable parity pass (2026-10-28)
+
+- **Branding is now 1:1 with the stable edition.** The header mark, the chat
+  empty state and the setup screen use the stable pixel-art artwork (1024
+  viewBox, annular #10131A tile, orange/amber pyramid, wind swooshes), and the
+  Windows/PWA icons were regenerated from the same SVG.
+- **ACP is gone.** The `mistraldeck-acp` client, the legacy egui app it served
+  and the legacy release workflow were removed; the Rust edition speaks only
+  `vibe-app-server`. Legacy `Acp*` names in the shared protocol were renamed to
+  `Agent*`.
+- **PWA:** manifest gains `id` and 512×512 icons (any + maskable); `/icon-512.png`
+  is served from the binary and cached by the service worker.
+- **Web sidebar:** theme cycle and logout live at the bottom of the sessions
+  list, under Settings (stable v1.0.33), with an inline SVG power icon.
+- **Long turns:** the 180 s request cap is gone (stable v1.0.34); a dead agent
+  fails the pending request immediately instead of hanging, and an empty resume
+  no longer wipes the chat. Resume retries once after a transport hiccup.
+- **systemd:** the server sends `READY=1`/`WATCHDOG=1`, the port bind retries
+  during update handover, and self-update restarts through the unit
+  (`systemctl --user restart`, exit(1) failsafe).
+- **PWA back gesture** closes the open panel instead of leaving the app; long
+  commands in the approval dialog wrap instead of being cut off.
+- **E2E:** a Playwright suite plus an `e2e` CI job drive the real headless
+  server (PWA surface, rendered web shell, remote login/logout).
+
 ## v0.8.3-dioxus.7 (2026-10-25) — M9.5: local no-auth + HTTPS remote login + SSH remote connections
 
 - **Local start without password:** the app no longer asks for login when the
