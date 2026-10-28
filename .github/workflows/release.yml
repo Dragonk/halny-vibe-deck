@@ -1,3 +1,10 @@
+# Release workflow: builds packages and publishes a GitHub Release, but ONLY
+# when an explicit version tag (v*) is pushed. Pushing/merging to main NEVER
+# publishes a release - main is validated by ci.yml (typecheck + build).
+# Flow: merge fixes to main, test them, and once a batch is ready to ship:
+# bump version in package.json + CHANGELOG.md, commit, push tag vX.Y.Z.
+# workflow_dispatch only produces build artifacts (no release is created).
+
 name: Build & Release
 
 on:
