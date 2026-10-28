@@ -59,3 +59,85 @@ jobs:
 
       - name: cargo check appserver windows-gnu
         run: cargo check -p mistraldeck-appserver --target x86_64-pc-windows-gnu --locked
+
+  e2e:
+    name: E2E (headless server + Playwright)
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev
+
+      - name: Build headless server
+        run: cargo build -p mistraldeck-appserver --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright (chromium)
+        working-directory: scripts/e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      - name: Prepare config (login + remote listener)
+        run: |
+          export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          mkdir -p "$XDG_CONFIG_HOME"
+          ./target/debug/halny-vibe-deck-appserver --set-login e2e e2e-secret >/dev/null 2>&1 || true
+          CFG="$XDG_CONFIG_HOME/halny-vibe-deck/config.json"
+          test -f "$CFG" || { mkdir -p "$(dirname "$CFG")"; echo '{}' > "$CFG"; }
+          python3 - "$CFG" <<'EOF'
+          import json, sys
+          p = sys.argv[1]
+          cfg = json.load(open(p))
+          cfg["remote_enabled"] = True
+          cfg["remote_port"] = 8443
+          json.dump(cfg, open(p, "w"), indent=2)
+          EOF
+          cat "$CFG"
+
+      - name: Start headless server
+        run: |
+          export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          nohup ./target/debug/halny-vibe-deck-appserver --mode headless --port 8080 \
+            > .e2e-server.log 2>&1 &
+          echo $! > .e2e-server.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null
+          for i in $(seq 1 30); do
+            if curl -skf https://127.0.0.1:8443/login >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -skf https://127.0.0.1:8443/login >/dev/null
+
+      - name: Run e2e
+        working-directory: scripts/e2e
+        env:
+          VD_LOCAL_URL: http://127.0.0.1:8080
+          VD_REMOTE_URL: https://127.0.0.1:8443
+        run: npx playwright test
+
+      - name: Server log
+        if: always()
+        run: tail -100 .e2e-server.log || true
+
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-traces
+          path: scripts/e2e/test-results
+          if-no-files-found: ignore

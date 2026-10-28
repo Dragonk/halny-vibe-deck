@@ -1,0 +1,11 @@
+{
+  "name": "halny-vibe-deck-e2e",
+  "private": true,
+  "description": "Playwright smoke suite for the headless Halny Vibe Deck server (CI only)",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

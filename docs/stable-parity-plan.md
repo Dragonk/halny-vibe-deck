@@ -91,7 +91,12 @@ No tests on the dev machine. Strategy:
    answers `setup/status`, `session/start`, `turn/*`, `session/statsUpdated` —
    deterministic, no API key needed. The same fixtures feed the existing unit
    tests in `mistraldeck-appsrv`.
-3. **CI wiring.** Extend `.github/workflows/ci-dioxus.yml` (and release checks)
+3. **CI wiring (implemented).** `scripts/e2e/` holds the Playwright suite
+   (`web.spec.ts`: PWA surface incl. both icon sizes, rendered web shell with
+   the brand and the sidebar bottom controls, remote login reject/accept/logout)
+   and the `e2e` job in `.github/workflows/ci-dioxus.yml` builds
+   `halny-vibe-deck-appserver`, seeds a temp config with `--set-login` plus
+   `remote_enabled`, starts both listeners and runs the suite. Extend
    with an `e2e` job: build `halny-vibe-deck-appserver` + mock backend, install
    Playwright + webkit2gtk deps, run the suite on every push to `next`. The
    stable-side golden run lives in the stable repo's CI (build headless, run the
