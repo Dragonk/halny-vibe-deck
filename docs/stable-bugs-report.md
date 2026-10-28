@@ -204,20 +204,25 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 ### HIGH
 1. **App/CLI update interrupts an in-flight turn** (v1.0.5) — **FIXED**:
    `api_update_app` refuses while `any_turn_in_flight()`.
-2. **Serve dies after an in-app update under systemd** (v1.0.19) — **OPEN**;
-   no pidfile/EADDRINUSE recovery in serve.rs. → §3.13.
+2. **Serve dies after an in-app update under systemd** (v1.0.19) — **FIXED**:
+   the self-update restarts THROUGH the systemd unit (`systemctl --user
+   restart`, exit(1) failsafe for `Restart=on-failure`), the bind retries for
+   ~9 s during the handover, and the server speaks `sd_notify` (READY=1 +
+   WATCHDOG=1 from `WATCHDOG_USEC`). No cgroup self-heal is needed — the Rust
+   server never leaves the unit cgroup (Chromium did). → §3.13.
 3. **Dock/sidebar resize: mouse-only** (faa86ac) — **FIXED**: `RESIZE_JS`
    uses pointer events + setPointerCapture.
 4. **Images never reach the LLM** (v1.0.8) — **FIXED** (image blocks through
    the app-server transport).
 
 ### MEDIUM
-5. **Back gesture in the PWA closes the app** (v1.0.14/15/18) — **OPEN**; no
-   LIFO `pushState`/`popstate` stack. → §3.10.
+5. **Back gesture in the PWA closes the app** (v1.0.14/15/18) — **FIXED**:
+   `BACK_JS` keeps an in-app LIFO history guard while a panel is open and turns
+   `popstate` into "close the topmost panel" (sidebar, then dock). → §3.10.
 6. **SSH first-connect hang on the host-key prompt** (v1.0.9) — **FIXED**:
    `StrictHostKeyChecking=accept-new` + `ConnectTimeout=10` in remote.rs.
-7. **Auto-approval ignores the built-in yolo mode** (v1.0.6) — **OPEN**;
-   every tool still asks for consent. → §3.6.
+7. **Auto-approval ignores the built-in yolo mode** (v1.0.6) — **FIXED**:
+   engine approves on its own when the session mode is `auto-approve`. → §3.6.
 8. **Worker death: the pending map is not drained** (v1.0.4) — **FIXED**: the
    appsrv `call_res` loop probes `conn.exited()` and fails fast, draining
    the pending waiter (v1.0.34 port).
@@ -227,6 +232,6 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 ### LOW
 10. **Prompt queue: no "send now" and no resilience to a stale busy** (v0.13.15/f6398d0) — **FIXED** ("Send now" in the input panel).
 11. **Resume without auto-retry on a transport hiccup** (v1.0.16) — **OPEN**; the fallback exists, the retry does not. → §3.11.
-12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) — **OPEN**. → §3.4.
-13. **Windows self-update: black terminal window** (v1.0.3) — **OPEN**; no `CREATE_NO_WINDOW` with `DETACHED_PROCESS`. → §3.14.
+12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) — **FIXED**: `.tool-approval-input` wraps (`pre-wrap` + `overflow-wrap:anywhere`) and scrolls inside the dialog. → §3.4.
+13. **Windows self-update: black terminal window** (v1.0.3) — **FIXED**: `creation_flags(0x0800_0008)` = DETACHED_PROCESS | CREATE_NO_WINDOW. → §3.14.
 14. **PWA manifest/SW details (512 icon, `id`, cache purge)** (v1.0.10) — **FIXED** (version-scoped cache; manifest `id` + 512 icon).

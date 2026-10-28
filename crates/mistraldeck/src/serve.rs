@@ -535,6 +535,28 @@ impl AsyncWrite for TlsStream {
 
 /// Serve the app over HTTPS (self-signed) on `0.0.0.0:port`, with cookie
 /// auth in front of everything except the `/login` page + auth endpoints.
+/// Bind with a short retry loop: after an in-app update the previous
+/// instance may still hold the socket for a moment (v1.0.19 parity).
+async fn bind_with_retry(
+    host: &str,
+    port: u16,
+    attempts: u32,
+) -> Result<tokio::net::TcpListener, String> {
+    let mut last = String::new();
+    for attempt in 0..attempts.max(1) {
+        match tokio::net::TcpListener::bind((host, port)).await {
+            Ok(l) => return Ok(l),
+            Err(e) => {
+                last = e.to_string();
+                if attempt + 1 < attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+                }
+            }
+        }
+    }
+    Err(format!("bind {host}:{port} failed: {last}"))
+}
+
 pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
     let (cert_pem, key_pem) = ensure_certificate()?;
     let certs: Vec<rustls_pki_types::CertificateDer<'static>> =
@@ -548,9 +570,10 @@ pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
         .with_single_cert(certs, key)
         .map_err(|e| format!("tls config failed: {e}"))?;
 
-    let tcp = tokio::net::TcpListener::bind(("0.0.0.0", port))
-        .await
-        .map_err(|e| format!("bind 0.0.0.0:{port} failed: {e}"))?;
+    // v1.0.19 parity: after an in-app update the previous instance may
+    // still hold the port for a moment (socket teardown, systemd handover).
+    // Retry for a few seconds before declaring the bind a failure.
+    let tcp = bind_with_retry("0.0.0.0", port, 12).await?;
 
     let login = Router::new()
         .route("/login", get(login_page))
@@ -564,6 +587,9 @@ pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
     eprintln!(
         "mistraldeck: remote access at https://0.0.0.0:{port} (self-signed certificate; login required)"
     );
+    // systemd Type=notify: the remote listener is up.
+    mistraldeck_engine::systemd::notify_state("READY=1");
+    mistraldeck_engine::systemd::start_watchdog();
     axum::serve(
         TlsListener {
             tcp,

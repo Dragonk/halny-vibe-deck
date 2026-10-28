@@ -3940,9 +3940,14 @@ code {
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* d551ecd: long commands must wrap instead of being cut at one line
+       (a truncated command is unapprovable), and the block must scroll
+       inside the dialog rather than widen it. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-height: 40vh;
+    overflow-y: auto;
 }
 
 .tool-approval-actions {

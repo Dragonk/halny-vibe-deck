@@ -20,6 +20,7 @@ pub fn Shell() -> Element {
             spawn(async move {
                 dioxus::document::eval(RESIZE_JS);
                 dioxus::document::eval(crate::components::mobile::MOBILE_JS);
+                dioxus::document::eval(crate::components::mobile::BACK_JS);
                 dioxus::document::eval(VISIBILITY_JS);
             });
         }

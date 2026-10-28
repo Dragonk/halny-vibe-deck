@@ -102,6 +102,44 @@ pub async fn set_dock_open(state: Signal<ClientState>, open: bool) {
     save_prefs(state, language, theme, open, limit).await;
 }
 
+/// Back-gesture guard (stable v1.0.14/15/18): in the PWA the system/browser
+/// back gesture closed the whole app because every panel was plain DOM
+/// state. Keep an in-app LIFO history entry while any panel is open and
+/// translate `popstate` into "close the topmost panel" — re-pushing a
+/// replacement entry so the app never navigates away. With no panel open
+/// the gesture is left alone (normal page navigation).
+pub const BACK_JS: &str = r#"(function(){
+  if (window.__vdBackInit) return; window.__vdBackInit = 1;
+  function sidebarOpen() { return !!document.querySelector('.sidebar.mobile-open'); }
+  function dockOpen() { return !!document.querySelector('.dock'); }
+  function anyOpen() { return sidebarOpen() || dockOpen(); }
+  function click(id) { var b = document.getElementById(id); if (b) b.click(); }
+  function sync() {
+    if (!anyOpen()) return;
+    // One guard entry is enough: popstate closes the topmost panel and
+    // pushes the guard again (LIFO).
+    if (!window.history.state || !window.history.state.__vd) {
+      try { window.history.pushState({__vd: 1}, ''); } catch (e) {}
+    }
+  }
+  window.addEventListener('popstate', function(){
+    if (sidebarOpen()) {
+      click('vd-back-close-sidebar'); sync(); return;
+    }
+    if (dockOpen()) {
+      click('vd-back-close-dock'); sync(); return;
+    }
+    // Nothing open — let the browser handle the navigation.
+  });
+  try {
+    new MutationObserver(sync).observe(document.documentElement, {
+      attributes: true, subtree: true, attributeFilter: ['class', 'style']
+    });
+  } catch (e) {}
+  sync();
+})();
+"#;
+
 /// The mobile scrim + the hidden bridge buttons the injected JS clicks.
 /// Rendered between the header and the app body (the scrim is fixed, the
 /// buttons are display:none — neither affects the desktop layout).
@@ -151,6 +189,25 @@ pub fn MobileBridges() -> Element {
                         let state = state.clone();
                         spawn(async move { set_dock_open(state, true).await; });
                     }
+                }
+            },
+        }
+        button {
+            id: "vd-back-close-sidebar",
+            style: "display:none;",
+            onclick: {
+                let mut state = state.clone();
+                move |_| { state.write().mobile_sidebar_open = false; }
+            },
+        }
+        button {
+            id: "vd-back-close-dock",
+            style: "display:none;",
+            onclick: {
+                let state = state.clone();
+                move |_| {
+                    let state = state.clone();
+                    spawn(async move { set_dock_open(state, false).await; });
                 }
             },
         }

@@ -135,6 +135,12 @@ pub fn main_dispatch(force_headless: bool) {
                 .await
                 .unwrap_or_else(|e| panic!("mistraldeck: cannot bind 127.0.0.1:{port}: {e}"));
             println!("mistraldeck: local UI at http://127.0.0.1:{port}");
+            // systemd: Type=notify gets READY now that the UI listener is
+            // up; WatchdogSec keeps being fed in the background (v1.0.30/31
+            // parity — no cgroup self-heal needed, this process stays in
+            // the unit cgroup).
+            mistraldeck_engine::systemd::notify_state("READY=1");
+            mistraldeck_engine::systemd::start_watchdog();
             let local_router = router
                 .clone()
                 .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))

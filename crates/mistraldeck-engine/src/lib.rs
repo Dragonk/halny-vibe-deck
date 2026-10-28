@@ -10,6 +10,7 @@ pub mod auth_browser;
 pub mod config;
 pub mod remote;
 pub mod remote_vibe;
+pub mod systemd;
 pub mod updates;
 mod types;
 

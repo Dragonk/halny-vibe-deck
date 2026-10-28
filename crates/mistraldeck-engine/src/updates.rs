@@ -759,6 +759,18 @@ fn update_app_linux(
         total: Some(size),
         percent: Some(100),
     });
+    // v1.0.29 parity: under systemd, spawning the exe directly is a trap —
+    // the child dies with the unit cgroup and exit(0) reads as success, so
+    // Restart=on-failure never fires and the endpoint stays dead. Restart
+    // THROUGH the unit (it re-executes the freshly installed binary) and
+    // exit non-zero as a failsafe.
+    if crate::systemd::under_systemd() {
+        if let Some(unit) = crate::systemd::active_unit() {
+            crate::systemd::restart_unit(&unit);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            std::process::exit(1);
+        }
+    }
     // Relaunch the (now replaced) executable and exit; the kernel keeps
     // the old inode mapped for the dying process.
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
