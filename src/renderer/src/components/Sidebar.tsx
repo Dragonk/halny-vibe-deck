@@ -463,30 +463,6 @@ export default function Sidebar(): React.JSX.Element {
           <span className={`header-activity ${statusClass}`} style={{ marginLeft: 'auto' }}>
             <span className="activity-icon" />
           </span>
-          {/* v1.0.32: in web mode the Header (with the logout button) is not
-              rendered at all, so the browser client had NO logout button.
-              Theme + logout belong here, next to the brand. */}
-          <button className="sidebar-theme-btn" onClick={toggleTheme} title={getThemeTitle()}>
-            {getThemeIcon()}
-          </button>
-          <button
-            className="sidebar-logout-btn"
-            onClick={() => void handleLogout()}
-            title={tr.logoutLabel}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            >
-              <path d="M12 2v10" />
-              <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
-            </svg>
-          </button>
         </div>
       )}
 
@@ -734,7 +710,22 @@ export default function Sidebar(): React.JSX.Element {
               {getThemeIcon()} {getThemeTitle().split('(')[0].trim()}
             </button>
             <button className="sidebar-nav-item sidebar-logout-btn" onClick={() => void handleLogout()} title={tr.logoutLabel}>
-              ⏻ {tr.logoutLabel}
+              {/* v1.0.33: SVG power icon - the U+23FB glyph is missing from
+                  phone system fonts and rendered as an empty box. */}
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                style={{ flexShrink: 0, verticalAlign: '-2px' }}
+              >
+                <path d="M12 2v10" />
+                <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+              </svg>
+              {tr.logoutLabel}
             </button>
           </>
         )}

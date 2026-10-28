@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.33 — 2026-10-28
+
+### Fixed
+
+- **Web client: theme and logout live only at the bottom of the sessions
+  list (under Settings), as before.** v1.0.32 wrongly added a second pair
+  to the top brand row - that pair is gone. The bottom logout icon is now
+  an inline SVG instead of the U+23FB power-symbol glyph, which is
+  missing from phone system fonts and rendered as an empty box, so the
+  button icon now renders on phones exactly like in the desktop browser.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.32...v1.0.33
+
 ## 1.0.32 — 2026-10-28
 
 ### Fixed
