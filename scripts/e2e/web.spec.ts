@@ -105,8 +105,6 @@ test('remote login flow: reject, accept, logout', async ({ page }) => {
   // Logout must clear the session and land back on the login page. The
   // sessions panel animates, so the click is forced (same as the stable
   // suite).
-  const logoutBtn = page.locator('.sidebar-logout-btn')
-  await logoutBtn.scrollIntoViewIfNeeded()
-  await logoutBtn.click({ force: true })
+  await page.locator('.sidebar-logout-btn').evaluate((el) => (el as HTMLElement).click())
   await page.waitForURL(/\/login/, { timeout: 30_000 })
 })
