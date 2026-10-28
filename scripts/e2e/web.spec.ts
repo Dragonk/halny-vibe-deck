@@ -55,7 +55,13 @@ test('login: reject, accept, then logout', async ({ page }) => {
 
   await page.fill('#u', USER)
   await page.fill('#p', PASS)
-  await page.click('#b')
+  const [resp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/auth/login') && r.request().method() === 'POST',
+    ),
+    page.click('#b'),
+  ])
+  expect(resp.status(), `login POST for ${USER}`).toBe(200)
   await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 30_000 })
 
   // Web client: theme + logout live at the bottom of the sessions list
