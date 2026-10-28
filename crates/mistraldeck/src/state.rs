@@ -87,7 +87,20 @@ pub async fn refresh(mut state: Signal<ClientState>) {
                 ));
             }
             let mut s = state.write();
+            // v1.0.34 parity: a resume that returns an empty history for
+            // the session already on screen keeps the visible messages
+            // instead of wiping the chat (a genuine session switch has a
+            // different `current`, so it still swaps correctly).
+            let prev_messages = s.snapshot.current_messages.clone();
+            let prev_current = s.snapshot.current;
             s.snapshot = snap;
+            if prev_current.is_some()
+                && s.snapshot.current == prev_current
+                && !prev_messages.is_empty()
+                && s.snapshot.current_messages.is_empty()
+            {
+                s.snapshot.current_messages = prev_messages;
+            }
             s.loaded = true;
         }
         Err(_e) => { /* snapshot fetch failed; next event will retry */ }

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -43,7 +43,6 @@ fn bool_field(v: &Value, keys: &[&str]) -> bool {
 
 pub const CLIENT_NAME: &str = "Halny Vibe Deck";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// Handle held by the engine (`send` / `cmd_sender` / `events`).
 pub struct ApsHandle {
@@ -303,11 +302,17 @@ impl Worker {
         }
     }
 
-    /// Request/response with the timeout, pumping the inbox while
+    /// Request/response with no wall-clock cap, pumping the inbox while
     /// waiting so notifications keep flowing in order (response
     /// boundary — docs/appserver-protocol.md §10). The error carries
     /// the raw RPC `(code, message)` so callers can do feature
     /// detection (`method_not_found` / -32601, L1).
+    ///
+    /// No wall-clock cap (stable v1.0.34 parity): a legitimate turn can
+    /// run for hours, and the CLI only answers some requests (resume)
+    /// after long work. Safety comes from the agent-exit probe below —
+    /// when the vibe-app-server process dies, every waiter fails fast
+    /// instead of hanging.
     fn call_res(&mut self, method: &str, params: Value, context: &str) -> Result<Value, (i64, String)> {
         if self.conn.is_none() {
             return Err((-32000, format!("{context}: not connected")));
@@ -323,7 +328,6 @@ impl Worker {
             .lock()
             .expect("pending")
             .insert(id.clone(), tx);
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
         loop {
             self.pump_inbound();
             match rx.try_recv() {
@@ -346,11 +350,17 @@ impl Worker {
                 Err(_) => {}
             }
             if self.conn.is_none() {
+                self.pending.lock().expect("pending").remove(&id);
                 return Err((-32000, format!("{context}: connection gone")));
             }
-            if Instant::now() > deadline {
-                self.pending.lock().expect("pending").remove(&id);
-                return Err((-32000, format!("{context}: request timed out")));
+            // Fail fast when the agent process died mid-request
+            // (stable v1.0.4/v1.0.34: reject pending, never hang).
+            if let Some(conn) = self.conn.as_mut() {
+                if conn.exited().is_some() {
+                    self.pending.lock().expect("pending").remove(&id);
+                    self.conn = None;
+                    return Err((-32000, format!("{context}: agent exited")));
+                }
             }
             std::thread::sleep(Duration::from_millis(15));
         }
