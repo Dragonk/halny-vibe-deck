@@ -1789,6 +1789,24 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ sessionLoadProgress: null });
     const local = get().getSessionByAcpId(acpSessionId);
     if (!local) return;
+    // v1.0.34: an EMPTY replay must never wipe a populated chat. A resume
+    // whose replay recovered zero updates (worker killed mid-turn, a store
+    // hiccup on the remote host) used to replace the whole message array
+    // with [] - everything the user could see vanished at once. Keep the
+    // messages on screen and surface why; an empty history is only legit
+    // for a session that never had any messages.
+    if (history.length === 0 && local.messages.length > 0) {
+      console.error(
+        "[store] empty history replay for " + acpSessionId + " - keeping " + local.messages.length + " on-screen messages",
+      );
+      const st = get();
+      if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);
+      get().updateSession(local.id, { loading: false });
+      get().setAcpError(
+        "Resume returned an empty history - kept the messages already shown. The agent store may have recovered from an interrupted turn.",
+      );
+      return;
+    }
     // v1.0.11: this client now has the full on-disk history for the
     // session - a re-open does not need to re-read it.
     set((st) => ({

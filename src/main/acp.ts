@@ -182,19 +182,26 @@ export class AcpManager {
       console.log('[ACP] >>> method:', method, 'id:', id)
       this.pending.set(id, { resolve, reject })
 
-      const timeout = setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id)
-          reject(new Error('ACP request timeout: ' + method))
-        }
-      }, timeoutMs ?? REQUEST_TIMEOUT_MS)
+      // v1.0.34: timeoutMs === 0 disables the timer entirely - used by
+      // session/prompt, whose response legitimately arrives only when the
+      // agent turn ends (which can be many hours). Worker death still
+      // rejects every pending request from the process exit handler.
+      const timeout =
+        timeoutMs === 0
+          ? null
+          : setTimeout(() => {
+              if (this.pending.has(id)) {
+                this.pending.delete(id)
+                reject(new Error('ACP request timeout: ' + method))
+              }
+            }, timeoutMs ?? REQUEST_TIMEOUT_MS)
 
       this.pending.get(id)!.resolve = (v) => {
-        clearTimeout(timeout)
+        if (timeout) clearTimeout(timeout)
         resolve(v)
       }
       this.pending.get(id)!.reject = (e) => {
-        clearTimeout(timeout)
+        if (timeout) clearTimeout(timeout)
         reject(e)
       }
 
@@ -1087,10 +1094,15 @@ export class AcpManager {
       this.currentSessionId = sid
     }
     // v0.13.11: the response to session/prompt arrives only when the turn
-    // finishes. Long turns (thinking=high, big sessions, long tool chains)
-    // regularly exceed the default 3-minute request timeout, which produced
-    // a spurious 'ACP request timeout: session/prompt' error while the turn
-    // was still streaming in the UI. Allow up to one hour instead.
+    // finishes. v1.0.34: NO request timeout at all (timeoutMs = 0) -
+    // autonomous turns legitimately run for hours or days before the
+    // final response. The old 1-hour cap fired while the agent was still
+    // working: the UI showed 'ACP request timeout: session/prompt', the
+    // in-flight bookkeeping was cleared (so ensure-worker could probe - and
+    // restart, killing - a healthy mid-turn worker) and follow-up prompts
+    // raced the running turn. Liveness is owned by the session/update
+    // stream, the stop button and the worker exit handler (which rejects
+    // every pending request).
     this.turnsInFlight++
     this.busyTurns.add(sid)
     let result: Record<string, unknown>
@@ -1113,7 +1125,7 @@ export class AcpManager {
           sessionId: sid,
           prompt: blocks
         },
-        3_600_000
+        0
       )) as Record<string, unknown>
     } finally {
       this.turnsInFlight--

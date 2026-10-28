@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.34 — 2026-10-28
+
+### Fixed
+
+- **Long-running agent turns no longer hit a false ACP request timeout on
+  session/prompt.** In ACP, session/prompt only responds when the agent
+  finishes its whole turn. A 1-hour cap wrongly fired while an agent was
+  legitimately still working (SSH agents can run for many hours), and the
+  error cascaded: busy-tracking was cleared mid-turn, a stop+restart could
+  kill the worker in the middle of a turn, and resuming afterwards could
+  leave the chat empty. The prompt request now waits without a timeout,
+  which is safe because the worker exit handler rejects all pending requests.
+- **No probing of a running agent mid-turn.** acp:start no longer sends a
+  test prompt to a running worker whose turn is in flight (the same guard
+  ensure-worker already used).
+- **Empty resume history no longer wipes the chat.** If a resume returns an
+  empty history while messages are already on screen, the visible messages
+  are kept and a notice is shown instead of replacing the chat with nothing.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.33...v1.0.34
+
 ## 1.0.33 — 2026-10-28
 
 ### Fixed

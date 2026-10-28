@@ -634,7 +634,11 @@ app.whenReady().then(() => {
     // acp:start always creates its session on purpose - explicit user
     // intent (remote start, draft first prompt, settings restart) - so the
     // boot prime flag is deliberately not consulted here.
-    if (mgr.isRunning()) {
+    // v1.0.34: a worker with a turn in flight is alive by definition - never
+    // probe it (the CLI may not answer session/list within the 8 s ping
+    // window mid-turn; a failed probe restarted - and killed - healthy
+    // multi-hour turns). Same guard acp:ensure-worker has since v0.13.12.
+    if (mgr.isRunning() && !mgr.isTurnInFlight()) {
       try {
         await mgr.ping()
       } catch {
