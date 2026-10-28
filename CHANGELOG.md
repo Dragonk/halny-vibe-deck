@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.32 — 2026-10-28
+
+### Fixed
+
+- **Web client: connection lost while resuming a big session.** The whole
+  session history is broadcast as one WebSocket frame; on a slow mobile
+  link (through a reverse proxy) the frame flush could outlast the
+  30 s heartbeat rounds and the server terminated the client mid-resume
+  ("Connection to the app server was lost"). Frames are now compressed
+  (permessage-deflate, roughly an order of magnitude smaller on the
+  wire), the heartbeat no longer terminates clients that are still
+  flushing a pending payload, and RPC calls made during the 3 s
+  reconnect window are parked and replayed instead of failing instantly.
+  The serve module also logs WebSocket connect/close/terminate and large
+  broadcasts for future diagnosis.
+- **Web client (SSH sessions): the blue NEW button is gone.** Remote
+  connection groups now use the same compact „New project…” pill as
+  the sessions header (mobile row included).
+- **Web client: the logout button renders again (all widths, including
+  phones).** It used to exist only in the desktop Header, which is not
+  rendered in web mode at all; the sidebar brand row now owns the theme
+  toggle and the logout button.
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.31...v1.0.32
+
 ## 1.0.31 — 2026-10-28
 
 ### Fixed

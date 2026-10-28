@@ -463,6 +463,30 @@ export default function Sidebar(): React.JSX.Element {
           <span className={`header-activity ${statusClass}`} style={{ marginLeft: 'auto' }}>
             <span className="activity-icon" />
           </span>
+          {/* v1.0.32: in web mode the Header (with the logout button) is not
+              rendered at all, so the browser client had NO logout button.
+              Theme + logout belong here, next to the brand. */}
+          <button className="sidebar-theme-btn" onClick={toggleTheme} title={getThemeTitle()}>
+            {getThemeIcon()}
+          </button>
+          <button
+            className="sidebar-logout-btn"
+            onClick={() => void handleLogout()}
+            title={tr.logoutLabel}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <path d="M12 2v10" />
+              <path d="M18.4 6.6a9 9 0 1 1-12.8 0" />
+            </svg>
+          </button>
         </div>
       )}
 
@@ -564,14 +588,14 @@ export default function Sidebar(): React.JSX.Element {
                   />
                 )}
                 <span
-                  className="pgh-plus"
+                  className="pgh-plus sidebar-np-btn"
                   title={tr.newProjectLabel + ' · ' + conn.name}
                   onClick={(e) => {
                     e.stopPropagation()
                     setNpTarget({ remoteId: conn.id, remoteName: conn.name })
                   }}
                 >
-                  🆕
+                  {tr.newProjectLabel}
                 </span>
               </button>
               {!collapsed && (
@@ -582,7 +606,7 @@ export default function Sidebar(): React.JSX.Element {
                     className="project-mobile-new"
                     onClick={() => setNpTarget({ remoteId: conn.id, remoteName: conn.name })}
                   >
-                    🆕 {tr.newProjectLabel} · {conn.name}
+                    {tr.newProjectLabel} · {conn.name}
                   </button>
                   {(() => {
                     // v0.13.1: unified per-remote folder list - configured

@@ -22,6 +22,43 @@ let nextId = 1
 let wsReady = false
 const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
 const eventSubs = new Map<string, Set<(...args: unknown[]) => void>>()
+// v1.0.32: invokes that arrive during the reconnect window used to fail
+// instantly with 'Connection to the app server was lost' (e.g. resuming a
+// session right as a mobile link blips). Park them briefly and flush on
+// reopen - a short blip becomes invisible instead of failing the resume.
+const DEFER_MS = 10_000
+const DEFER_MAX = 50
+interface DeferredInvoke {
+  ch: string
+  args: unknown[]
+  resolve: (v: unknown) => void
+  reject: (e: Error) => void
+  at: number
+}
+let deferredInvokes: DeferredInvoke[] = []
+
+function sendInvoke(ch: string, args: unknown[], resolve: (v: unknown) => void, reject: (e: Error) => void): void {
+  const id = String(nextId++)
+  pending.set(id, { resolve, reject })
+  ws?.send(JSON.stringify({ t: 'invoke', id, ch, args } satisfies WsMsg))
+}
+
+function flushDeferred(): void {
+  if (!ws || !wsReady) return
+  const list = deferredInvokes
+  deferredInvokes = []
+  for (const d of list) sendInvoke(d.ch, d.args, d.resolve, d.reject)
+}
+
+function sweepDeferred(): void {
+  const now = Date.now()
+  const keep: DeferredInvoke[] = []
+  for (const d of deferredInvokes) {
+    if (now - d.at < DEFER_MS) keep.push(d)
+    else d.reject(new Error('Connection to the app server was lost'))
+  }
+  deferredInvokes = keep
+}
 
 function dispatchEvent(ch: string, args: unknown[]): void {
   const subs = eventSubs.get(ch)
@@ -50,12 +87,17 @@ export function subscribeWebEvent(ch: string, cb: (...args: unknown[]) => void):
 function invoke(ch: string, args: unknown[]): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!ws || !wsReady) {
-      reject(new Error('Connection to the app server was lost'))
+      // v1.0.32: park the call for the reconnect window instead of
+      // failing straight away; sweepDeferred() rejects it if the socket
+      // never comes back.
+      if (deferredInvokes.length >= DEFER_MAX) {
+        reject(new Error('Connection to the app server was lost'))
+        return
+      }
+      deferredInvokes.push({ ch, args, resolve, reject, at: Date.now() })
       return
     }
-    const id = String(nextId++)
-    pending.set(id, { resolve, reject })
-    ws.send(JSON.stringify({ t: 'invoke', id, ch, args } satisfies WsMsg))
+    sendInvoke(ch, args, resolve, reject)
   })
 }
 
@@ -68,6 +110,7 @@ function connectOnce(): Promise<void> {
       ws = sock
       wsReady = true
       settled = true
+      flushDeferred()
       // v1.0.13: a RE-connect (network blip, server restart) means this
       // client's view may be stale - let the app re-sync the live/busy
       // session state.
@@ -81,10 +124,14 @@ function connectOnce(): Promise<void> {
       }
     }
     sock.onclose = (): void => {
+      const wasCurrent = ws === sock
       wsReady = false
-      if (ws === sock) ws = null
+      if (wasCurrent) ws = null
       for (const [, p] of pending) p.reject(new Error('Connection closed'))
       pending.clear()
+      // v1.0.32: parked invokes get the reconnect window; fail them only
+      // if the socket is still down DEFER_MS later.
+      if (wasCurrent) window.setTimeout(sweepDeferred, DEFER_MS)
       // auto-reconnect with backoff
       window.setTimeout(() => {
         void connectOnce().catch(() => {

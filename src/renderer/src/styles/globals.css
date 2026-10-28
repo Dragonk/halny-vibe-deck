@@ -238,13 +238,23 @@ code {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* v1.0.32: real buttons in the web sidebar brand row (theme + logout) -
+    previously only the colors existed because the JSX never rendered them. */
 .sidebar-theme-btn,
 .sidebar-logout-btn {
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    border-radius: 6px;
+    font-size: 14px;
     color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
 }
 .sidebar-theme-btn:hover,
 .sidebar-logout-btn:hover {
     color: var(--text);
+    background: var(--panel-hover);
 }
 
 /* Floating panel buttons (web only): the sessions list opens from the
@@ -6182,6 +6192,16 @@ code {
 @media (max-width: 768px) {
   /* v1.0.10: the ✕ close button is gone - the 🆕 button sits at the
      right edge with a full touch target. */
+  /* v1.0.32: finger-sized theme/logout buttons on the phone */
+  .sidebar .sidebar-theme-btn,
+  .sidebar .sidebar-logout-btn {
+    min-width: 34px;
+    min-height: 34px;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .sidebar .sidebar-np-btn {
     min-height: 34px;
     font-size: 12px;

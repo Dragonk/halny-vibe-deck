@@ -735,7 +735,15 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
   })
 
   // Reject unauthorized upgrades BEFORE the websocket handshake completes.
-  wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 })
+  // v1.0.32: permessage-deflate - resuming a big session pushes multi-MB
+  // SessionHistory frames to the web client; deflate shrinks them an order
+  // of magnitude on the wire so slow mobile links stay under the heartbeat
+  // and reverse-proxy timeouts.
+  wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 2 * 1024 * 1024,
+    perMessageDeflate: { threshold: 1024 },
+  })
   server.on("upgrade", (req, socket, head) => {
     if (!tokenFromRequest(req)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n")
@@ -752,6 +760,17 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
     for (const client of wss.clients) {
       const c = client as WebSocket & { nexusAlive?: boolean }
       if (c.nexusAlive === false) {
+        // v1.0.32: a client still flushing a big payload (giant session
+        // history over a slow mobile link) cannot answer pings - its pong
+        // queues behind the pending frame. bufferedAmount > 0 means the
+        // socket is alive, just busy: give it a fresh round instead of
+        // terminating it mid-resume.
+        if (c.bufferedAmount > 0) {
+          c.nexusAlive = true
+          c.ping()
+          continue
+        }
+        console.log('[serve] ws terminate: client unresponsive for >60s')
         c.terminate()
         continue
       }
@@ -770,6 +789,12 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       ws.close(4401, "unauthorized")
       return
     }
+    // v1.0.32: connection lifecycle logging - client disconnects (mobile
+    // links, reverse proxies) are invisible in the journal otherwise.
+    console.log('[serve] ws connected: ' + auth.user + ' from ' + (req.socket.remoteAddress ?? '?'))
+    ws.on("close", (code: number, reason: Buffer) => {
+      console.log('[serve] ws closed: ' + auth.user + ' code=' + code + ' reason=' + (reason.toString() || 'none'))
+    })
     ws.on("message", (raw: Buffer) => {
       let msg: { t?: string; id?: string; ch?: string; args?: unknown[] }
       try {
@@ -798,6 +823,11 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
 const busListener = (ev: { ch: string; args: unknown[] }): void => {
   if (!wss) return
   const payload = JSON.stringify({ t: "ev", ch: ev.ch, args: ev.args })
+  // v1.0.32: giant events (a huge session SessionHistory) are the prime
+  // suspect behind slow-client disconnects - make them visible in journal.
+  if (payload.length > 1_000_000) {
+    console.log('[serve] ws broadcast: large payload ' + (payload.length / 1048576).toFixed(1) + 'MB on ch=' + ev.ch)
+  }
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) client.send(payload)
   }
