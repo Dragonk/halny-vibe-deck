@@ -90,6 +90,9 @@ struct Worker {
     proj: Projection,
     /// Reply channels keyed by OUR request id.
     pending: Arc<Mutex<HashMap<String, Sender<Inbound>>>>,
+    /// Argv of the last spawn — a transport hiccup reconnects with it
+    /// (stable v1.0.16: resume retries instead of surfacing the error).
+    last_argv: Vec<String>,
 }
 
 impl Worker {
@@ -103,6 +106,7 @@ impl Worker {
             inbox: Arc::new(Mutex::new(rx)),
             proj: Projection::new(),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            last_argv: Vec::new(),
         }
     }
 
@@ -195,6 +199,7 @@ impl Worker {
             AgentCommand::Start { argv } => self.start(argv),
             AgentCommand::Stop => {
                 self.conn = None;
+                self.last_argv.clear();
                 self.proj = Projection::new();
             }
             AgentCommand::ListSessions => self.list_sessions(),
@@ -246,6 +251,7 @@ impl Worker {
         if self.conn.is_some() {
             return; // already running
         }
+        self.last_argv = argv.clone();
         match Conn::spawn(&argv) {
             Ok(conn) => {
                 self.inbox = conn.inbox.clone();
@@ -423,9 +429,32 @@ impl Worker {
 
     fn resume_session(&mut self, session_id: &str) {
         let params = json!({ "sessionId": session_id });
-        match self.call("session/resume", params, "session/resume") {
+        match self.call_res("session/resume", params.clone(), "session/resume") {
             Ok(res) => self.apply_state_response(res, "session/resume"),
-            Err(e) => self.error("session/resume", format!("{e:#}")),
+            Err((code, msg)) => {
+                // v1.0.16 parity: a transport hiccup (-32000 = our internal
+                // "connection gone / agent exited" class) gets one retry
+                // after a reconnect instead of surfacing the error.
+                if code == -32000 && !self.last_argv.is_empty() {
+                    self.conn = None;
+                    let argv = self.last_argv.clone();
+                    self.start(argv);
+                    if self.conn.is_some() {
+                        std::thread::sleep(Duration::from_millis(300));
+                        match self.call_res("session/resume", params, "session/resume") {
+                            Ok(res) => {
+                                self.apply_state_response(res, "session/resume");
+                                return;
+                            }
+                            Err((_, m2)) => {
+                                self.error("session/resume", m2);
+                                return;
+                            }
+                        }
+                    }
+                }
+                self.error("session/resume", msg);
+            }
         }
     }
 

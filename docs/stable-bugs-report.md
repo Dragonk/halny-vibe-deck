@@ -231,7 +231,7 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 
 ### LOW
 10. **Prompt queue: no "send now" and no resilience to a stale busy** (v0.13.15/f6398d0) — **FIXED** ("Send now" in the input panel).
-11. **Resume without auto-retry on a transport hiccup** (v1.0.16) — **OPEN**; the fallback exists, the retry does not. → §3.11.
+11. **Resume without auto-retry on a transport hiccup** (v1.0.16) — **FIXED**: `resume_session` reconnects with the remembered argv and retries once on the internal `-32000` transport class. → §3.11.
 12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) — **FIXED**: `.tool-approval-input` wraps (`pre-wrap` + `overflow-wrap:anywhere`) and scrolls inside the dialog. → §3.4.
 13. **Windows self-update: black terminal window** (v1.0.3) — **FIXED**: `creation_flags(0x0800_0008)` = DETACHED_PROCESS | CREATE_NO_WINDOW. → §3.14.
 14. **PWA manifest/SW details (512 icon, `id`, cache purge)** (v1.0.10) — **FIXED** (version-scoped cache; manifest `id` + 512 icon).
