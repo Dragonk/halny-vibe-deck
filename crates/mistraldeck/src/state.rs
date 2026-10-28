@@ -30,6 +30,11 @@ pub struct ClientState {
     /// Mobile (≤768 px): the sidebar drawer is open (Nexus
     /// mobileSidebarOpen).
     pub mobile_sidebar_open: bool,
+    /// True only in the desktop webview. Set once after mount (`window.ipc`
+    /// probe) so the SSR render and the hydrated client agree on the layout —
+    /// the browser hides the header and shows the floating panel buttons,
+    /// the webview keeps the full header (stable v1.0.27 layout parity).
+    pub desktop_mode: bool,
     /// agent binary missing → show the first-run SetupView.
     pub setup_needed: bool,
     /// User skipped the SetupView.

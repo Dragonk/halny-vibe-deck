@@ -7001,3 +7001,81 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
         max-width: 46vw;
     }
 }
+
+/* ===== Web client without a title bar (stable v1.0.27/30/31) ===== */
+
+/* Brand row at the very top of the sessions panel (web only). */
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    flex-shrink: 0;
+}
+.sidebar-brand-mark {
+    flex-shrink: 0;
+}
+.sidebar-brand-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Floating panel buttons: the sessions list opens from the top-left
+   corner, the preview toggle floats on the right edge above the chat. */
+.web-fab {
+    position: fixed;
+    top: 12px;
+    z-index: 950;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+    cursor: pointer;
+}
+.web-fab:hover {
+    background: var(--panel-hover);
+}
+.web-fab:active {
+    transform: scale(0.94);
+}
+.web-fab.active {
+    color: var(--accent);
+}
+.web-fab-left {
+    left: 12px;
+}
+.web-fab-right {
+    right: 12px;
+}
+.web-fab-dot {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid var(--surface);
+}
+.web-fab-dot.ok { background: #3fb950; }
+.web-fab-dot.err { background: #f87171; }
+.web-fab-dot.off { background: var(--text-dim); }
+/* The sessions toggle is only needed where the sidebar is off-canvas. */
+.web-fab-left { display: none; }
+@media (max-width: 768px) {
+    .web-fab-left { display: flex; }
+}
+/* Mutually exclusive with the open panels (v1.0.30): no control stacked
+   on top of a panel, and no reserved gap beside it (v1.0.31). */
+.web-fab-left.panel-open { display: none; }
+.web-fab-right.dock-open { display: none; }

@@ -45,20 +45,27 @@ test('PWA surface: manifest, service worker, both icon sizes', async ({ request 
   }
 })
 
-test('web shell renders the brand and the sidebar bottom controls', async ({ page }) => {
+test('web shell renders the brand and the web-only controls', async ({ page }) => {
   const errors: string[] = []
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(msg.text())
   })
   await page.goto(LOCAL, { waitUntil: 'domcontentloaded' })
-  // Brand mark (stable pixel-art geometry) + app name
-  const mark = page.locator('header .header-brand svg').first()
+
+  // Stable v1.0.27 layout: the browser has no header — the sessions panel
+  // owns the brand row and two floating buttons toggle the panels.
+  await expect(page.locator('header')).toHaveCount(0)
+  await expect(page.locator('.sidebar-brand .sidebar-brand-name')).toContainText('Halny')
+  const mark = page.locator('.sidebar-brand svg').first()
   await expect(mark).toBeVisible()
   const box = await mark.boundingBox()
   expect(box && box.width > 8 && box.height > 8).toBeTruthy()
-  await expect(page.locator('header .header-brand-name')).toContainText('Halny')
+
   // Web-only bottom controls (stable v1.0.33 placement)
   await expect(page.locator('.sidebar-logout-btn')).toBeVisible()
+  // Floating preview toggle is present at any width
+  await expect(page.locator('.web-fab-right')).toBeVisible()
+
   // No fatal client errors during hydration. The dioxus hot-reload socket
   // (`/_dioxus`) only exists under `dx serve`, and the PWA icon/manifest
   // fetches are allowed to 404 in dev — everything else must be clean.

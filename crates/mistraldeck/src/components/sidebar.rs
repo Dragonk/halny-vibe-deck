@@ -95,8 +95,10 @@ pub fn Sidebar() -> Element {
     let backend = s.snapshot.backend_sessions.clone();
     let cfg = s.snapshot.config.clone();
     let view = s.view;
+    let cfg_desktop = s.desktop_mode;
     drop(s);
 
+    let desktop_mode = cfg_desktop;
     // v1.0.33 parity: web-only bottom controls (theme cycle + logout).
     // Same theme naming/cycle as the header (themeAuto/themeDark/themeLight).
     let language = cfg.language.clone();
@@ -253,6 +255,14 @@ pub fn Sidebar() -> Element {
                 },
                 "✕"
             }
+            // Stable v1.0.27: in the browser the title bar is gone, so the
+            // sessions panel owns the brand row at its very top.
+            if !desktop_mode {
+                div { class: "sidebar-brand",
+                    crate::components::brand::BrandMark { size: 18.0, class: "sidebar-brand-mark".to_string() }
+                    span { class: "sidebar-brand-name", "{tr(&lang, \"appName\")}" }
+                }
+            }
             div { class: "sidebar-header",
                 button {
                     class: "new-session-btn",
@@ -327,7 +337,7 @@ pub fn Sidebar() -> Element {
                 // theme toggle and logout live at the bottom of the
                 // sessions list — under Settings, same as stable. The
                 // desktop webview keeps the header theme toggle.
-                if !crate::state::is_desktop() {
+                if !desktop_mode {
                     button {
                         class: "sidebar-nav-item",
                         title: "{theme_title}",

@@ -22,6 +22,13 @@ pub fn Shell() -> Element {
                 dioxus::document::eval(crate::components::mobile::MOBILE_JS);
                 dioxus::document::eval(crate::components::mobile::BACK_JS);
                 dioxus::document::eval(VISIBILITY_JS);
+                // Layout probe: only the desktop webview keeps the header
+                // (the SSR pass and the browser both render the web layout,
+                // so hydration stays stable).
+                let desktop = crate::state::is_desktop();
+                if desktop {
+                    state.write().desktop_mode = true;
+                }
             });
         }
     }
@@ -60,6 +67,7 @@ pub fn Shell() -> Element {
     let view = s.view;
     let question = s.snapshot.question.clone();
     let approval = s.snapshot.approval.clone();
+    let desktop_mode = s.desktop_mode;
     drop(s);
 
     let view_el = match view {
@@ -74,7 +82,16 @@ pub fn Shell() -> Element {
     rsx! {
         link { rel: "stylesheet", href: asset!("/assets/main.css") }
         div { class: "app-root",
-            crate::components::header::Header {}
+            // Stable v1.0.27 parity: the browser client has no title bar, so
+            // the header is not rendered there at all — the sidebar owns the
+            // brand (top) and the theme/logout controls (bottom), while two
+            // floating buttons toggle the panels. The desktop webview keeps
+            // the full header.
+            if desktop_mode {
+                crate::components::header::Header {}
+            } else {
+                crate::components::shell::WebFabs {}
+            }
             crate::components::shell::UpdateBanner {}
             crate::components::mobile::MobileBridges {}
             div { class: "app-body",
@@ -332,6 +349,87 @@ const RESIZE_JS: &str = r#"
   });
 })();
 "#;
+
+/// Browser-mode floating panel buttons (stable v1.0.27/v1.0.30 parity).
+///
+/// The web client renders no header, so the sessions toggle lives in the
+/// top-left corner (with the agent-status dot) and the preview toggle floats
+/// on the right edge, above the chat at any width. They are mutually
+/// exclusive with the open panels: `.panel-open` / `.dock-open` hide them
+/// instead of stacking another control on top of the panel.
+#[component]
+pub fn WebFabs() -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let s = state.read();
+    let status = s.snapshot.status.clone();
+    let sidebar_open = s.mobile_sidebar_open;
+    let dock_open = s.snapshot.config.dock_open && s.view == View::Chat;
+    drop(s);
+
+    let dot_cls = match status.as_str() {
+        "connected" => "web-fab-dot ok",
+        "error" => "web-fab-dot err",
+        _ => "web-fab-dot off",
+    };
+    let left_cls = if sidebar_open {
+        "web-fab web-fab-left panel-open"
+    } else if dock_open {
+        "web-fab web-fab-left dock-open"
+    } else {
+        "web-fab web-fab-left"
+    };
+    let lang_w = crate::state::lang(&state);
+    let right_cls = if dock_open {
+        "web-fab web-fab-right active dock-open"
+    } else if sidebar_open {
+        "web-fab web-fab-right sidebar-open"
+    } else {
+        "web-fab web-fab-right"
+    };
+
+    rsx! {
+        button {
+            class: "{left_cls}",
+            title: "{tr(&lang_w, \"menuLabel\")}",
+            onclick: {
+                let mut state = state.clone();
+                move |_| { state.write().mobile_sidebar_open = true; }
+            },
+            svg {
+                width: "18", height: "18", view_box: "0 0 24 24",
+                fill: "none", stroke: "currentColor",
+                "stroke-width": "2", "stroke-linecap": "round",
+                line { x1: "3", y1: "6", x2: "21", y2: "6" }
+                line { x1: "3", y1: "12", x2: "21", y2: "12" }
+                line { x1: "3", y1: "18", x2: "21", y2: "18" }
+            }
+            span { class: "{dot_cls}" }
+        }
+        button {
+            class: "{right_cls}",
+            title: "{tr(&lang_w, \"dockToggle\")}",
+            onclick: {
+                let mut state = state.clone();
+                move |_| {
+                    let open = {
+                        let s = state.read();
+                        s.snapshot.config.dock_open
+                    };
+                    let mut s = state.write();
+                    s.mobile_sidebar_open = false;
+                    s.snapshot.config.dock_open = !open;
+                }
+            },
+            svg {
+                width: "18", height: "18", view_box: "0 0 24 24",
+                fill: "none", stroke: "currentColor",
+                "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
+                rect { x: "3", y: "3", width: "18", height: "18", rx: "2" }
+                line { x1: "15", y1: "3", x2: "15", y2: "21" }
+            }
+        }
+    }
+}
 
 /// Element 6: update banner (Nexus App.tsx update-banner) - app + CLI
 /// updates appear shortly after startup, with live download progress and a
