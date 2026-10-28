@@ -5507,11 +5507,14 @@ code {
 .picker-item-label { font-size: 13px; }
 .picker-item-desc { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
 
-/* ── Narrow-window toolbar wrapping (v0.4.0) ── */
-.input-card-toolbar { flex-wrap: wrap; row-gap: 4px; }
-.input-card-left { flex-shrink: 1; min-width: 0; }
+/* ── Narrow-window toolbar (v0.4.0; v1.0.34: the attach button,
+   chips and send ALWAYS share one row - chips shrink with ellipsis
+   instead of wrapping, and show in full whenever there is room) ── */
+.input-card-toolbar { flex-wrap: nowrap; row-gap: 4px; }
+.input-card-left { flex-shrink: 1; min-width: 0; flex-wrap: nowrap; }
 .ic-folder-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.input-card-right { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; flex-shrink: 0; }
+.input-card-right { flex-wrap: nowrap; justify-content: flex-end; margin-left: auto; min-width: 0; }
+.input-card-right .ic-chip-wrap { min-width: 0; flex: 0 1 auto; }
 .settings-header { flex-wrap: wrap; gap: 8px; }
 .settings-tabs { flex-wrap: wrap; }
 
@@ -6097,20 +6100,25 @@ code {
         font-size: 16px;
         padding: 10px 12px 6px;
     }
+    /* v1.0.34: the attach button, chips and send ALWAYS share one row;
+       chips shrink (ellipsis) instead of wrapping */
     .input-card-toolbar {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         gap: 6px;
         padding: 4px 6px 6px;
     }
     .input-card-left,
-    .input-card-right { flex-wrap: wrap; }
+    .input-card-right { flex-wrap: nowrap; min-width: 0; }
+    .input-card-right .ic-chip-wrap { min-width: 0; flex: 0 1 auto; }
     .ic-folder-name { max-width: 96px; }
     .ic-btn { width: 32px; height: 32px; }
     .ic-send-btn,
     .ic-stop-btn { width: 36px; height: 36px; }
 
-    /* chips: value only (the label is in the title tooltip) */
-    .ic-chip { max-width: 130px; padding: 3px 8px; font-size: 10px; }
+    /* chips: value only (the label is in the title tooltip); v1.0.34: no
+       fixed width cap - the chip fills its (possibly shrunk) wrapper and the
+       value ellipsizes only when the row is too tight */
+    .ic-chip { max-width: 100%; min-width: 0; padding: 3px 8px; font-size: 10px; }
     .ic-chip-label { display: none; }
     .ic-chip-dropdown {
         min-width: min(240px, 86vw);
@@ -6118,9 +6126,8 @@ code {
         max-height: 40vh;
         overflow-y: auto;
     }
-    /* chips wrap onto their own row on narrow screens: anchor each
-       dropdown so it stays inside the viewport (model/mode from the left,
-       thinking from the right edge) */
+    /* anchor each dropdown so it stays inside the viewport
+       (model from the left, mode/thinking from the right edge) */
     .input-card-right .ic-chip-wrap:nth-child(1) .ic-chip-dropdown {
         left: 0;
         right: auto;
