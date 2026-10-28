@@ -175,6 +175,8 @@ jobs:
           rc=${PIPESTATUS[0]}
           if [ "$rc" != "0" ]; then
             while IFS= read -r line; do echo "::error::assert: $line"; done < <(grep -E "Expected|Received|toBe|locator|Timeout|waiting for" ../.e2e-tests.log | head -60)
+            echo "::error::--- server log ---"
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log)
           fi
           exit $rc
 

@@ -635,6 +635,62 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(e, AgentEvent::ThinkingChunk { text, .. } if text == "king")));
     }
 
+    /// Exact sequence the e2e stub agent emits for one turn: snapshot →
+    /// turn/started → entryAdded (empty text) → entryUpdated patches →
+    /// turn/completed. Every step must produce the event the UI needs, and
+    /// the session id of the snapshot must be the one chunks carry.
+    #[test]
+    fn stub_agent_turn_sequence_produces_streamed_chunks() {
+        let mut p = proj();
+        let snapshot = json!({
+            "state": {
+                "eventId": 0,
+                "session": {"id": "s1", "title": "e2e", "status": "idle", "cwd": "/tmp"},
+                "history": [],
+                "turns": [],
+                "isQuiescent": true,
+                "activeCallbacks": []
+            },
+            "lastEventId": 0
+        });
+        let ready = p.apply_snapshot(
+            serde_json::from_value(snapshot["state"].clone()).expect("session state"),
+        );
+        assert!(
+            ready
+                .iter()
+                .any(|e| matches!(e, AgentEvent::SessionReady { session_id, .. } if session_id == "s1")),
+            "snapshot must emit SessionReady for the agent session id"
+        );
+
+        p.consume(
+            "turn/started",
+            &json!({"sessionId": "s1", "turn": {"id": "t1", "status": "running"}}),
+        );
+        assert_eq!(p.current_turn.as_ref().and_then(|t| t.id.clone()).as_deref(), Some("t1"));
+
+        p.consume(
+            "history/entryAdded",
+            &json!({"sessionId": "s1", "entry": {"type": "message", "role": "assistant",
+                     "id": "e1", "turnId": "t1",
+                     "content": [{"type": "text", "text": ""}]}}),
+        );
+        let updated = p.consume(
+            "history/entryUpdated",
+            &json!({"sessionId": "s1", "entryId": "e1", "patch": [{
+                "op": "replace", "path": "/history/0/content",
+                "value": [{"type": "text", "text": "Working on it. "}]
+            }]}),
+        );
+        assert!(
+            updated
+                .iter()
+                .any(|e| matches!(e, AgentEvent::MessageChunk { session_id, text, .. }
+                                  if session_id == "s1" && text == "Working on it. ")),
+            "entryUpdated must stream the text for the same session id, got {updated:?}"
+        );
+    }
+
     /// The e2e stub agent (scripts/e2e/stub-agent.py) streams a reply by
     /// replacing an assistant entry's content through `history/entryUpdated`
     /// json-patch ops. This test pins that shape: only the appended part
