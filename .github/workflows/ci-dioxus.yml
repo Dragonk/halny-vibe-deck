@@ -92,8 +92,10 @@ jobs:
       - name: Prepare config (login + remote listener)
         run: |
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          BIN="${CARGO_TARGET_DIR:-target}/debug/halny-vibe-deck-appserver"
+          test -x "$BIN" || BIN="target/debug/halny-vibe-deck-appserver"
           mkdir -p "$XDG_CONFIG_HOME"
-          ./target/debug/halny-vibe-deck-appserver --set-login e2e e2e-secret >/dev/null 2>&1 || true
+          "$BIN" --set-login e2e e2e-secret >/dev/null 2>&1 || true
           CFG="$XDG_CONFIG_HOME/halny-vibe-deck/config.json"
           test -f "$CFG" || { mkdir -p "$(dirname "$CFG")"; echo '{}' > "$CFG"; }
           python3 - "$CFG" <<'EOF'
@@ -109,7 +111,9 @@ jobs:
       - name: Start headless server
         run: |
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
-          nohup ./target/debug/halny-vibe-deck-appserver --mode headless --port 8080 \
+          BIN="${CARGO_TARGET_DIR:-target}/debug/halny-vibe-deck-appserver"
+          test -x "$BIN" || BIN="target/debug/halny-vibe-deck-appserver"
+          nohup "$BIN" --mode headless --port 8080 \
             > .e2e-server.log 2>&1 &
           echo $! > .e2e-server.pid
           for i in $(seq 1 60); do
