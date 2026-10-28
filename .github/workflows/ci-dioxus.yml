@@ -113,19 +113,29 @@ jobs:
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
           BIN="${CARGO_TARGET_DIR:-target}/debug/halny-vibe-deck-appserver"
           test -x "$BIN" || BIN="target/debug/halny-vibe-deck-appserver"
-          nohup "$BIN" --mode headless --port 8080 \
-            > .e2e-server.log 2>&1 &
+          echo "::notice::server binary: $BIN"
+          ls -l "$BIN" || true
+          nohup "$BIN" --mode headless --port 8080 > .e2e-server.log 2>&1 &
           echo $! > .e2e-server.pid
+          ok=0
           for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null; then break; fi
+            if curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null; then ok=1; break; fi
             sleep 1
           done
-          curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null
+          if [ "$ok" != "1" ]; then
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 .e2e-server.log || true)
+            ps -p "$(cat .e2e-server.pid)" -o pid,stat,cmd || true
+            (command -v ss >/dev/null && ss -ltnp) || true
+            exit 1
+          fi
           for i in $(seq 1 30); do
-            if curl -skf https://127.0.0.1:8443/login >/dev/null; then break; fi
+            if curl -skf https://127.0.0.1:8443/login >/dev/null; then ok=2; break; fi
             sleep 1
           done
-          curl -skf https://127.0.0.1:8443/login >/dev/null
+          if [ "$ok" != "2" ]; then
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 .e2e-server.log || true)
+            exit 1
+          fi
 
       - name: Run e2e
         working-directory: scripts/e2e
