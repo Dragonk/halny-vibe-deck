@@ -82,7 +82,15 @@ test('remote login flow: reject, accept, logout', async ({ page }) => {
 
   await page.fill('#u', USER)
   await page.fill('#p', PASS)
-  await page.click('#b')
+  // Assert the wire result of the login POST: a bare navigation timeout
+  // hides whether it was 401, 429 or a 5xx.
+  const [resp] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.url().includes('/api/auth/login') && r.request().method() === 'POST',
+    ),
+    page.click('#b'),
+  ])
+  expect(resp.status(), `login POST for ${USER}`).toBe(200)
   await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 30_000 })
   // Logged in: the app shell with the web-only bottom controls
   await expect(page.locator('.sidebar-logout-btn')).toBeVisible({ timeout: 30_000 })
