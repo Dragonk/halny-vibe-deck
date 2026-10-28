@@ -11,7 +11,7 @@
 >   assets, `CHANGELOG.md` v1.0.28–v1.0.34.
 > - `docs/stable-bugs-report.md` — item-by-item parity audit (older stable fixes).
 > - `docs/tui-parity-plan.md` — TUI parity (L1–L4) and `docs/migration-appserver.md`
->   — the app-server migration (F0–F7; F4-UI still open). This plan **adds** to
+>   — the app-server migration (F0-F7 complete). This plan **adds** to
 >   them, it does not replace them.
 >
 > Constraint from the repo owner: the **logo in the top-left header, the logo in
@@ -126,9 +126,12 @@ path (only historical changelog entries and the migration doc's history);
 
 ## 6. App-server migration leftovers (not superseded)
 
-- **F4-UI** — model / reasoning-effort / agent pickers from `RuntimeSnapshot`
-  (`runtime/read`, `agents/list`, `runtime/updated`) — required for visual parity
-  with stable's chips.
+- **F4-UI** — **DONE**: the chips (model / mode / thinking) read
+  `snapshot.config_options`, which the engine builds from the global + project
+  vibe config (`VibeConfigFile::models()`, thinking levels) and the agent
+  profiles (`restore_session_chips`). Optional follow-up: refresh them from
+  `runtime/read` + the `runtime/updated` notification instead of re-reading the
+  config, which is a live-freshness improvement, not a parity gap.
 - **L2/L3** from the TUI plan (queue/steer/retry UI, checkpoints/subagents/lease)
   proceed after stable parity blocks above are green.
 
