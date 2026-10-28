@@ -299,6 +299,14 @@ function buildApi(): AppAPI {
       save: (conn: unknown): Promise<unknown> => invoke('remote:save', [conn]),
       delete: (id: string): Promise<unknown> => invoke('remote:delete', [id])
     },
+    queue: {
+      add: (item: { id: string; acpSessionId: string; remoteId: string | null; cwd: string; text: string; displayText?: string; queuedAt?: number; userMsg?: { id: string; text: string } }): Promise<unknown> =>
+        invoke('queue:add', [item]),
+      list: (): Promise<unknown> => invoke('queue:list', []),
+      remove: (id: string): Promise<unknown> => invoke('queue:remove', [id]),
+      clear: (): Promise<unknown> => invoke('queue:clear', []),
+      onChanged: (cb: (items: unknown) => void): (() => void) => subscribeWebEvent('queue:changed', cb as (...args: unknown[]) => void)
+    },
     updates: {
       checkApp: (): Promise<unknown> => invoke('updates:check-app', []),
       checkCli: (): Promise<unknown> => invoke('updates:check-cli', []),

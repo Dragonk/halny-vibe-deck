@@ -482,62 +482,10 @@ export default function App(): React.JSX.Element {
           if (localId) markSessionIdle(localId)
           setAcpStatus('connected')
 
-          // Process message queue — send the next queued message
-          const queue = store.messageQueue
-          if (queue.length > 0 && localId) {
-            const nextMsg = queue[0]
-            store.removeFromMessageQueue(nextMsg.id)
-            // v1.0.21: deterministic id + echo payload - other clients
-            // (phone) must see the queued message too.
-            const qid = 'q-' + nextMsg.id
-            store.addUserMessage(nextMsg.content, undefined, qid)
-            const sess = store.sessions.find((s) => s.id === localId)
-            const promptText = sess?.contextSummary
-              ? `${sess.contextSummary}\n\nUser: ${nextMsg.content}`
-              : nextMsg.content
-            if (store.pendingLoadSessionId !== acpSessId) {
-              markSessionBusy(localId)
-              armBusyVerify(localId)
-            }
-            const rid = (d.remoteId as string | undefined) ?? null
-            // v1.0.21: the worker may be DEAD here (a hung turn - e.g. an
-            // MCP-OAuth login - was just stopped; the ssh worker died with
-            // it). Deliver with the SAME recovery as the send-time
-            // reviver: revive the worker, restore (or recreate) the CLI
-            // session, then send - a queued slash command (/mcp login)
-            // must reach the agent, not die as a raw error.
-            void (async () => {
-              try {
-                await store.ensureAcpWorker(rid, sess?.workingDirectory || '')
-                try {
-                  await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, undefined, {
-                    id: qid,
-                    text: nextMsg.content,
-                  })
-                } catch (sendErr) {
-                  const m = String((sendErr as Error)?.message ?? sendErr)
-                  if (!/not started|not running|No active session|Session not found|No target session/.test(m)) {
-                    throw sendErr
-                  }
-                  // The CLI session is gone with the worker - restore it
-                  // from disk (or recreate when the session never had
-                  // history) and deliver.
-                  await window.api.acp
-                    .loadSession(acpSessId, sess?.workingDirectory || '.', rid ?? undefined)
-                    .catch(() =>
-                      window.api.acp.newSession(sess?.workingDirectory || '.', rid ?? undefined),
-                    )
-                  await window.api.acp.sendPrompt(promptText, acpSessId, rid ?? undefined, undefined, {
-                    id: qid,
-                    text: nextMsg.content,
-                  })
-                }
-              } catch (err: unknown) {
-                setAcpError((err as Error)?.message ?? String(err))
-                if (store.pendingLoadSessionId !== acpSessId) markSessionIdle(localId)
-              }
-            })()
-          }
+          // v1.0.24: the queue is delivered SERVER-SIDE (the main process
+          // flushes on the turn end) - the client flush is gone, so a
+          // queued prompt is never double-sent and survives closing
+          // every client.
           break
         }
 
@@ -808,6 +756,10 @@ export default function App(): React.JSX.Element {
         // thinking chips straight from the vibe config so the user sees
         // what can be passed to the agent before any ACP connection.
         void useStore.getState().loadDefaultChips()
+        // v1.0.24: the prompt queue lives on the server - fetch it at boot
+        // and follow its changes; a queued prompt survives closing every
+        // client.
+        void window.api.queue.list().then((items) => useStore.getState().setQueue(items as never))
 
         // Resolve acpPath: prefer config, fall back to auto-detected vibe-acp
         const acpPath = cfg.acpPath || setupStatus.vibAcpPath || null
@@ -906,6 +858,12 @@ export default function App(): React.JSX.Element {
     const onOpen = (): void => void useStore.getState().resyncAfterReconnect()
     window.addEventListener('nexus-ws-open', onOpen)
     return () => window.removeEventListener('nexus-ws-open', onOpen)
+  }, [])
+
+  // v1.0.24: the prompt queue lives on the server - follow its changes.
+  useEffect(() => {
+    const unsub = window.api.queue.onChanged((items) => useStore.getState().setQueue(items as never))
+    return unsub
   }, [])
 
   // v1.0.17: the PWA waking up from the background (page was frozen,

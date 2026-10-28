@@ -303,6 +303,18 @@ const api = {
       ipcRenderer.invoke('serve:set-credentials', username, password),
     regenCert: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('serve:regen-cert')
   },
+  queue: {
+    add: (item: { id: string; acpSessionId: string; remoteId: string | null; cwd: string; text: string; displayText?: string; queuedAt?: number; userMsg?: { id: string; text: string } }): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('queue:add', item),
+    list: (): Promise<unknown> => ipcRenderer.invoke('queue:list'),
+    remove: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('queue:remove', id),
+    clear: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('queue:clear'),
+    onChanged: (cb: (items: unknown) => void): (() => void) => {
+      const l = (_e: unknown, items: unknown): void => cb(items)
+      ipcRenderer.on('queue:changed', l)
+      return () => ipcRenderer.removeListener('queue:changed', l)
+    },
+  },
   updates: {
     checkApp: (): Promise<unknown> => ipcRenderer.invoke('updates:check-app'),
     checkCli: (): Promise<unknown> => ipcRenderer.invoke('updates:check-cli'),

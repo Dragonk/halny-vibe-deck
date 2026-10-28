@@ -240,7 +240,12 @@ interface AppStore {
 
   // Message queue
   messageQueue: Array<{ id: string; content: string; timestamp: number }>;
-  addToMessageQueue: (content: string) => void;
+  /** v1.0.24: replace the local queue view with the server's state. */
+  setQueue: (items: Array<{ id: string; acpSessionId?: string; displayText?: string; queuedAt?: number }>) => void;
+  addToMessageQueue: (
+    content: string,
+    images?: Array<{ data: string; mimeType: string; uri?: string }>,
+  ) => void;
   removeFromMessageQueue: (id: string) => void;
   updateQueueMessage: (id: string, content: string) => void;
   clearMessageQueue: () => void;
@@ -1337,19 +1342,67 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   messageQueue: [],
-  addToMessageQueue: (content) => {
-    const msg = { id: uuid(), content, timestamp: Date.now() };
-    set((s) => ({ messageQueue: [...s.messageQueue, msg] }));
+  // v1.0.24: the queue lives on the SERVER - the local list is a mirror
+  // (broadcast via queue:changed). A queued prompt survives closing every
+  // client AND an app restart; the server delivers it when the turn ends.
+  setQueue: (items) =>
+    set({
+      messageQueue: (items ?? []).map((q) => ({
+        id: q.id,
+        content: q.displayText ?? "",
+        timestamp: q.queuedAt ?? Date.now(),
+      })),
+    }),
+  addToMessageQueue: (content, images) => {
+    const sess = get().currentSession();
+    if (!sess?.acpSessionId) return; // nothing to queue against
+    const item = {
+      id: uuid(),
+      acpSessionId: sess.acpSessionId,
+      remoteId: sess.remoteId ?? null,
+      cwd: sess.workingDirectory || "",
+      text: content,
+      displayText: content,
+      images: images ?? [],
+      queuedAt: Date.now(),
+    };
+    // optimistic; the queue:changed broadcast reconciles every client
+    set((s) => ({
+      messageQueue: [...s.messageQueue, { id: item.id, content, timestamp: item.queuedAt }],
+    }));
+    window.api.queue.add(item).catch(console.error);
   },
   removeFromMessageQueue: (id) => {
     set((s) => ({ messageQueue: s.messageQueue.filter((m) => m.id !== id) }));
+    window.api.queue.remove(id).catch(console.error);
   },
   updateQueueMessage: (id, content) => {
     set((s) => ({
       messageQueue: s.messageQueue.map((m) => (m.id === id ? { ...m, content } : m)),
     }));
+    // v1.0.24: the edit rewrites the delivered text (text = display form -
+    // the queued payload is refreshed with the same content).
+    window.api.queue
+      .remove(id)
+      .then(() => {
+        const sess = get().currentSession();
+        if (!sess?.acpSessionId) return;
+        return window.api.queue.add({
+          id,
+          acpSessionId: sess.acpSessionId,
+          remoteId: sess.remoteId ?? null,
+          cwd: sess.workingDirectory || "",
+          text: content,
+          displayText: content,
+          queuedAt: Date.now(),
+        });
+      })
+      .catch(console.error);
   },
-  clearMessageQueue: () => set({ messageQueue: [] }),
+  clearMessageQueue: () => {
+    set({ messageQueue: [] });
+    window.api.queue.clear().catch(console.error);
+  },
   getNextQueuedMessage: () => {
     const { messageQueue } = get();
     return messageQueue[0];

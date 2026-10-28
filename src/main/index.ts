@@ -5,6 +5,15 @@ import fs from "fs";
 import os from "os";
 import { acpManager, AcpManager, AcpApplyConfig } from "./acp";
 import { applyPortableUpdate, cleanupStaleUpdateDirs } from "./updateCmd";
+import {
+  loadQueue,
+  listQueue,
+  peekNextFor,
+  addToQueue,
+  removeFromQueue,
+  clearQueue,
+  queueSessionIds,
+} from "./promptQueue";
 import { loadConfig, saveConfig, AppConfig } from "./config";
 import { menuLabels } from "./i18n";
 import {
@@ -138,6 +147,35 @@ function mimeFor(file: string): string {
 const remoteAcpManagers = new Map<string, AcpManager>()
 let mainWinRef: BrowserWindow | null = null
 
+// v1.0.24: every client (window + all web/PWA views) sees the same queue.
+function broadcastQueue(): void {
+  mainWinRef?.webContents.send("queue:changed", listQueue());
+  broadcastToWeb("queue:changed", [listQueue()]);
+}
+
+// v1.0.24: the server-side queue flush - one session at a time; a
+// turn in flight makes deliverQueued wait, and the turn-end hook
+// (onTurnComplete) retries the delivery.
+const flushingSessions = new Set<string>();
+async function flushQueueFor(acpSessionId: string): Promise<void> {
+  if (flushingSessions.has(acpSessionId)) return;
+  flushingSessions.add(acpSessionId);
+  try {
+    for (;;) {
+      const head = peekNextFor(acpSessionId);
+      if (!head) break;
+      const mgr = head.remoteId ? getRemoteManager(head.remoteId) : acpManager;
+      const delivered = await mgr.deliverQueued(head);
+      if (!delivered) break; // a turn in flight or a hard failure - the turn-end hook retries
+      broadcastQueue();
+    }
+  } catch (err) {
+    console.error("[queue] flush failed:", err);
+  } finally {
+    flushingSessions.delete(acpSessionId);
+  }
+}
+
 function getRemoteManager(remoteId: string): AcpManager {
   let m = remoteAcpManagers.get(remoteId)
   if (!m) {
@@ -146,6 +184,11 @@ function getRemoteManager(remoteId: string): AcpManager {
     remoteAcpManagers.set(remoteId, m)
   }
   m.setWindow(mainWinRef)
+  // v1.0.24: every manager (local + remote) flushes the server queue
+  // when its turn ends.
+  m.onTurnComplete = (sid) => {
+    void flushQueueFor(sid)
+  }
   return m
 }
 
@@ -296,6 +339,17 @@ app.whenReady().then(() => {
   } catch (err) {
     console.error("[rebrand] user data migration failed", err);
   }
+  // v1.0.24: load the persisted prompt queue; deliver queued prompts a
+  // few seconds after boot (workers are already up) - queued work
+  // survives even a full app restart with zero clients.
+  loadQueue();
+  acpManager.onTurnComplete = (sid) => {
+    void flushQueueFor(sid);
+  };
+  setTimeout(() => {
+    for (const sid of queueSessionIds()) void flushQueueFor(sid);
+  }, 8000);
+
   // v0.13.10: headless self-update apply mode. The OLD app spawns the NEW
   // executable with --apply-update right before it exits (updates.ts);
   // this instance swaps the files and relaunches - no window is created.
@@ -507,17 +561,40 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle("acp:send-prompt", async (_e, text: string, acpSessionId?: string, remoteId?: string, images?: Array<{ data: string; mimeType: string; uri?: string }>, userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }) => {
-    // v1.0.10: every connected client (other browsers/phone) must see the
-    // user message - announce it BEFORE the turn streams its response.
-    if (userMsg && acpSessionId) {
-      getManager(remoteId).announceUserMessage(acpSessionId, userMsg)
-    }
-    await getManager(remoteId).sendPrompt(text, acpSessionId, images)
+    // v1.0.24: the announce lives inside sendPrompt (one central place -
+    // direct and queued deliveries both announce).
+    await getManager(remoteId).sendPrompt(text, acpSessionId, images, userMsg)
   })
 
   // v1.0.13: which ACP sessions currently run a turn - a freshly booted
   // client (phone PWA reopened) marks them busy/live instead of showing
   // them as idle ("stalled") while the turn keeps running server-side.
+  // ---- v1.0.24: the SERVER-SIDE prompt queue ---------------------------------
+  // A queued prompt lives on the server: every client (PC, phone, second
+  // browser) sees the same queue, and delivery happens server-side even
+  // when every client is closed - the queued work is never lost.
+  ipcMain.handle("queue:list", () => listQueue());
+  ipcMain.handle("queue:add", async (_e, item) => {
+    const acpId = (item && item.acpSessionId) as string;
+    addToQueue(item);
+    broadcastQueue();
+    // v1.0.24: an idle session delivers immediately (the client-side
+    // stale-busy check already filtered real turns; this also covers a
+    // client that queued against a stale busy flag).
+    if (acpId) void flushQueueFor(acpId);
+    return { ok: true };
+  });
+  ipcMain.handle("queue:remove", (_e, id: string) => {
+    removeFromQueue(id);
+    broadcastQueue();
+    return { ok: true };
+  });
+  ipcMain.handle("queue:clear", () => {
+    clearQueue();
+    broadcastQueue();
+    return { ok: true };
+  });
+
   ipcMain.handle("acp:busy-sessions", () => {
     const out: Array<{ acpSessionId: string; remoteId: string | null }> = []
     for (const sid of acpManager.busySessionIds()) out.push({ acpSessionId: sid, remoteId: null })

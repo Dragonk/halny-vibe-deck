@@ -101,6 +101,9 @@ export class AcpManager {
   private turnsInFlight = 0
   /** v1.0.13: ACP session ids with a turn in flight (for client boot sync). */
   private busyTurns = new Set<string>()
+  /** v1.0.24: called when a turn fully ends - the server-side prompt
+   * queue flushes the next queued prompt for that session. */
+  onTurnComplete: ((acpSessionId: string) => void) | null = null
   private currentSessionId: string | null = null
   /** v0.10.7: in-flight cold start - concurrent boots must not stop the
    * worker another boot just spawned. */
@@ -108,6 +111,8 @@ export class AcpManager {
   private win: BrowserWindow | null = null
   /** set when this instance drives a remote vibe-acp over ssh */
   private remote: { sshCmd: string } | null = null
+  /** v1.0.24: the last acpPath used - queued delivery revives with it */
+  private lastAcpPath: string | null = null
   /** v0.7.0: id of the remote connection this instance drives (null = local) */
   private remoteTag: string | null = null
   private _pendingSummaryChunks: string[] | null = null
@@ -873,6 +878,7 @@ export class AcpManager {
     if (this.process) await this.stop()
 
     this.remote = remote ?? null
+    this.lastAcpPath = acpPath
     let proc: ChildProcess
     if (remote) {
       const tokens = remote.sshCmd.trim().split(/\s+/).filter(Boolean)
@@ -1040,8 +1046,12 @@ export class AcpManager {
   async sendPrompt(
     text: string,
     acpSessionId?: string,
-    images?: Array<{ data: string; mimeType: string; uri?: string }>
+    images?: Array<{ data: string; mimeType: string; uri?: string }>,
+    userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }
   ): Promise<void> {
+    // v1.0.24: EVERY prompt (direct or queued) announces its user message
+    // to all clients - one central place, dedupe by id on the client side.
+    if (acpSessionId && userMsg) this.announceUserMessage(acpSessionId, userMsg)
     // v1.0.2: a prompt must ALWAYS be addressed to an explicit session.
     // The old fallback (acpSessionId ?? this.currentSessionId) delivered
     // unaddressed prompts to whatever session the worker touched last:
@@ -1095,6 +1105,13 @@ export class AcpManager {
         stopReason: (result?.stopReason as string) ?? 'end_turn'
       }
     })
+    // v1.0.24: the turn truly ended - the server queue may deliver the
+    // next queued prompt (even with zero connected clients).
+    try {
+      this.onTurnComplete?.(sid)
+    } catch {
+      /* a queue flush failure must never break the event path */
+    }
   }
 
   cancelSession(acpSessionId: string): void {
@@ -1231,6 +1248,49 @@ export class AcpManager {
   /** v0.13.12: true while at least one turn (session/prompt) is running. */
   isTurnInFlight(): boolean {
     return this.turnsInFlight > 0
+  }
+
+  /**
+   * v1.0.24: deliver a queued prompt with full recovery - exactly the
+   * send-time reviver, but callable with ZERO clients connected. Waits
+   * (returns false) while a turn is in flight; the turn-end hook
+   * (onTurnComplete) retries. Revives the worker and restores/recreates
+   * the CLI session when the worker or the session died.
+   */
+  async deliverQueued(item: {
+    acpSessionId: string
+    cwd: string
+    text: string
+    userMsg?: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> }
+    images?: Array<{ data: string; mimeType: string; uri?: string }>
+  }): Promise<boolean> {
+    if (this.isTurnInFlight()) return false
+    try {
+      await this.sendPrompt(item.text, item.acpSessionId, item.images, item.userMsg)
+      return true
+    } catch (err) {
+      const m = String((err as Error)?.message ?? err)
+      if (!/not started|not running|No active session|Session not found|No target session|exited before responding/.test(m)) {
+        console.error('[ACP] queued delivery failed (non-recoverable):', m)
+        return false
+      }
+      // revive: worker + session restore, then deliver
+      try {
+        if (!this.process || /not started|not running/.test(m)) {
+          await this.start(this.lastAcpPath ?? 'vibe-acp', this.remote ?? undefined)
+        }
+        try {
+          await this.loadSession(item.acpSessionId, item.cwd || '.')
+        } catch {
+          await this.newSession(item.cwd || '.')
+        }
+        await this.sendPrompt(item.text, item.acpSessionId, item.images, item.userMsg)
+        return true
+      } catch (err2) {
+        console.error('[ACP] queued delivery revive failed:', err2)
+        return false
+      }
+    }
   }
 
   /** v1.0.13: ACP session ids currently running a turn. */
