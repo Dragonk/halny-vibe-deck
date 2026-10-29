@@ -166,6 +166,31 @@ jobs:
             exit 1
           fi
 
+      - name: Run e2e
+        working-directory: scripts/e2e
+        env:
+          VD_LOCAL_URL: http://127.0.0.1:8080
+          VD_REMOTE_URL: https://127.0.0.1:8443
+        run: |
+          set +e
+          npx playwright test 2>&1 | tee ../.e2e-tests.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" != "0" ]; then
+            # One consolidated annotation: GitHub drops everything past the
+            # 10th annotation of a step, which silently hid the logs before.
+            {
+              echo "== assertions =="
+              grep -E "Expected|Received|toBe|locator|Timeout|waiting for" ../.e2e-tests.log | head -40
+              echo "== stub trace (last 40) =="
+              tail -40 ../../.e2e-stub.log 2>/dev/null || tail -40 ../../.e2e-server.log 2>/dev/null
+              echo "== server log (last 40) =="
+              tail -40 ../../.e2e-server.log 2>/dev/null
+            } | head -c 60000 | sed 's/^/| /' > ../.e2e-diag.txt
+            echo "::error::$(head -c 60000 ../.e2e-diag.txt | tr '\n' '~' | sed 's/~/%0A/g')"
+            cp ../.e2e-diag.txt ../../.e2e-diag-artifact.txt 2>/dev/null || true
+          fi
+          exit $rc
+
       - name: Auth e2e (session survives restart, failure-only limiter)
         run: |
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
@@ -200,31 +225,6 @@ jobs:
             echo "::error::session did not survive the restart (GET / -> $got)"
             exit 1
           fi
-
-      - name: Run e2e
-        working-directory: scripts/e2e
-        env:
-          VD_LOCAL_URL: http://127.0.0.1:8080
-          VD_REMOTE_URL: https://127.0.0.1:8443
-        run: |
-          set +e
-          npx playwright test 2>&1 | tee ../.e2e-tests.log
-          rc=${PIPESTATUS[0]}
-          if [ "$rc" != "0" ]; then
-            # One consolidated annotation: GitHub drops everything past the
-            # 10th annotation of a step, which silently hid the logs before.
-            {
-              echo "== assertions =="
-              grep -E "Expected|Received|toBe|locator|Timeout|waiting for" ../.e2e-tests.log | head -40
-              echo "== stub trace (last 40) =="
-              tail -40 ../../.e2e-stub.log 2>/dev/null || tail -40 ../../.e2e-server.log 2>/dev/null
-              echo "== server log (last 40) =="
-              tail -40 ../../.e2e-server.log 2>/dev/null
-            } | head -c 60000 | sed 's/^/| /' > ../.e2e-diag.txt
-            echo "::error::$(head -c 60000 ../.e2e-diag.txt | tr '\n' '~' | sed 's/~/%0A/g')"
-            cp ../.e2e-diag.txt ../../.e2e-diag-artifact.txt 2>/dev/null || true
-          fi
-          exit $rc
 
       - name: Server log
         if: always()
