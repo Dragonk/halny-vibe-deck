@@ -73,6 +73,13 @@ pub struct McpRow {
     pub tool_timeout_sec: String,
 }
 
+/// One `[tools.<name>] permission = "…"` entry (Z15).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ToolPermRow {
+    pub name: String,
+    pub permission: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct VibeConfigData {
     pub raw_toml: String,
@@ -83,6 +90,9 @@ pub struct VibeConfigData {
     pub mcp: Vec<McpRow>,
     pub enabled_tools: Vec<String>,
     pub disabled_tools: Vec<String>,
+    /// Per-tool permissions from `[tools.<name>]` (UI: Global Tool Permissions).
+    #[serde(default)]
+    pub tools: Vec<ToolPermRow>,
     pub enabled_skills: Vec<String>,
     pub disabled_skills: Vec<String>,
     pub skill_paths: Vec<String>,
@@ -346,6 +356,11 @@ mod imp {
             mcp: cfg.mcp_servers().into_iter().map(mcp_row_from).collect(),
             enabled_tools: cfg.enabled_tools(),
             disabled_tools: cfg.disabled_tools(),
+            tools: cfg
+                .tools()
+                .into_iter()
+                .map(|(name, permission)| ToolPermRow { name, permission })
+                .collect(),
             enabled_skills: cfg.enabled_skills(),
             disabled_skills: cfg.disabled_skills(),
             skill_paths: cfg.skill_paths(),
@@ -416,7 +431,74 @@ mod imp {
     }
 
     /// Generic directory scan for the project scope (no load_all helpers there).
-    fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
+    /// Reject skill names that could escape `skills/` (Z16).
+fn safe_skill_name(name: &str) -> Result<String, ServerFnError> {
+    let n = name.trim();
+    if n.is_empty()
+        || n.contains('/')
+        || n.contains('\\')
+        || n == "."
+        || n == ".."
+        || n.starts_with('.')
+    {
+        return Err(ServerFnError::new("invalid skill name"));
+    }
+    Ok(n.to_string())
+}
+
+/// Recursively collect one skill's files as editable cards.
+fn collect_skill_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    skill: &str,
+    out: &mut Vec<FileCard>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_skill_files(root, &path, skill, out);
+            continue;
+        }
+        let rel = path
+            .strip_prefix(root)
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .unwrap_or_default();
+        if rel.is_empty() {
+            continue;
+        }
+        // Skips binaries by size: a skill file is text.
+        let Ok(meta) = path.metadata() else { continue };
+        if meta.len() > 512 * 1024 {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        out.push(FileCard {
+            kind: "skills".to_string(),
+            display_name: rel.clone(),
+            path: format!("skills/{skill}/{rel}"),
+            content,
+            meta: format!("{} B", meta.len()),
+        });
+    }
+}
+
+fn copy_dir(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dest.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
         let ext = match kind {
             "agents" => "toml",
             "prompts" => "md",
@@ -931,6 +1013,184 @@ mod imp {
         })
     }
 
+    /// Absolute path of the route's `skills/` folder (Z16 "open folder").
+    pub fn skills_dir(scope: &str, cwd: &str, conn: Option<&RemoteConnection>) -> Result<String, ServerFnError> {
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        match ctx {
+            Ctx::Local(base) => Ok(base.join("skills").display().to_string()),
+            Ctx::Remote { conn, dir } => Ok(format!("{}:{}/skills", conn.name, dir)),
+        }
+    }
+
+    /// Every file of one skill (`skills/<name>/**`) — Z16 file tree.
+    pub fn list_skill_files(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        name: &str,
+    ) -> Result<Vec<FileCard>, ServerFnError> {
+        let name = safe_skill_name(name)?;
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            // Remote skills list their SKILL.md only (the SSH helpers do not
+            // enumerate nested files); editing still works.
+            return Ok(list_files("skills", scope, cwd, conn)
+                .into_iter()
+                .filter(|f| f.display_name == name)
+                .collect());
+        };
+        let dir = base.join("skills").join(&name);
+        let mut out: Vec<FileCard> = Vec::new();
+        collect_skill_files(&dir, &dir, &name, &mut out);
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
+    }
+
+    /// Create `skills/<name>/SKILL.md` (Z16).
+    pub fn create_skill(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        name: &str,
+    ) -> Result<(), ServerFnError> {
+        let name = safe_skill_name(name)?;
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            return Err(ServerFnError::new(
+                "creating skills on an SSH host is not supported yet",
+            ));
+        };
+        let dir = base.join("skills").join(&name);
+        fs::create_dir_all(&dir).map_err(|e| ServerFnError::new(e.to_string()))?;
+        let file = dir.join("SKILL.md");
+        if !file.exists() {
+            let body = format!("# {name}\n\nDescribe when this skill applies.\n");
+            fs::write(&file, body).map_err(|e| ServerFnError::new(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Delete a whole skill folder (Z16).
+    pub fn delete_skill(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        name: &str,
+    ) -> Result<(), ServerFnError> {
+        let name = safe_skill_name(name)?;
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            return Err(ServerFnError::new(
+                "deleting skills on an SSH host is not supported yet",
+            ));
+        };
+        let dir = base.join("skills").join(&name);
+        fs::remove_dir_all(&dir).map_err(|e| ServerFnError::new(e.to_string()))
+    }
+
+    /// Import a local folder as a skill (Z16): every file is copied under
+    /// `skills/<name>/` (the folder name becomes the skill name unless
+    /// `name` is given).
+    pub fn import_skill_folder(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        source: &str,
+        name: &str,
+    ) -> Result<String, ServerFnError> {
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            return Err(ServerFnError::new(
+                "importing skills on an SSH host is not supported yet",
+            ));
+        };
+        let src = std::path::Path::new(source.trim());
+        if !src.is_dir() {
+            return Err(ServerFnError::new("source is not a directory"));
+        }
+        let derived = if name.trim().is_empty() {
+            src.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            name.trim().to_string()
+        };
+        let skill = safe_skill_name(&derived)?;
+        let dest = base.join("skills").join(&skill);
+        copy_dir(src, &dest).map_err(|e| ServerFnError::new(e.to_string()))?;
+        Ok(skill)
+    }
+
+    /// Import a skill from a `.zip` archive (Z16) — extracted under
+    /// `skills/<name>/`.
+    pub fn import_skill_zip(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        zip_path: &str,
+        name: &str,
+    ) -> Result<String, ServerFnError> {
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            return Err(ServerFnError::new(
+                "importing skills on an SSH host is not supported yet",
+            ));
+        };
+        let path = std::path::Path::new(zip_path.trim());
+        let file = fs::File::open(path).map_err(|e| ServerFnError::new(e.to_string()))?;
+        let mut archive = zip::ZipArchive::new(file).map_err(|e| ServerFnError::new(e.to_string()))?;
+        let derived = if name.trim().is_empty() {
+            path.file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("skill")
+                .to_string()
+        } else {
+            name.trim().to_string()
+        };
+        let skill = safe_skill_name(&derived)?;
+        let dest = base.join("skills").join(&skill);
+        fs::create_dir_all(&dest).map_err(|e| ServerFnError::new(e.to_string()))?;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| ServerFnError::new(e.to_string()))?;
+            let Some(rel) = entry.enclosed_name() else { continue };
+            let target = dest.join(rel);
+            if entry.is_dir() {
+                let _ = fs::create_dir_all(&target);
+                continue;
+            }
+            if let Some(parent) = target.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let mut out = fs::File::create(&target)
+                .map_err(|e| ServerFnError::new(e.to_string()))?;
+            std::io::copy(&mut entry, &mut out).map_err(|e| ServerFnError::new(e.to_string()))?;
+        }
+        Ok(skill)
+    }
+
+    /// Write one `[tools.<name>] permission = "…"` entry (Z15).
+    pub fn set_tool_permission(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&mistraldeck_core::snapshot::RemoteConnection>,
+        tool: &str,
+        permission: &str,
+    ) -> Result<(), ServerFnError> {
+        let name = tool.trim();
+        let perm = permission.trim();
+        if name.is_empty() {
+            return Err(ServerFnError::new("empty tool name"));
+        }
+        if !matches!(perm, "ask" | "allow" | "deny") {
+            return Err(ServerFnError::new("permission must be ask/allow/deny"));
+        }
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        with_cfg(&ctx, |cfg| cfg.set_tool_permission(name, perm))
+    }
+
     pub fn set_list(
         scope: &str,
         cwd: &str,
@@ -1126,6 +1386,115 @@ pub async fn api_set_active_model(
     imp::check(&token)?;
     tokio::task::spawn_blocking(move || {
         imp::set_active_model(&scope, &cwd, conn.as_ref(), &alias)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Route's `skills/` folder (Z16 "open skills folder").
+#[server]
+pub async fn api_skills_dir(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    imp::skills_dir(&scope, &cwd, conn.as_ref())
+}
+
+/// All files of one skill (Z16 detail pane).
+#[server]
+pub async fn api_list_skill_files(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    name: String,
+) -> Result<Vec<FileCard>, ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || imp::list_skill_files(&scope, &cwd, conn.as_ref(), &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+#[server]
+pub async fn api_create_skill(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    name: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || imp::create_skill(&scope, &cwd, conn.as_ref(), &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+#[server]
+pub async fn api_delete_skill(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    name: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || imp::delete_skill(&scope, &cwd, conn.as_ref(), &name))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Import a folder as a skill (Z16); returns the created skill name.
+#[server]
+pub async fn api_import_skill_folder(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    source: String,
+    name: String,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::import_skill_folder(&scope, &cwd, conn.as_ref(), &source, &name)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Import a `.zip` as a skill (Z16); returns the created skill name.
+#[server]
+pub async fn api_import_skill_zip(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    zip_path: String,
+    name: String,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::import_skill_zip(&scope, &cwd, conn.as_ref(), &zip_path, &name)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Set one tool permission (`[tools.<name>] permission`) — Z15.
+#[server]
+pub async fn api_set_tool_permission(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    tool: String,
+    permission: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::set_tool_permission(&scope, &cwd, conn.as_ref(), &tool, &permission)
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
@@ -1343,5 +1712,75 @@ mod model_smoke {
 
         std::env::remove_var("VIBE_HOME");
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// Z15/Z16 regression tests: tool permissions and the skills lifecycle run
+/// against a throwaway **project** scope (never the real `~/.vibe`).
+#[cfg(all(test, feature = "server"))]
+mod tools_and_skills {
+    use super::imp;
+
+    fn tmp_project(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "vd-skills-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp project");
+        dir
+    }
+
+    #[test]
+    fn tool_permission_roundtrip() {
+        let dir = tmp_project("tools");
+        let cwd = dir.display().to_string();
+        imp::set_tool_permission("project", &cwd, None, "bash", "allow").expect("write");
+        let cfg = imp::load("project", &cwd, None).expect("load");
+        let row = cfg
+            .tools
+            .iter()
+            .find(|t| t.name == "bash")
+            .expect("permission persisted");
+        assert_eq!(row.permission, "allow");
+        // Rejects garbage instead of writing an invalid permission.
+        assert!(imp::set_tool_permission("project", &cwd, None, "bash", "whatever").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skills_create_list_import_delete() {
+        let dir = tmp_project("skills");
+        let cwd = dir.display().to_string();
+        imp::create_skill("project", &cwd, None, "demo").expect("create");
+        let files = imp::list_skill_files("project", &cwd, None, "demo").expect("list");
+        assert_eq!(files.len(), 1, "SKILL.md created");
+        assert!(files[0].path.ends_with("SKILL.md"));
+
+        // Import a folder: every file is copied under skills/<name>/.
+        let src = dir.join("importme");
+        std::fs::create_dir_all(src.join("sub")).expect("src");
+        std::fs::write(src.join("SKILL.md"), "# imported\n").expect("write");
+        std::fs::write(src.join("sub/extra.md"), "extra\n").expect("write");
+        let name = imp::import_skill_folder(
+            "project",
+            &cwd,
+            None,
+            src.display().to_string().as_str(),
+            "",
+        )
+        .expect("import");
+        assert_eq!(name, "importme");
+        let imported = imp::list_skill_files("project", &cwd, None, "importme").expect("list");
+        assert_eq!(imported.len(), 2, "nested file imported");
+
+        // Path traversal is refused.
+        assert!(imp::delete_skill("project", &cwd, None, "../escape").is_err());
+
+        imp::delete_skill("project", &cwd, None, "demo").expect("delete");
+        assert!(imp::list_skill_files("project", &cwd, None, "demo")
+            .expect("list after delete")
+            .is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -42,20 +42,20 @@ Legend: **P** = priority (C critical, H high, M medium, L low).
 | Z11 | M | App/CLI update buttons are always visible | Buttons rendered unconditionally, only `disabled` | Render the row/button only when `update_available` | [x] |
 | Z12 | H | Server and SSH remote settings share one tab | `remote` tab holds “Remote control” (server) + “Remote servers (SSH)” | Split into `serve` and `remote` tabs (D9) | [x] |
 | Z13 | M | Remote project directories entered as textarea lines | `ssh_editor_el` textarea “one per line” | Row list with add/remove (stable parity) | [x] |
-| Z14 | H | Server runs over plain HTTP | `launch.rs` binds `http://127.0.0.1:port`, HTTPS only for remote | HTTPS-only listener for both surfaces (D10), webview/`set_server_url` switched to `https://` | [~] |
-| Z15 | H | Tools settings differ from stable | Two textareas for `enabled_tools`/`disabled_tools`; no `[tools.*] permission` in the config model | Per-tool permission panel + available-tools list | [ ] |
-| Z16 | H | Skills settings completely different | Generic `files_panel` | Master-detail: create, import folder/zip, open folder, file tree, delete | [ ] |
-| Z17 | H | Agents settings wrong | Generic `files_panel` | Master-detail + project/global scope + preview/edit | [ ] |
-| Z18 | H | Prompts settings wrong | Generic `files_panel` | Master-detail + scope + preview/edit | [ ] |
-| Z19 | H | TOML tab does not fit the screen and shows the wrong content | `raw` tab side-by-side panes without height/scroll rules; read errors render as an empty editor | Full-height side-by-side layout, explicit error state, save/reload | [ ] |
-| Z20 | H | Agent scope (local/SSH) and directory change do nothing | Controlled `<select>` (`value` + `selected`) not re-rendering; detail panels keep their “loaded” markers | Signal-driven selects, remount panels on scope key, shared loaded marker | [ ] |
-| Z21 | M | File preview: edit / open-externally buttons misplaced | Header has title+size+edit+save+close; no path, no download, no open-externally | Stable header: path, edit toggle, save/cancel, download, open externally, close | [~] |
+| Z14 | H | Server runs over plain HTTP | `launch.rs` binds `http://127.0.0.1:port`, HTTPS only for remote | HTTPS-only listener for both surfaces (D10), webview/`set_server_url` switched to `https://` | [x] |
+| Z15 | H | Tools settings differ from stable | Two textareas for `enabled_tools`/`disabled_tools`; no `[tools.*] permission` in the config model | Per-tool permission panel + available-tools list | [x] |
+| Z16 | H | Skills settings completely different | Generic `files_panel` | Master-detail: create, import folder/zip, open folder, file tree, delete | [x] |
+| Z17 | H | Agents settings wrong | Generic `files_panel` | Master-detail + project/global scope + preview/edit | [x] |
+| Z18 | H | Prompts settings wrong | Generic `files_panel` | Master-detail + scope + preview/edit | [x] |
+| Z19 | H | TOML tab does not fit the screen and shows the wrong content | `raw` tab side-by-side panes without height/scroll rules; read errors render as an empty editor | Full-height side-by-side layout, explicit error state, save/reload | [x] |
+| Z20 | H | Agent scope (local/SSH) and directory change do nothing | Controlled `<select>` (`value` + `selected`) not re-rendering; detail panels keep their “loaded” markers | Signal-driven selects, remount panels on scope key, shared loaded marker | [x] |
+| Z21 | M | File preview: edit / open-externally buttons misplaced | Header has title+size+edit+save+close; no path, no download, no open-externally | Stable header: path, edit toggle, save/cancel, download, open externally, close | [x] |
 | Z22 | H | File list navigates into folders; no tree, no remembered expansion | `dock.rs::file_row` replaces the listing on directory click | Recursive tree + expansion state in `ClientState` + context menu | [x] |
 | Z23 | M | The browser build shows a title bar | `desktop_mode` comes from the `window.ipc` probe | Server-provided mode flag; no header in the browser | [x] |
 | Z24 | L | Theme button label “Motyw: Automatyczny (kliknij aby zmienić)” breaks the layout | `i18n.rs` strings carry the parenthetical | Drop the parenthetical in all languages | [x] |
 | Z25 | M | Chat input differs: unknown button, attach is 📎 not `＋` | Disabled folder chip + `ic-folder-chip` with 📎 | Single `＋` attach menu; project shown as text in the status bar | [x] |
-| Z26 | H | Changing the model does not adapt the thinking options | Reducer never maps config-option updates; `SessionReady` from a snapshot wipes `config_options` with empty lists | `ConfigOptionsUpdated` event + `runtime/read` source; per-model thinking levels | [ ] |
-| Z27 | H | Mode picker shows “orchestrator” without a description, in every project | Option lists rebuilt from local TOML (`restore_session_chips`), not from the agent/project | Options from agent runtime; project agents only from `<cwd>/.vibe/agents`; descriptions shown | [ ] |
+| Z26 | H | Changing the model does not adapt the thinking options | Reducer never maps config-option updates; `SessionReady` from a snapshot wipes `config_options` with empty lists | `ConfigOptionsUpdated` event + `runtime/read` source; per-model thinking levels | [x] |
+| Z27 | H | Mode picker shows “orchestrator” without a description, in every project | Option lists rebuilt from local TOML (`restore_session_chips`), not from the agent/project | Options from agent runtime; project agents only from `<cwd>/.vibe/agents`; descriptions shown | [x] |
 | Z28 | H | Many empty black terminal windows while working | `appsrv/conn.rs::Conn::spawn` has no `CREATE_NO_WINDOW` (stable uses `windowsHide: true`) | `creation_flags(0x0800_0000)` on Windows | [x] |
 
 ## 2. Phases and acceptance criteria
@@ -84,18 +84,20 @@ Legend: **P** = priority (C critical, H high, M medium, L low).
 | F6 files | Z21, Z22 | tree + path + open-externally done; download pending |
 | F7 chrome | Z7, Z8, Z23, Z24, Z28 | done |
 
-### Open for the next round
+### Round 2 — every reported issue is implemented
 
-- **Z26/Z27** — the chips still come from the local TOML (`restore_session_chips`)
-  instead of the agent runtime: add a `ConfigOptionsUpdated` bus event mapped from
-  the app-server config-option notifications (plus `runtime/read` as the source of
-  per-model thinking levels and agent descriptions) so a model change re-populates
-  the thinking choices and modes stay project-scoped.
-- **Z15–Z18** — tools/skills/agents/prompts panels: model `[tools.<name>] permission`
-  in `vibeconfig`, master-detail panels, skill import/zip, agent & prompt editors.
-- **Z19** — the raw/TOML tab needs the full-height layout and an explicit error state.
-- **Z20** — the agent/target scope selects must reload every panel on change.
-- **Z21** — download button in the preview header.
-- Known flake (pre-existing): `session_token::tests::round_trip_and_tamper` fails
-  occasionally in a full `cargo test --workspace` run because `cred_version()` reads
-  the on-disk config; passes in isolation and on re-run.
+| Item | Notes |
+|---|---|
+| Z14 | hosted/remote surfaces HTTPS-only; desktop webview exception documented above |
+| Z15 | tool permission panel + `[tools.*]` model, tested |
+| Z16 | skills master-detail (create/import/zip/open folder/edit/delete), tested |
+| Z17/Z18 | agents + prompts master-detail with external open |
+| Z19 | raw/TOML tab full-height, error + empty states |
+| Z20 | scope selects reload every panel |
+| Z21 | download button (local and SSH) |
+| Z26 | per-model thinking levels re-derived on model change |
+| Z27 | mode options with descriptions, project agents project-scoped |
+
+Known flake (pre-existing, unrelated): `session_token::tests::round_trip_and_tamper`
+fails occasionally in a full `cargo test --workspace` run because `cred_version()`
+reads the on-disk config; it passes in isolation and on re-run.

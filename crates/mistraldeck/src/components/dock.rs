@@ -842,6 +842,11 @@ fn FilePreviewTab(
 ) -> Element {
     let name = tab.name.clone();
     let path_lbl = tab.path.clone();
+    let download_lbl = if lang == "pl" {
+        "Pobierz".to_string()
+    } else {
+        "Download".to_string()
+    };
     let size = tab
         .data
         .as_ref()
@@ -1109,6 +1114,46 @@ fn FilePreviewTab(
                             {save_status}
                             {edit_btn}
                             {save_btn}
+                            // Z21: download a copy (works in the browser and
+                            // in the desktop webview — blob URL + anchor).
+                            {
+                                let dl_path = path_lbl.clone();
+                                let dl_rid = tab.remote_id.clone();
+                                let dl_root = tab.root.clone();
+                                let dl_name = name.clone();
+                                let st_dl = state.clone();
+                                rsx! {
+                                    button {
+                                        class: "file-preview-btn",
+                                        title: "{download_lbl}",
+                                        onclick: move |_| {
+                                            let st = st_dl.clone();
+                                            let p = dl_path.clone();
+                                            let rid = dl_rid.clone();
+                                            let root = dl_root.clone();
+                                            let fname = dl_name.clone();
+                                            spawn(async move {
+                                                match crate::fsgit::api_download_base64(
+                                                    token(&st), p, rid, root,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(b64) => {
+                                                        let js = format!(
+                                                            "try{{var b=atob('{}');var u=new Uint8Array(b.length);for(var i=0;i<b.length;i++){{u[i]=b.charCodeAt(i);}}var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([u]));a.download='{}';a.click();}}catch(e){{}}",
+                                                            b64.replace('\'', ""),
+                                                            fname.replace('\'', "")
+                                                        );
+                                                        dioxus::document::eval(js.as_str());
+                                                    }
+                                                    Err(_) => {}
+                                                }
+                                            });
+                                        },
+                                        "⬇"
+                                    }
+                                }
+                            }
                             if crate::state::is_desktop() {
                                 {
                                     let open_path = path_lbl.clone();

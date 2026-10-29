@@ -645,6 +645,30 @@ impl VibeConfigFile {
             .map(str::to_string)
     }
 
+    /// Every `[tools.<name>] permission = "…"` entry (name, permission).
+    pub fn tools(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .table
+            .get("tools")
+            .and_then(Value::as_table)
+            .map(|t| {
+                t.iter()
+                    .map(|(name, val)| {
+                        let perm = val
+                            .as_table()
+                            .and_then(|e| e.get("permission"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("ask")
+                            .to_string();
+                        (name.clone(), perm)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     pub fn set_tool_permission(&mut self, tool: &str, permission: &str) {
         let tools = self
             .table

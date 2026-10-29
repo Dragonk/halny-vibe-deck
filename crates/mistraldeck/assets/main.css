@@ -7178,3 +7178,50 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
 }
 .stats-toolbar .stats-title { margin: 0; flex-shrink: 0; }
 .stats-toolbar .time-range-btns { flex: 1; display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* ---- Z19: the raw/TOML tab fills the viewport instead of a fixed 420px ---- */
+.raw-config-section {
+  height: calc(100vh - 240px);
+  min-height: 360px;
+  overflow: hidden;
+}
+.raw-config-section .dirtree-col {
+  max-height: none;
+  height: 100%;
+  overflow-y: auto;
+}
+.raw-config-section .raw-editor-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  gap: 8px;
+}
+.raw-config-section .raw-editor-col .field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 6px;
+}
+.raw-config-section .code-editor {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 240px;
+}
+/* Z15: permission rows */
+.tool-item .tool-perm-select {
+  width: 110px;
+  flex-shrink: 0;
+}
+/* Z16/Z17/Z18: keep the detail pane scrollable */
+.master-detail-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.99.6 — the remaining reported defects (2026-10-29)
+
+- **Tools** are the stable edition's permission panel again: one row per tool
+  with ask / allow / deny, persisted as `[tools.<name>] permission` in the
+  selected scope (global or project, local or over SSH). The free-text
+  enabled/disabled lists are gone from this tab.
+- **Skills** became a master-detail view: create a skill, import a folder, import
+  a `.zip`, open the skills folder, browse the skill's files and edit them, delete
+  the whole skill. Server-side names are validated so a skill can never escape
+  `skills/`.
+- **Agents and prompts** share the same two-column master-detail layout with the
+  editor, save, delete, create and “open externally”.
+- **Raw config (TOML)** fills the window instead of a fixed 420 px box, and shows
+  a read error or an empty-file hint instead of a blank editor.
+- **Scope switches** (local ↔ SSH, global ↔ project) now remount the controls and
+  reload every panel, so a directory change is visible immediately.
+- **File preview** gained a download button (local and over SSH) next to the path,
+  the edit toggle and “open externally”.
+- **Chat option chips**: a model change re-derives that model's thinking levels
+  (`thinking_levels`), an empty agent payload no longer blanks the pickers, and
+  mode choices carry descriptions; project agents stay scoped to their project.
+
 ## 1.99.5 — user-reported defects round (2026-10-29)
 
 - **Chat works again (critical).** `session/start` reached the agent but the turn

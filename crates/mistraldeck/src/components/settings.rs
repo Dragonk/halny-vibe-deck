@@ -224,12 +224,14 @@ fn files_panel(
             div { class: "settings-section-header",
                 div { class: "settings-section-title", "{tr(&lang, kind)}" }
             }
-            div { class: "session-rows",
-                if rows.is_empty() {
-                    div { class: "empty-text", "{tr(&lang, \"noData\")}" }
+            div { class: "master-detail",
+                div { class: "master-list",
+                    if rows.is_empty() {
+                        div { class: "empty-text", "{tr(&lang, \"noData\")}" }
+                    }
+                    {rows.iter().cloned()}
                 }
-                {rows.iter().cloned()}
-            }
+                div { class: "master-detail-panel",
             if !sel.is_empty() {
                 div { class: "field",
                     div { class: "field-label", "{sel}" }
@@ -276,7 +278,30 @@ fn files_panel(
                     if !saved.read().is_empty() {
                         span { class: "field-hint", style: "margin-left:10px;", "{saved.read()}" }
                     }
+                    // Z17/Z18: open the file with the OS editor (desktop only).
+                    if crate::state::is_desktop() {
+                        {
+                            let st_open = state;
+                            let sel_open = sel.clone();
+                            rsx! {
+                                button {
+                                    class: "field-btn",
+                                    style: "margin-top:8px;",
+                                    onclick: move |_| {
+                                        let st = st_open;
+                                        let p = sel_open.clone();
+                                        spawn(async move {
+                                            let _ = crate::fsgit::api_open_externally(token(&st), p).await;
+                                        });
+                                    },
+                                    "{tr(&lang, \"previewOpenExternally\")}"
+                                }
+                            }
+                        }
+                    }
                 }
+                }
+            }
             }
             div { class: "field-row",
                 input {
@@ -385,10 +410,6 @@ pub fn SettingsView() -> Element {
     // Vibe CLI configuration state (loaded once, refetched after edits).
     let cfg = use_signal(|| Option::<VibeConfigData>::None);
     let cfg_err = use_signal(String::new);
-    let mut tools_en = use_signal(String::new);
-    let mut tools_dis = use_signal(String::new);
-    let mut skills_en = use_signal(String::new);
-    let mut skills_dis = use_signal(String::new);
     let raw_toml = use_signal(String::new);
     let list_saved = use_signal(String::new);
 
@@ -398,6 +419,14 @@ pub fn SettingsView() -> Element {
     let sel_path = use_signal(String::new);
     let editor = use_signal(String::new);
     let new_name = use_signal(String::new);
+    // Z16: skills master-detail (skill → its files → the selected file).
+    let skill_sel = use_signal(String::new);
+    let skill_files = use_signal(|| Vec::<FileCard>::new());
+    let skill_path = use_signal(String::new);
+    let skill_editor = use_signal(String::new);
+    let skill_msg = use_signal(String::new);
+    let skill_import = use_signal(String::new);
+    let skills = use_signal(|| Vec::<FileCard>::new());
     let file_saved = use_signal(String::new);
     // Scope picker state (element 7; Nexus scopeAgent/scopeTarget): the
     // agent select ("local" or a remote connection id) and the target
@@ -553,10 +582,6 @@ pub fn SettingsView() -> Element {
         mc_new.set(false);
         let st = state.clone();
         let sc2 = sc.clone();
-        let mut tools_en = tools_en.clone();
-        let mut tools_dis = tools_dis.clone();
-        let mut skills_en = skills_en.clone();
-        let mut skills_dis = skills_dis.clone();
         let mut raw_toml = raw_toml.clone();
         let mut cfg = cfg.clone();
         let mut cfg_err = cfg_err.clone();
@@ -570,10 +595,6 @@ pub fn SettingsView() -> Element {
             .await
             {
                 Ok(d) => {
-                    tools_en.set(d.enabled_tools.join("\n"));
-                    tools_dis.set(d.disabled_tools.join("\n"));
-                    skills_en.set(d.enabled_skills.join("\n"));
-                    skills_dis.set(d.disabled_skills.join("\n"));
                     raw_toml.set(d.raw_toml.clone());
                     cfg_err.set(String::new());
                     cfg.set(Some(d));
@@ -585,7 +606,27 @@ pub fn SettingsView() -> Element {
 
     // lazily load the file list when a file tab is opened
     let cur_tab = tab.read().clone();
-    if matches!(cur_tab.as_str(), "agents" | "prompts" | "skills") && *files_kind.read() != cur_tab
+    // Z16: the skills tab keeps its own list (one card per skill).
+    if cur_tab == "skills" && *files_kind.read() != "skills" {
+        files_kind.set("skills".to_string());
+        let st = state.clone();
+        let sc2 = sc.clone();
+        let mut skills_c = skills;
+        spawn(async move {
+            if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
+                token(&st),
+                sc2.scope.clone(),
+                sc2.cwd.clone(),
+                sc2.conn.clone(),
+                "skills".to_string(),
+            )
+            .await
+            {
+                skills_c.set(list);
+            }
+        });
+    }
+    if matches!(cur_tab.as_str(), "agents" | "prompts") && *files_kind.read() != cur_tab
     {
         files_kind.set(cur_tab.clone());
         let st = state.clone();
@@ -675,23 +716,21 @@ pub fn SettingsView() -> Element {
     let agent_opts: Vec<Element> = {
         let local_lbl = tr(&lang, "settingsScopeLocal");
         let mut v: Vec<Element> = vec![rsx! {
-            option { value: "local", selected: agent == "local", "{local_lbl}" }
+            option { value: "local", "{local_lbl}" }
         }];
         for c in ssh_conns.iter().filter(|c| c.enabled) {
-            let sel = c.id == agent;
             let lbl = format!("📍 {}", c.name);
-            v.push(rsx! { option { value: "{c.id}", selected: sel, "{lbl}" } });
+            v.push(rsx! { option { value: "{c.id}", "{lbl}" } });
         }
         v
     };
     let target_opts: Vec<Element> = {
         let global_lbl = tr(&lang, "settingsScopeGlobal");
         let mut v: Vec<Element> = vec![rsx! {
-            option { value: "global", selected: target == "global", "{global_lbl}" }
+            option { value: "global", "{global_lbl}" }
         }];
         for p in proj_opts.iter() {
-            let sel = *p == target;
-            v.push(rsx! { option { value: "{p}", selected: sel, "{p}" } });
+            v.push(rsx! { option { value: "{p}", "{p}" } });
         }
         v
     };
@@ -1906,131 +1945,125 @@ pub fn SettingsView() -> Element {
             }
         }
 
-        "tools" => rsx! {
-            div { class: "settings-section",
-                div { class: "settings-section-header",
-                    div { class: "settings-section-title", "{tr(&lang, \"tools\")}" }
+        "tools" => {
+            // Z15: per-tool permissions (`[tools.<name>] permission`), the
+            // stable edition's "Global Tool Permissions" panel, instead of
+            // free-text enabled/disabled lists.
+            const DEFAULT_TOOLS: [&str; 11] = [
+                "bash",
+                "edit",
+                "grep",
+                "read_file",
+                "write_file",
+                "web_fetch",
+                "web_search",
+                "todo",
+                "task",
+                "skill",
+                "ask_user_question",
+            ];
+            let mut rows: Vec<(String, String)> = cfgd
+                .tools
+                .iter()
+                .map(|t| (t.name.clone(), t.permission.clone()))
+                .collect();
+            let known: Vec<String> = rows.iter().map(|(n, _)| n.clone()).collect();
+            for t in DEFAULT_TOOLS {
+                if !known.iter().any(|k| k == t) {
+                    rows.push((t.to_string(), "ask".to_string()));
                 }
-                div { class: "field",
-                    div { class: "field-label", "{loc(&lang, \"Włączone narzędzia (jedno na linię)\", \"Enabled tools (one per line)\")}" }
-                    textarea {
-                        class: "field-input",
-                        style: "min-height:120px;font-family:monospace;font-size:12px;white-space:pre;",
-                        value: "{tools_en.read()}",
-                        oninput: move |e| tools_en.set(e.value()),
-                    }
-                }
-                div { class: "field",
-                    div { class: "field-label", "{loc(&lang, \"Wyłączone narzędzia\", \"Disabled tools\")}" }
-                    textarea {
-                        class: "field-input",
-                        style: "min-height:120px;font-family:monospace;font-size:12px;white-space:pre;",
-                        value: "{tools_dis.read()}",
-                        oninput: move |e| tools_dis.set(e.value()),
-                    }
-                }
-                div { class: "field",
-                    button {
-                        class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cfg = cfg.clone();
-                            let cfg_err = cfg_err.clone();
-                            let list_saved = list_saved.clone();
-                            let lang_c = lang.clone();
-                            let sc = sc.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let cfg = cfg.clone();
-                                let cfg_err = cfg_err.clone();
-                                let mut list_saved = list_saved.clone();
-                                let lang = lang_c.clone();
-                                let sc = sc.clone();
-                                async move {
-                                    let en = tools_en.read().split('\n').map(|s| s.to_string()).collect();
-                                    let dis = tools_dis.read().split('\n').map(|s| s.to_string()).collect();
-                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_tools".into(), en, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
-                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_tools".into(), dis, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
-                                    match (r1, r2) {
-                                        (Ok(()), Ok(())) => list_saved.set(String::new()),
-                                        _ => list_saved.set(loc(&lang, "Nie udało się zapisać.", "Failed to save.")),
-                                    }
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
-                                }
+            }
+            let hint_text = loc(
+                &lang,
+                "ask = pyta przed użyciem, allow = zawsze pozwól, deny = blokuj.",
+                "ask = confirm before use, allow = always run, deny = block.",
+            );
+            let row_els: Vec<Element> = rows
+                .iter()
+                .map(|(name, perm)| {
+                    let tool = name.clone();
+                    let current = perm.clone();
+                    let options: Vec<Element> = ["ask", "allow", "deny"]
+                        .iter()
+                        .map(|p| {
+                            rsx! {
+                                option { value: "{p}", selected: p == &current.as_str(), "{p}" }
                             }
-                        },
-                        "{tr(&lang, \"saveLabel\")}"
+                        })
+                        .collect();
+                    let state = state.clone();
+                    let cfg = cfg.clone();
+                    let cfg_err = cfg_err.clone();
+                    let sc = sc.clone();
+                    rsx! {
+                        div { key: "{tool}", class: "tool-item",
+                            span { class: "tool-name", "{tool}" }
+                            select {
+                                class: "field-input tool-perm-select",
+                                value: "{perm}",
+                                onchange: {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
+                                    let tool = tool.clone();
+                                    move |e| {
+                                        let value = e.value();
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        let tool = tool.clone();
+                                        spawn(async move {
+                                            let _ = crate::vibeconfig::api_set_tool_permission(
+                                                token(&state),
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                                tool,
+                                                value,
+                                            )
+                                            .await;
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        });
+                                    }
+                                },
+                                {options.iter().cloned()}
+                            }
+                        }
                     }
-                    if !list_saved.read().is_empty() {
-                        span { class: "field-hint", style: "margin-left:10px;", "{list_saved.read()}" }
+                })
+                .collect();
+            rsx! {
+                div { class: "settings-section tools-section",
+                    div { class: "settings-section-header",
+                        div { class: "settings-section-title",
+                            "{loc(&lang, \"Uprawnienia narzędzi\", \"Global tool permissions\")}"
+                        }
                     }
+                    div { class: "field-hint",
+                        "{hint_text}"
+                    }
+                    div { class: "tools-list",
+                        {row_els.iter().cloned()}
+                    }
+                    {err_el}
                 }
-                {err_el}
             }
         },
-        "skills" => rsx! {
-            div { class: "settings-section",
-                div { class: "settings-section-header",
-                    div { class: "settings-section-title", "{tr(&lang, \"skills\")}" }
-                }
-                div { class: "field",
-                    div { class: "field-label", "{loc(&lang, \"Włączone (wzorce)\", \"Enabled (patterns)\")}" }
-                    textarea {
-                        class: "field-input",
-                        style: "min-height:80px;font-family:monospace;font-size:12px;white-space:pre;",
-                        value: "{skills_en.read()}",
-                        oninput: move |e| skills_en.set(e.value()),
-                    }
-                }
-                div { class: "field",
-                    div { class: "field-label", "{loc(&lang, \"Wyłączone\", \"Disabled\")}" }
-                    textarea {
-                        class: "field-input",
-                        style: "min-height:80px;font-family:monospace;font-size:12px;white-space:pre;",
-                        value: "{skills_dis.read()}",
-                        oninput: move |e| skills_dis.set(e.value()),
-                    }
-                }
-                div { class: "field",
-                    button {
-                        class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cfg = cfg.clone();
-                            let cfg_err = cfg_err.clone();
-                            let list_saved = list_saved.clone();
-                            let lang_c = lang.clone();
-                            let sc = sc.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let cfg = cfg.clone();
-                                let cfg_err = cfg_err.clone();
-                                let mut list_saved = list_saved.clone();
-                                let lang = lang_c.clone();
-                                let sc = sc.clone();
-                                async move {
-                                    let en = skills_en.read().split('\n').map(|s| s.to_string()).collect();
-                                    let dis = skills_dis.read().split('\n').map(|s| s.to_string()).collect();
-                                    let r1 = crate::vibeconfig::api_set_vibe_list(token(&state), "enabled_skills".into(), en, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
-                                    let r2 = crate::vibeconfig::api_set_vibe_list(token(&state), "disabled_skills".into(), dis, sc.scope.clone(), sc.cwd.clone(), sc.conn.clone()).await;
-                                    match (r1, r2) {
-                                        (Ok(()), Ok(())) => list_saved.set(String::new()),
-                                        _ => list_saved.set(loc(&lang, "Nie udało się zapisać.", "Failed to save.")),
-                                    }
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
-                                }
-                            }
-                        },
-                        "{tr(&lang, \"saveLabel\")}"
-                    }
-                    if !list_saved.read().is_empty() {
-                        span { class: "field-hint", style: "margin-left:10px;", "{list_saved.read()}" }
-                    }
-                }
-                {files_panel(lang.clone(), state.clone(), "skills", files, sel_path, editor, new_name, file_saved, sc.clone())}
-                {err_el}
-            }
-        },
+        "skills" => skills_panel(
+            lang.clone(),
+            state.clone(),
+            skills,
+            skill_sel,
+            skill_files,
+            skill_path,
+            skill_editor,
+            skill_msg,
+            skill_import,
+            new_name,
+            sc.clone(),
+        ),
         "agents" => files_panel(lang.clone(), state.clone(), "agents", files, sel_path, editor, new_name, file_saved, sc.clone()),
         "prompts" => files_panel(lang.clone(), state.clone(), "prompts", files, sel_path, editor, new_name, file_saved, sc.clone()),
         "raw" => {
@@ -2054,6 +2087,10 @@ pub fn SettingsView() -> Element {
             } else {
                 "cfg-file-item"
             };
+            // Z19: surface a config read failure instead of an empty editor.
+            let cfg_err_read = cfg_err.read().clone();
+            let cfg_err_el_is_empty = cfg_err_read.is_empty();
+            let raw_toml_read = raw_toml.read().clone();
             let flist = raw_files.read().clone();
             let mut file_rows: Vec<Element> = Vec::new();
             for (i, f) in flist.iter().enumerate() {
@@ -2109,6 +2146,14 @@ pub fn SettingsView() -> Element {
                     div { class: "field",
                         div { class: "field-label", "{sel_lbl}" }
                         div { class: "field-hint", "{sel_hint}" }
+                        if !cfg_err_el_is_empty {
+                            div { class: "git-error", "{cfg_err_read}" }
+                        }
+                        if raw_toml_read.is_empty() {
+                            div { class: "field-hint",
+                                "{loc(&lang, \"Ten plik jest pusty lub nie da się go odczytać.\", \"This file is empty or could not be read.\")}"
+                            }
+                        }
                         CodeEditor {
                             code: raw_toml,
                             id: "raw".to_string(),
@@ -2713,6 +2758,7 @@ pub fn SettingsView() -> Element {
                         div { class: "scope-switch",
                             select {
                                 class: "scope-select",
+                                key: "scope-agent-{agent}",
                                 value: "{agent}",
                                 onchange: move |e| {
                                     let mut scope_agent = scope_agent.clone();
@@ -2726,6 +2772,7 @@ pub fn SettingsView() -> Element {
                             }
                             select {
                                 class: "scope-select",
+                                key: "scope-target-{target}",
                                 value: "{target}",
                                 onchange: move |e| {
                                     let mut scope_target = scope_target.clone();
@@ -2883,7 +2930,7 @@ fn ssh_editor_el(
                         .map(|l| l.trim().to_string())
                         .filter(|l| !l.is_empty())
                         .collect();
-                    let row_els: Vec<Element> = rows
+            let row_els: Vec<Element> = rows
                         .iter()
                         .enumerate()
                         .map(|(i, r)| {
@@ -3245,6 +3292,386 @@ fn ssh_editor_el(
                         }
                     },
                     "{tr(&lang, \"cancelLabel\")}"
+                }
+            }
+        }
+    }
+}
+
+/// Skills master-detail (Z16, stable parity): create / import folder / import
+/// zip / open folder on the left, the selected skill's file tree and an editor
+/// for the selected file on the right.
+#[allow(clippy::too_many_arguments)]
+fn skills_panel(
+    lang: String,
+    state: Signal<ClientState>,
+    skills: Signal<Vec<FileCard>>,
+    mut skill_sel: Signal<String>,
+    mut skill_files: Signal<Vec<FileCard>>,
+    mut skill_path: Signal<String>,
+    mut skill_editor: Signal<String>,
+    mut skill_msg: Signal<String>,
+    mut skill_import: Signal<String>,
+    mut new_name: Signal<String>,
+    sc: ScopeSel,
+) -> Element {
+    let list = skills.read().clone();
+    let selected = skill_sel.read().clone();
+    let files = skill_files.read().clone();
+    let cur_path = skill_path.read().clone();
+
+    let open_skill = {
+        let state = state.clone();
+        let sc = sc.clone();
+        move |name: String| {
+            let state = state.clone();
+            let sc = sc.clone();
+            skill_sel.set(name.clone());
+            skill_path.set(String::new());
+            skill_editor.set(String::new());
+            spawn(async move {
+                match crate::vibeconfig::api_list_skill_files(
+                    token(&state),
+                    sc.scope.clone(),
+                    sc.cwd.clone(),
+                    sc.conn.clone(),
+                    name,
+                )
+                .await
+                {
+                    Ok(list) => skill_files.set(list),
+                    Err(e) => skill_msg.set(e.to_string()),
+                }
+            });
+        }
+    };
+
+    let item_rows: Vec<Element> = list
+        .iter()
+        .map(|s| {
+            let name = s.display_name.clone();
+            let cls = if name == selected {
+                "master-item selected"
+            } else {
+                "master-item"
+            };
+            let mut open = open_skill.clone();
+            rsx! {
+                button {
+                    key: "{name}",
+                    class: "{cls}",
+                    onclick: move |_| open(name.clone()),
+                    span { class: "master-item-name", "{name}" }
+                }
+            }
+        })
+        .collect();
+
+    let file_rows: Vec<Element> = files
+        .iter()
+        .map(|f| {
+            let path = f.path.clone();
+            let label = f.display_name.clone();
+            let content = f.content.clone();
+            let cls = if path == cur_path {
+                "cfg-file-item active"
+            } else {
+                "cfg-file-item"
+            };
+            rsx! {
+                button {
+                    key: "{path}",
+                    class: "{cls}",
+                    onclick: move |_| {
+                        skill_path.set(path.clone());
+                        skill_editor.set(content.clone());
+                    },
+                    "{label}"
+                }
+            }
+        })
+        .collect();
+
+    rsx! {
+        div { class: "settings-section",
+            div { class: "settings-section-header",
+                div { class: "settings-section-title", "{tr(&lang, \"skills\")}" }
+                div { class: "config-item-header-row",
+                    input {
+                        class: "field-input skill-new-name",
+                        r#type: "text",
+                        placeholder: "{tr(&lang, \"name\")}",
+                        value: "{new_name.read()}",
+                        oninput: move |e| new_name.set(e.value()),
+                    }
+                    button {
+                        class: "save-btn",
+                        onclick: {
+                            let state = state.clone();
+                            let sc = sc.clone();
+                            move |_| {
+                                let name = new_name.read().trim().to_string();
+                                if name.is_empty() {
+                                    return;
+                                }
+                                let state = state.clone();
+                                let sc = sc.clone();
+                                let mut skills = skills;
+                                spawn(async move {
+                                    match crate::vibeconfig::api_create_skill(
+                                        token(&state),
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                        name,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => {
+                                            skill_msg.set(String::new());
+                                            if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
+                                                token(&state),
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                                "skills".to_string(),
+                                            )
+                                            .await
+                                            {
+                                                skills.set(list);
+                                            }
+                                            new_name.set(String::new());
+                                        }
+                                        Err(e) => skill_msg.set(e.to_string()),
+                                    }
+                                });
+                            }
+                        },
+                        "{loc(&lang, \"Utwórz\", \"Create\")}"
+                    }
+                }
+            }
+            // import row: a path on this host (folder or .zip)
+            div { class: "field-row",
+                input {
+                    class: "field-input",
+                    r#type: "text",
+                    style: "flex:1;font-family:monospace;font-size:12px;",
+                    placeholder: "{loc(&lang, \"Ścieżka do folderu lub pliku .zip\", \"Path to a folder or .zip\")}",
+                    value: "{skill_import.read()}",
+                    oninput: move |e| skill_import.set(e.value()),
+                }
+                button {
+                    class: "save-btn",
+                    onclick: {
+                        let state = state.clone();
+                        let sc = sc.clone();
+                        move |_| {
+                            let src = skill_import.read().trim().to_string();
+                            if src.is_empty() {
+                                return;
+                            }
+                            let state = state.clone();
+                            let sc = sc.clone();
+                            let mut skills = skills;
+                            spawn(async move {
+                                let is_zip = src.to_lowercase().ends_with(".zip");
+                                let res = if is_zip {
+                                    crate::vibeconfig::api_import_skill_zip(
+                                        token(&state),
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                        src,
+                                        String::new(),
+                                    )
+                                    .await
+                                    .map(|n| n)
+                                } else {
+                                    crate::vibeconfig::api_import_skill_folder(
+                                        token(&state),
+                                        sc.scope.clone(),
+                                        sc.cwd.clone(),
+                                        sc.conn.clone(),
+                                        src,
+                                        String::new(),
+                                    )
+                                    .await
+                                };
+                                match res {
+                                    Ok(name) => {
+                                        skill_msg.set(format!("✅ {name}"));
+                                        skill_import.set(String::new());
+                                        if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
+                                            token(&state),
+                                            sc.scope.clone(),
+                                            sc.cwd.clone(),
+                                            sc.conn.clone(),
+                                            "skills".to_string(),
+                                        )
+                                        .await
+                                        {
+                                            skills.set(list);
+                                        }
+                                    }
+                                    Err(e) => skill_msg.set(format!("❌ {e}")),
+                                }
+                            });
+                        }
+                    },
+                    "{loc(&lang, \"Importuj\", \"Import\")}"
+                }
+                button {
+                    class: "save-btn",
+                    onclick: {
+                        let state = state.clone();
+                        let sc = sc.clone();
+                        move |_| {
+                            let state = state.clone();
+                            let sc = sc.clone();
+                            spawn(async move {
+                                match crate::vibeconfig::api_skills_dir(
+                                    token(&state),
+                                    sc.scope.clone(),
+                                    sc.cwd.clone(),
+                                    sc.conn.clone(),
+                                )
+                                .await
+                                {
+                                    Ok(dir) => {
+                                        let _ = crate::fsgit::api_open_externally(
+                                            token(&state),
+                                            dir,
+                                        )
+                                        .await;
+                                    }
+                                    Err(e) => skill_msg.set(e.to_string()),
+                                }
+                            });
+                        }
+                    },
+                    "{tr(&lang, \"previewOpenExternally\")}"
+                }
+            }
+            if !skill_msg.read().is_empty() {
+                div { class: "field-hint", "{skill_msg.read()}" }
+            }
+            div { class: "master-detail",
+                div { class: "master-list",
+                    if item_rows.is_empty() {
+                        div { class: "empty-text", "{tr(&lang, \"noData\")}" }
+                    }
+                    {item_rows.iter().cloned()}
+                }
+                div { class: "master-detail-panel",
+                    if selected.is_empty() {
+                        div { class: "empty-text",
+                            "{loc(&lang, \"Wybierz umiejętność z listy\", \"Pick a skill on the left\")}"
+                        }
+                    } else {
+                        div { class: "config-item-header-row",
+                            h4 { class: "config-item-name", "{selected}" }
+                            button {
+                                class: "save-btn",
+                                onclick: {
+                                    let state = state.clone();
+                                    let sc = sc.clone();
+                                    let name = selected.clone();
+                                    move |_| {
+                                        let state = state.clone();
+                                        let sc = sc.clone();
+                                        let name = name.clone();
+                                        let mut skills = skills;
+                                        spawn(async move {
+                                            match crate::vibeconfig::api_delete_skill(
+                                                token(&state),
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                                name,
+                                            )
+                                            .await
+                                            {
+                                                Ok(()) => {
+                                                    skill_sel.set(String::new());
+                                                    skill_files.set(Vec::new());
+                                                    skill_path.set(String::new());
+                                                    skill_editor.set(String::new());
+                                                    if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
+                                                        token(&state),
+                                                        sc.scope.clone(),
+                                                        sc.cwd.clone(),
+                                                        sc.conn.clone(),
+                                                        "skills".to_string(),
+                                                    )
+                                                    .await
+                                                    {
+                                                        skills.set(list);
+                                                    }
+                                                }
+                                                Err(e) => skill_msg.set(e.to_string()),
+                                            }
+                                        });
+                                    }
+                                },
+                                "🗑 {tr(&lang, \"deleteLabel\")}"
+                            }
+                        }
+                        div { class: "dirtree-col", {file_rows.iter().cloned()} }
+                        if !cur_path.is_empty() {
+                            textarea {
+                                class: "field-input",
+                                style: "min-height:200px;font-family:monospace;font-size:12px;white-space:pre;",
+                                value: "{skill_editor.read()}",
+                                oninput: move |e| skill_editor.set(e.value()),
+                            }
+                            button {
+                                class: "save-btn",
+                                style: "margin-top:8px;",
+                                onclick: {
+                                    let state = state.clone();
+                                    let sc = sc.clone();
+                                    let name = selected.clone();
+                                    move |_| {
+                                        let state = state.clone();
+                                        let sc = sc.clone();
+                                        let path = skill_path.read().clone();
+                                        let body = skill_editor.read().clone();
+                                        let name = name.clone();
+                                        spawn(async move {
+                                            let res = crate::vibeconfig::api_save_vibe_file(
+                                                token(&state),
+                                                sc.scope.clone(),
+                                                sc.cwd.clone(),
+                                                sc.conn.clone(),
+                                                path,
+                                                body,
+                                            )
+                                            .await;
+                                            match res {
+                                                Ok(()) => {
+                                                    skill_msg.set(String::new());
+                                                    if let Ok(list) = crate::vibeconfig::api_list_skill_files(
+                                                        token(&state),
+                                                        sc.scope.clone(),
+                                                        sc.cwd.clone(),
+                                                        sc.conn.clone(),
+                                                        name,
+                                                    )
+                                                    .await
+                                                    {
+                                                        skill_files.set(list);
+                                                    }
+                                                }
+                                                Err(e) => skill_msg.set(e.to_string()),
+                                            }
+                                        });
+                                    }
+                                },
+                                "{tr(&lang, \"saveLabel\")}"
+                            }
+                        }
+                    }
                 }
             }
         }

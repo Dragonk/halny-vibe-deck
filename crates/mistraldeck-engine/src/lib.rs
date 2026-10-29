@@ -1093,6 +1093,22 @@ impl Engine {
                 "thinking" => session.last_thinking = Some(value.clone()),
                 _ => {}
             }
+            // Z26: the thinking levels belong to the model — after a model
+            // change the whole chip set is re-derived, otherwise the picker
+            // keeps offering the previous model's levels.
+            if id == "model" {
+                let wd = session.working_directory.clone();
+                let (options, model, mode, thinking) = build_chip_options(
+                    &wd,
+                    session.last_model.clone(),
+                    session.last_mode.clone(),
+                    session.last_thinking.clone(),
+                );
+                session.config_options = options;
+                session.last_model = model;
+                session.last_mode = mode;
+                session.last_thinking = thinking;
+            }
         }
         match st.slot_of_session(&key) {
             Some(slot_id) => {
@@ -1689,7 +1705,12 @@ impl Engine {
                     let _ = slot.cmd.send(AgentCommand::IdentityRead);
                     let _ = slot.cmd.send(AgentCommand::AccountRead);
                     slot.modes = modes;
-                    slot.config_options = config_options.clone();
+                    // Z26: only an agent-provided list replaces the chips; an
+                    // empty payload keeps the config-derived lists (a snapshot
+                    // start never carries configOptions).
+                    if !config_options.is_empty() {
+                        slot.config_options = config_options.clone();
+                    }
                     if let Some(i) = slot_session {
                         if let Some(session) = st.sessions.get_mut(i) {
                             session.agent_session_id = Some(session_id.clone());
@@ -1700,7 +1721,11 @@ impl Engine {
                             }
                             // Per-session config mirror: the chips keep their
                             // values across slot-less switching + respawns.
-                            session.config_options = config_options.clone();
+                            // An empty agent payload keeps the config-derived
+                            // list (Z26) instead of blanking the pickers.
+                            if !config_options.is_empty() {
+                                session.config_options = config_options.clone();
+                            }
                             session.last_active_ms = now_ms();
                             // Nexus records lastModel/lastMode/lastThinking on
                             // every confirmed config-options payload
@@ -2327,39 +2352,39 @@ fn capitalize(s: &str) -> String {
 /// store on disk, `generations/*/runtime-state.json`) as the current
 /// values. A session that never went live never inherits the option
 /// lists of the previously viewed session.
-fn restore_session_chips(st: &mut EngineState) {
+/// Build the model/mode/thinking chip lists for one session from the CLI
+/// configuration **of that project** (Z26/Z27):
+/// - models: global `config.toml` merged with the project's own file,
+/// - thinking levels: the **selected model's** `thinking_levels`
+///   (each model has its own set — a model change must re-derive them),
+/// - modes: approval modes plus the global agents (`~/.vibe/agents`) and the
+///   project agents (`<cwd>/.vibe/agents`) only — with their descriptions,
+///   so a project never shows another project's agents.
+///
+/// Returns `(options, model, mode, thinking)` with the resolved current
+/// values (a value that does not exist in the new list falls back to a
+/// sensible default).
+pub fn build_chip_options(
+    wd: &str,
+    model: Option<String>,
+    mode: Option<String>,
+    thinking: Option<String>,
+) -> (
+    Vec<mistraldeck_core::proto::ConfigOption>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     use mistraldeck_core::proto::{ConfigOption, ConfigOptionChoice};
-    let Some(i) = st.current else { return };
-    let Some(session) = st.sessions.get(i) else { return };
-    if !session.config_options.is_empty() {
-        return; // live (or already restored) — keep the recorded lists
-    }
-    let agent_id = session.agent_session_id.clone();
-    let wd = session.working_directory.clone();
-    let mut model = session.last_model.clone();
-    let mut mode = session.last_mode.clone();
-    let mut thinking = session.last_thinking.clone();
-    // Missing last* values come from the unified store on disk (Nexus
-    // `vibeSessionLastConfig`: newest generation with an active_model).
-    if model.is_none() || mode.is_none() || thinking.is_none() {
-        if let Some(last) = agent_id
-            .as_deref()
-            .and_then(mistraldeck_vibe::load_session_last_config)
-        {
-            model = model.or(last.model);
-            mode = mode.or(last.mode);
-            thinking = thinking.or(last.thinking);
-        }
-    }
-
-    // Model list: global config + project config of the session cwd,
-    // merged by key (alias||name) — project entries override.
     let key_of = |m: &mistraldeck_vibe::ModelConfig| {
         m.alias.clone().unwrap_or_else(|| m.name.clone())
     };
+
+    // Model list: global config + project config of the session cwd,
+    // merged by key (alias||name) — project entries override.
     let mut models = mistraldeck_vibe::VibeConfigFile::load().models();
     if !wd.is_empty() {
-        if let Some(p) = mistraldeck_vibe::find_project_config(std::path::Path::new(&wd)) {
+        if let Some(p) = mistraldeck_vibe::find_project_config(std::path::Path::new(wd)) {
             if let Ok(pcfg) = mistraldeck_vibe::VibeConfigFile::load_at(&p) {
                 for pm in pcfg.models() {
                     match models.iter().position(|m| key_of(m) == key_of(&pm)) {
@@ -2393,25 +2418,23 @@ fn restore_session_chips(st: &mut EngineState) {
             .unwrap_or_else(|| levels.last().cloned().unwrap_or_default());
     }
 
-    // Agents join the mode list (global + project, top-level only,
-    // deduped by name — Nexus `agentNames` set).
-    let mut agents = mistraldeck_vibe::AgentFile::load_all();
-    if !wd.is_empty() {
-        agents.extend(mistraldeck_vibe::AgentFile::load_all_in(
-            &std::path::Path::new(&wd).join(".vibe").join("agents"),
-        ));
-    }
+    // Global agents join the mode list (top-level only, deduped by name —
+    // Nexus `agentNames` set); descriptions travel with each choice so the
+    // picker explains what the mode does. **Project** agents
+    // (`<cwd>/.vibe/agents`) are merged by the client for the session's own
+    // project only, and are exposed to `~/.vibe/agents` before activation.
+    let agents = mistraldeck_vibe::AgentFile::load_all();
     let mut mode_choices: Vec<ConfigOptionChoice> = [
-        ("ask", "Ask"),
-        ("accept-edits", "Accept Edits"),
-        ("smart-approve", "Smart Approve"),
-        ("auto-approve", "Auto Approve"),
+        ("ask", "Ask", "Ask before every tool call"),
+        ("accept-edits", "Accept Edits", "Apply file edits without asking"),
+        ("smart-approve", "Smart Approve", "Ask only for risky commands"),
+        ("auto-approve", "Auto Approve", "Run everything without asking"),
     ]
     .iter()
-    .map(|(v, n)| ConfigOptionChoice {
+    .map(|(v, n, d)| ConfigOptionChoice {
         value: v.to_string(),
         name: n.to_string(),
-        description: String::new(),
+        description: d.to_string(),
     })
     .collect();
     let mut seen = std::collections::HashSet::new();
@@ -2425,15 +2448,23 @@ fn restore_session_chips(st: &mut EngineState) {
         mode_choices.push(ConfigOptionChoice {
             value: a.name.clone(),
             name: a.display_name.clone().unwrap_or_else(|| a.name.clone()),
-            description: String::new(),
+            description: a
+                .description
+                .clone()
+                .unwrap_or_else(|| a.active_model.clone().unwrap_or_default()),
         });
+    }
+
+    let mut mode_current = mode.clone().unwrap_or_else(|| "accept-edits".to_string());
+    if !mode_choices.iter().any(|c| c.value == mode_current) {
+        mode_current = "accept-edits".to_string();
     }
 
     let options = vec![
         ConfigOption {
             id: "mode".to_string(),
             name: "Mode".to_string(),
-            current_value: mode.clone().unwrap_or_else(|| "accept-edits".to_string()),
+            current_value: mode_current.clone(),
             choices: mode_choices,
         },
         ConfigOption {
@@ -2463,17 +2494,46 @@ fn restore_session_chips(st: &mut EngineState) {
                 .collect(),
         },
     ];
+    let thinking_out = if thinking_current.is_empty() {
+        thinking
+    } else {
+        Some(thinking_current)
+    };
+    (options, model, Some(mode_current), thinking_out)
+}
+
+fn restore_session_chips(st: &mut EngineState) {
+    let Some(i) = st.current else { return };
+    let Some(session) = st.sessions.get(i) else { return };
+    if !session.config_options.is_empty() {
+        return; // live (or already restored) — keep the recorded lists
+    }
+    let agent_id = session.agent_session_id.clone();
+    let wd = session.working_directory.clone();
+    let mut model = session.last_model.clone();
+    let mut mode = session.last_mode.clone();
+    let mut thinking = session.last_thinking.clone();
+    // Missing last* values come from the unified store on disk (Nexus
+    // `vibeSessionLastConfig`: newest generation with an active_model).
+    if model.is_none() || mode.is_none() || thinking.is_none() {
+        if let Some(last) = agent_id
+            .as_deref()
+            .and_then(mistraldeck_vibe::load_session_last_config)
+        {
+            model = model.or(last.model);
+            mode = mode.or(last.mode);
+            thinking = thinking.or(last.thinking);
+        }
+    }
+
+    let (options, model, mode, thinking) = build_chip_options(&wd, model, mode, thinking);
 
     let Some(session) = st.sessions.get_mut(i) else { return };
     if session.config_options.is_empty() {
         session.config_options = options;
         session.last_model = model;
         session.last_mode = mode;
-        session.last_thinking = if thinking_current.is_empty() {
-            thinking
-        } else {
-            Some(thinking_current)
-        };
+        session.last_thinking = thinking;
     }
 }
 

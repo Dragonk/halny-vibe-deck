@@ -297,6 +297,40 @@ mod imp {
         Ok(target)
     }
 
+    /// Base64 of a whole file (download button; capped so a huge binary
+    /// cannot blow up the response).
+    pub fn download_base64(
+        path: &str,
+        remote_id: Option<&str>,
+        _remote_root: &str,
+    ) -> Result<String, ServerFnError> {
+        use base64::Engine as _;
+        let bytes = if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            // Remote download: the file is base64-encoded on the host so the
+            // SSH pipe stays text (same trick as the preview reader).
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            let cmd = format!("base64 -w0 {}", mistraldeck_engine::remote::shq(path));
+            let res = mistraldeck_engine::remote::ssh_run(&conn, &cmd, 120_000, None);
+            if res.code != 0 {
+                return Err(ServerFnError::new(format!("ssh failed: {}", res.stderr)));
+            }
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(res.stdout.trim().as_bytes())
+                .map_err(|e| ServerFnError::new(e.to_string()))?
+        } else {
+            let p = std::path::Path::new(path);
+            let meta = std::fs::metadata(p).map_err(|e| ServerFnError::new(e.to_string()))?;
+            if meta.len() > 64 * 1024 * 1024 {
+                return Err(ServerFnError::new("file is larger than 64 MB"));
+            }
+            std::fs::read(p).map_err(|e| ServerFnError::new(e.to_string()))?
+        };
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
     pub fn list_dir(
         path: &str,
         remote_id: Option<&str>,
@@ -1110,6 +1144,18 @@ pub async fn api_list_dir(
 ) -> Result<Vec<FileEntry>, ServerFnError> {
     imp::check(&token)?;
     imp::list_dir(&path, remote_id.as_deref(), &remote_root)
+}
+
+/// Raw bytes of one file as base64 (preview header "download", Z21).
+#[server]
+pub async fn api_download_base64(
+    token: String,
+    path: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    imp::download_base64(&path, remote_id.as_deref(), &remote_root)
 }
 
 /// Open a file with the OS default application (desktop only; the browser
