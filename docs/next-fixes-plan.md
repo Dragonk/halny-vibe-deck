@@ -152,3 +152,14 @@ reads the on-disk config; it passes in isolation and on re-run.
 | Chat autoscroll | body-level MutationObserver + effect on session/message change (streaming + historical open land at bottom) |
 | Input card | textarea `border:none` (no double bar) |
 | Sidebar | max 10 rows per project + "show all" row; projects list fills height and scrolls; nav pinned; "CLI session" names fall back to index title / first user prompt |
+
+## Round 5 — preview drop-upload + tools/subagent/usage audit (2026-10-29, released as 1.99.9)
+
+| Area | Fix |
+|---|---|
+| File tree drag & drop | drop on folder row → upload into that dir (file row → parent dir, root crumb → displayed dir), local + SSH via `api_write_binary`; `drop-target` highlight, 800 ms hover auto-expand, uploading indicator, failure count |
+| Tools mapping | `agents.list`/`agents.list_configs` → real result card (agents_list_block, subagentNoActive i18n ×6); subagent/task routing verified before rich content in both ToolCallBlock and StepRow |
+| Bash output | "Ran X" summary-only outputs re-read full tool result from disk (`api_session_tool_result`); structured command/stdout/stderr/returncode parsing (stderr only rc≠0) audited vs stable |
+| Active task marker | subagent calls with childSessionId stay `running` until the CLI closes them (not force-done on PromptCompleted); spinner CSS verified |
+| Subagent context | disk preview restores `kind == "subagent"` meta (agent/task/childSessionId) → prompt visible + Show work loads child transcript |
+| Subagent usage | child-session tokenUsage (incl. cached input) + cost rolled into every UsageUpdate (appserver) and into the disk preview → counted in the bottom usage bar |

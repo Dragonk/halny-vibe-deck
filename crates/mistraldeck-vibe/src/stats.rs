@@ -584,6 +584,49 @@ pub fn load_subagent_sessions(parent_session_id: &str) -> Vec<VibeSubagentSessio
     subs
 }
 
+/// Token usage + cost rolled up across all subagent child sessions of a
+/// parent session (v1.99.9): the CLI reports subagent usage separately from
+/// the parent's `usage_update` (the parent run explicitly excludes child
+/// tokens), so the deck reads each child's unified dir
+/// (`unified/child-<id>` → `generations/<gen>/projection-state.json`
+/// `snapshot.session.tokenUsage`) and adds the totals into the usage bar.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SubagentUsageTotals {
+    pub usage: PreviewUsage,
+    pub cost: f64,
+}
+
+pub fn subagent_usage_totals(parent_session_id: &str) -> SubagentUsageTotals {
+    let mut totals = SubagentUsageTotals::default();
+    let prices = crate::config::model_prices();
+    for sub in load_subagent_sessions(parent_session_id) {
+        let sid = sub.session_id.trim();
+        if sid.is_empty() {
+            continue;
+        }
+        let Some(dir) = find_preview_dir(sid) else {
+            continue;
+        };
+        if let Some(u) = load_unified_usage(&dir) {
+            totals.usage.prompt_tokens += u.input_tokens;
+            totals.usage.cached_tokens += u.cached_tokens;
+            totals.usage.completion_tokens += u.output_tokens;
+            totals.usage.total_tokens += u.total_tokens;
+            if !prices.is_empty() {
+                let model = load_session_last_config(sid).and_then(|c| c.model);
+                totals.cost += session_cost_from_prices(
+                    &prices,
+                    model.as_deref(),
+                    u.input_tokens,
+                    u.cached_tokens,
+                    u.output_tokens,
+                );
+            }
+        }
+    }
+    totals
+}
+
 /// Totals across all sessions, for the Stats dashboard.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AggregateStats {
@@ -625,6 +668,21 @@ pub struct PreviewThinking {
     pub content: String,
 }
 
+/// v0.13 subagent invocation meta recovered from a stored effect
+/// (`detail.kind == "subagent"`) — prompt + child session id, so historical
+/// subagent cards keep the "Show work" affordance.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PreviewSubagent {
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub task: String,
+    #[serde(default)]
+    pub child_session_id: Option<String>,
+}
+
 /// One tool call line of a preview message (`status`: `done` | `error`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PreviewToolCall {
@@ -634,6 +692,9 @@ pub struct PreviewToolCall {
     /// WHICH tool ran when the display summary is a bare action word.
     #[serde(default)]
     pub tool_name: String,
+    /// v0.13 subagent meta (agents.spawn / task) when the effect says so.
+    #[serde(default)]
+    pub subagent: Option<PreviewSubagent>,
 }
 
 /// One message of a session preview (Nexus `SubagentWorkData.messages`).
@@ -827,11 +888,55 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                     .and_then(|s| s.as_str())
                     .filter(|s| !s.is_empty())
                     .unwrap_or(if tool_name.is_empty() { "tool" } else { &tool_name });
+                // v0.13: subagent invocation (agents.spawn / task) — prompt
+                // + child session id from the effect detail / output meta.
+                let subagent = if det
+                    .and_then(|d| d.get("kind"))
+                    .and_then(|k| k.as_str())
+                    == Some("subagent")
+                {
+                    let out = state.and_then(|s| s.get("output"));
+                    let sa_meta = out
+                        .and_then(|o| o.get("_meta"))
+                        .and_then(|m| m.get("mistral.vibe.subagent"));
+                    let tin = det.and_then(|d| d.get("input"));
+                    let child_raw = det
+                        .and_then(|d| d.get("childSessionId"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            sa_meta
+                                .and_then(|m| m.get("childSessionId"))
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                        });
+                    Some(PreviewSubagent {
+                        agent: tin
+                            .and_then(|t| t.get("agent"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        agent_name: det
+                            .and_then(|d| d.get("agentName"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        task: tin
+                            .and_then(|t| t.get("task"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        child_session_id: child_raw,
+                    })
+                } else {
+                    None
+                };
                 if let Some(ai) = &mut cur_ai {
                     ai.tool_calls.push(PreviewToolCall {
                         title: title.to_string(),
                         status: if success { "done" } else { "error" }.to_string(),
                         tool_name,
+                        subagent,
                     });
                 }
             }
@@ -1701,5 +1806,71 @@ mod tests {
         assert_eq!(plan[0].content, "final");
         assert_eq!(plan[0].status, "pending");
         assert_eq!(plan[0].priority.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn subagent_effect_meta_is_kept_in_preview() {
+        let entries = vec![serde_json::json!({
+            "type": "effect",
+            "id": "e1",
+            "detail": {
+                "kind": "subagent",
+                "toolName": "agents.spawn",
+                "input": { "agent": "reviewer", "task": "check the diff" },
+                "childSessionId": "c1"
+            },
+            "state": { "decision": "execute", "output": {} }
+        })];
+        let msgs = build_preview_messages(&entries);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].tool_calls.len(), 1);
+        let sa = msgs[0].tool_calls[0].subagent.as_ref().expect("subagent meta");
+        assert_eq!(sa.agent.as_deref(), Some("reviewer"));
+        assert_eq!(sa.task, "check the diff");
+        assert_eq!(sa.child_session_id.as_deref(), Some("c1"));
+        assert_eq!(msgs[0].tool_calls[0].status, "done");
+    }
+
+    #[test]
+    fn subagent_usage_totals_roll_up_child_sessions() {
+        let home = std::env::temp_dir().join(format!("vd-subagent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let unified = home.join("logs").join("session").join("unified");
+        // Parent session with one subagent child (agents/<agent>/meta.json).
+        let parent = unified.join("parent-1");
+        let agent_dir = parent.join("agents").join("reviewer");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(parent.join("meta.json"), r#"{"session_id":"parent-1"}"#).unwrap();
+        std::fs::write(
+            agent_dir.join("meta.json"),
+            r#"{"session_id":"c1","agent_profile":{"name":"reviewer"},"start_time":"t"}"#,
+        )
+        .unwrap();
+        // Child session unified dir with its own token usage.
+        let child = unified.join("child-c1");
+        let gen = child.join("generations").join("7");
+        std::fs::create_dir_all(&gen).unwrap();
+        std::fs::write(child.join("CURRENT"), "7").unwrap();
+        std::fs::write(
+            gen.join("projection-state.json"),
+            r#"{"snapshot":{"session":{"tokenUsage":{"inputTokens":100,"cachedInputTokens":40,"outputTokens":10,"totalTokens":110},"contextUsage":{"totalTokens":100}}}}"#,
+        )
+        .unwrap();
+
+        std::env::set_var("VIBE_HOME", &home);
+        let subs = load_subagent_sessions("parent-1");
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].session_id, "c1");
+        assert_eq!(subs[0].agent_name, "reviewer");
+        let totals = subagent_usage_totals("parent-1");
+        assert_eq!(totals.usage.prompt_tokens, 100.0);
+        assert_eq!(totals.usage.cached_tokens, 40.0);
+        assert_eq!(totals.usage.completion_tokens, 10.0);
+        assert_eq!(totals.usage.total_tokens, 110.0);
+        // Unknown parent: zeros, no panic.
+        let none = subagent_usage_totals("no-such-session");
+        assert_eq!(none.usage.total_tokens, 0.0);
+        std::env::remove_var("VIBE_HOME");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

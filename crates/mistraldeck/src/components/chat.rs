@@ -1307,7 +1307,80 @@ fn parse_bash_output(raw: &str) -> BashOut {
 
 /// Port of Nexus `BashBlock`: `$ cmd` line + stdout, stderr only when the
 /// return code is non-zero; the one-line "Ran X" summary shows no output.
-fn bash_block(tc: &mistraldeck_core::types::ToolCall) -> Element {
+/// Nexus `BashBlock` parity: command line + structured
+/// `command:/stdout:/stderr:/returncode:` output (stderr shown only when
+/// returncode != 0). When the wire output is a bare "Ran X" summary, the full
+/// tool result is re-read from the session log on disk (Nexus IPC
+/// enrichment via `stats:vibe-session-messages`).
+#[component]
+fn BashBlock(tc: mistraldeck_core::types::ToolCall) -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let ipc_out: Signal<Option<String>> = use_signal(|| None);
+    let ipc_loading = use_signal(|| false);
+    let mut fetched_for: Signal<String> = use_signal(String::new);
+
+    let out_raw = tc.output.clone().unwrap_or_default();
+    let raw_out = parse_tool_output(&out_raw);
+    let is_summary_only = match &raw_out {
+        Some(out) => {
+            let t = out.trim();
+            t.len() >= 3
+                && t[..3].eq_ignore_ascii_case("ran")
+                && t.as_bytes().get(3) == Some(&b' ')
+                && !t[3..].trim_start().is_empty()
+                && !out.contains('\n')
+        }
+        None => true,
+    };
+    // Local sessions only — the transcript api reads the local vibe log dir.
+    let session_id = {
+        let s = state.read();
+        s.snapshot
+            .current
+            .and_then(|i| s.snapshot.sessions.get(i))
+            .and_then(|m| {
+                if m.remote_id.is_some() {
+                    None
+                } else {
+                    m.agent_session_id.clone()
+                }
+            })
+    };
+    if is_summary_only && !out_raw.is_empty() {
+        let key = format!("{}:{}", tc.id, session_id.clone().unwrap_or_default());
+        if *fetched_for.read() != key {
+            if let Some(sid) = session_id.clone() {
+                fetched_for.set(key);
+                let state = state.clone();
+                let tc_id = tc.id.clone();
+                let mut ipc_loading = ipc_loading.clone();
+                let mut ipc_out = ipc_out.clone();
+                spawn(async move {
+                    ipc_loading.set(true);
+                    if let Ok(Some(content)) = crate::vibestats::api_session_tool_result(
+                        crate::state::token(&state),
+                        sid,
+                        tc_id,
+                    )
+                    .await
+                    {
+                        ipc_out.set(Some(content));
+                    }
+                    ipc_loading.set(false);
+                });
+            }
+        }
+    }
+    let override_out = ipc_out.read().clone();
+    let loading = *ipc_loading.read();
+    bash_block(&tc, override_out, loading)
+}
+
+fn bash_block(
+    tc: &mistraldeck_core::types::ToolCall,
+    ipc_override: Option<String>,
+    ipc_loading: bool,
+) -> Element {
     let input = tool_input(tc);
     let title_cmd = if tc.title.len() >= 5 && tc.title[..5].eq_ignore_ascii_case("bash:") {
         tc.title[5..].trim().to_string()
@@ -1337,7 +1410,18 @@ fn bash_block(tc: &mistraldeck_core::types::ToolCall) -> Element {
         }
         None => true,
     };
-    let display_out: Option<String> = if is_summary_only { None } else { raw_out };
+    // Nexus: `displayOut = ipcOut ?? (isSummaryOnly ? null : rawOut)` — the
+    // disk-loaded full result fills in when the wire output was a summary.
+    let display_out: Option<String> = match &ipc_override {
+        Some(o) if is_summary_only => Some(o.clone()),
+        _ => {
+            if is_summary_only {
+                None
+            } else {
+                raw_out
+            }
+        }
+    };
 
     let (stdout_text, stderr_text) = match &display_out {
         Some(out) if out.contains("stdout:") || out.contains("returncode:") => {
@@ -1375,9 +1459,16 @@ fn bash_block(tc: &mistraldeck_core::types::ToolCall) -> Element {
         None => VNode::empty(),
     };
 
+    let loading_el: Element = if ipc_loading {
+        rsx! { div { class: "tool-read-meta", "…" } }
+    } else {
+        VNode::empty()
+    };
+
     rsx! {
         div { class: "tool-rich-bash",
             {cmd_el}
+            {loading_el}
             {out_el}
             {err_el}
         }
@@ -2077,6 +2168,118 @@ fn glob_block(tc: &mistraldeck_core::types::ToolCall, input: &serde_json::Value)
 /// Port of Nexus `ToolCallRichContent`: route a tool call to a rich block by
 /// diffs → canonical tool name → title/input heuristics. None = fall through
 /// to the generic JSON body.
+/// Port of Nexus v1.0.37 `AgentsListBlock`: the agents.list /
+/// agents.list_configs result card — a table of subagents with their live
+/// status (spinner while `pending_turn`).
+fn agents_list_block(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Element {
+    let raw: serde_json::Value = tc
+        .raw_output_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .or_else(|| {
+            tc.output
+                .as_deref()
+                .and_then(|j| serde_json::from_str(j).ok())
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let list: Vec<serde_json::Value> = raw
+        .get("agents")
+        .and_then(|v| v.as_array())
+        .or_else(|| raw.get("subagents").and_then(|v| v.as_array()))
+        .cloned()
+        .unwrap_or_default();
+
+    let running = tc.status == ToolStatus::Running;
+    let status_cls = if running {
+        "subagent-status running"
+    } else {
+        "subagent-status"
+    };
+    let head_icon = match tc.status {
+        ToolStatus::Running => rsx! { StatusIcon { status: ToolStatus::Running } },
+        ToolStatus::Error => rsx! { "✕" },
+        ToolStatus::Done => rsx! { "✓" },
+    };
+
+    let body: Element = if list.is_empty() {
+        rsx! { div { class: "agents-list-empty", "{tr(lang, \"subagentNoActive\")}" } }
+    } else {
+        let rows: Vec<Element> = list
+            .iter()
+            .map(|a| {
+                let name = a
+                    .get("name")
+                    .or_else(|| a.get("agent"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let status_raw = a
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| {
+                        if a.get("pending_turn").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            "running".to_string()
+                        } else {
+                            "idle".to_string()
+                        }
+                    });
+                let failed = status_raw == "failed" || status_raw == "error";
+                let pending = status_raw == "running"
+                    || a.get("pending_turn").and_then(|v| v.as_bool()).unwrap_or(false);
+                let icon = if pending {
+                    rsx! { StatusIcon { status: ToolStatus::Running } }
+                } else if failed {
+                    rsx! { "✕" }
+                } else {
+                    rsx! { "✓" }
+                };
+                let err = a.get("error").and_then(|v| v.as_str()).unwrap_or("");
+                let cls = if failed {
+                    "agents-list-status error"
+                } else {
+                    "agents-list-status"
+                };
+                rsx! {
+                    tr {
+                        td { class: "agents-list-name", "{name}" }
+                        td { class: "{cls}",
+                            {icon}
+                            span { "{status_raw}" }
+                            if !err.is_empty() {
+                                span { class: "agents-list-error", "{err}" }
+                            }
+                        }
+                    }
+                }
+            })
+            .collect();
+        rsx! {
+            table { class: "agents-list-table",
+                thead {
+                    tr {
+                        th { "{tr(lang, \"subagent\")}" }
+                        th { "{tr(lang, \"toolRunning\")}" }
+                    }
+                }
+                tbody {
+                    {rows.iter().cloned()}
+                }
+            }
+        }
+    };
+
+    rsx! {
+        div { class: "agents-list-card",
+            div { class: "agents-list-header",
+                span { class: "agents-list-title", "{tc.title}" }
+                span { class: "{status_cls}", {head_icon} }
+            }
+            {body}
+        }
+    }
+}
+
 fn tool_call_rich(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Option<Element> {
     let name = tc.title.to_lowercase();
     let input = tool_input(tc);
@@ -2088,7 +2291,7 @@ fn tool_call_rich(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Option<
     // Canonical tool name from the app-server `_meta` — precise routing before the
     // title/input heuristics below.
     if tn == "bash" || tn == "file_system.bash" {
-        return Some(bash_block(tc));
+        return Some(rsx! { BashBlock { tc: tc.clone() } });
     }
     if tn == "read_file" || tn == "file_system.read_file" || tn.ends_with(".read_file") {
         return Some(read_file_block(tc, lang));
@@ -2098,6 +2301,15 @@ fn tool_call_rich(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Option<
     }
     if tn == "search_tool_functions" || tn == "vibe.todo" {
         return Some(tool_line_block(tc));
+    }
+    // v1.0.37 parity: agents.list / agents.list_configs render their result
+    // (the card used to show the bare title, which read as "no subagents").
+    if tn == "agents.list"
+        || tn == "agents.list_configs"
+        || name.contains("listing subagents")
+        || name.contains("listed subagents")
+    {
+        return Some(agents_list_block(tc, lang));
     }
 
     let has_bash_input = input.get("command").map_or(false, |v| v.is_string())
@@ -2134,7 +2346,7 @@ fn tool_call_rich(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Option<
         || name.contains("cmd")
         || has_bash_input
     {
-        return Some(bash_block(tc));
+        return Some(rsx! { BashBlock { tc: tc.clone() } });
     }
     // read_file / view / cat
     if name == "read_file"

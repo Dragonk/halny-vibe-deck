@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.99.9 — preview drop-upload + tools/subagent/usage round (2026-10-29)
+
+**Preview (dock)**
+- **Drag & drop upload onto the file tree** (stable v1.0.26 parity): dropping files on a folder row uploads them into that directory (dropping on a file row uses its parent; dropping on the root crumb uses the displayed directory), local or over SSH via `api_write_binary`, then reloads the listing. Hover highlight (`drop-target`), 800 ms hover auto-expands a collapsed folder, `filetree-uploading` indicator while writing, failure count in the tree message line.
+
+**Chat — tool rendering audit (stable v1.0.37 parity)**
+- `agents.list` / `agents.list_configs` now render a real **result card** (subagent table with live status spinner / ✓ / ✕ + error text, empty state) instead of falling through to the glob card or the bare title — new `agents_list_block` + `subagentNoActive` i18n in all 6 languages.
+- Bash calls whose wire output is only a "Ran X" summary now re-read the **full tool result from the session log on disk** (new `api_session_tool_result`, local sessions) and show the real stdout/stderr — same as stable's IPC enrichment. Structured `command:/stdout:/stderr:/returncode:` parsing with stderr only on non-zero exit was already in place and is unchanged.
+- **Active-task marker**: `agents.spawn` / `task` calls with a child session are no longer force-closed on `PromptCompleted` — they stay `running` (spinner) while the child works and close when the CLI reports the terminal status (stable v1.0.37 behavior); all other stuck calls are still closed.
+- Edit diffs (git-style hunks with line numbers, `@@ -a,b +c,d @@` headers, success badge, `<tool_error>` output), read_file, grep/glob, process and todo lines were audited against stable and match.
+
+**Subagents**
+- Historical sessions keep the subagent card fully working: the `kind == "subagent"` effect meta (agent, task prompt, `childSessionId`) is now parsed from the on-disk projection into the preview transcript, so the prompt is visible and **"Show work"** loads the child session's transcript (prompt + tool calls + answers) via `api_session_preview`.
+- **Usage bar now includes subagent tokens**: the CLI reports child-session usage separately from the parent's `usage_update`, so the appserver rolls each child's `tokenUsage` (input / **cached input** / output / total) plus its cost into every `UsageUpdate`, and the lazy-resume disk preview does the same (`subagent_usage_totals` over `unified/child-<id>`). Cache in/out of subagents is therefore counted in the bottom-of-chat stats.
+
 ## 1.99.8 — settings/dock/sidebar round (2026-10-29)
 
 **Server**

@@ -297,6 +297,104 @@ fn js_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
+/// Drag & drop upload onto the dock file tree (stable v1.0.26 parity):
+/// files dropped on a folder row (or the root crumb) are read as base64,
+/// parked on `window.__vdDropTree` as `{dir, files:[{name,b64}]}`, and the
+/// hidden `#vd-droptree-bridge` button is clicked — the Rust handler writes
+/// them into the target directory (session root confined, local or SSH)
+/// and reloads the listing. Hovering a collapsed folder for 800 ms expands
+/// it; the hovered row gets the `drop-target` highlight. Scoped to the dock
+/// (capture phase + stopPropagation) so the chat drop handler never sees
+/// these events.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const DROP_TREE_JS: &str = r#"
+(function () {
+  if (window.__vdDropTreeInit) return; window.__vdDropTreeInit = 1;
+  function hasFiles(e) {
+    try { return Array.from(e.dataTransfer.types || []).includes('Files'); } catch (err) { return false; }
+  }
+  function treeItem(e) {
+    var t = e.target;
+    if (!t || !t.closest) return null;
+    return t.closest('.dock .filetree-item');
+  }
+  function rootEl(e) {
+    var t = e.target;
+    if (!t || !t.closest) return null;
+    return t.closest('.dock .filetree-root');
+  }
+  var holdTimers = {};
+  function clearHold(p) { if (holdTimers[p]) { clearTimeout(holdTimers[p]); delete holdTimers[p]; } }
+  function clearHighlights() {
+    var els = document.querySelectorAll('.filetree-item.drop-target, .filetree-root.drop-target');
+    for (var i = 0; i < els.length; i++) els[i].classList.remove('drop-target');
+  }
+  document.addEventListener('dragover', function (e) {
+    if (!hasFiles(e)) return;
+    var item = treeItem(e);
+    var root = item ? null : rootEl(e);
+    if (!item && !root) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearHighlights();
+    var el = item || root;
+    el.classList.add('drop-target');
+    if (item) {
+      var p = item.getAttribute('data-path') || '';
+      // hovering a collapsed folder briefly expands it
+      if (item.getAttribute('data-isdir') === '1' && !item.classList.contains('open')) {
+        if (!holdTimers[p]) {
+          holdTimers[p] = setTimeout(function () { delete holdTimers[p]; item.click(); }, 800);
+        }
+      }
+    }
+  }, true);
+  document.addEventListener('dragleave', function (e) {
+    var item = treeItem(e);
+    var rel = e.relatedTarget;
+    if (item) {
+      if (rel && item.contains(rel)) return;
+      item.classList.remove('drop-target');
+      clearHold(item.getAttribute('data-path') || '');
+    }
+    var root = rootEl(e);
+    if (root && !(rel && root.contains(rel))) root.classList.remove('drop-target');
+  }, true);
+  document.addEventListener('drop', function (e) {
+    if (!hasFiles(e)) return;
+    var item = treeItem(e);
+    var root = item ? null : rootEl(e);
+    if (!item && !root) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearHighlights();
+    for (var k in holdTimers) clearHold(k);
+    var dir = '';
+    if (item) {
+      var p = item.getAttribute('data-path') || '';
+      // dropping on a file row uploads into its parent directory
+      dir = item.getAttribute('data-isdir') === '1' ? p : p.split('/').slice(0, -1).join('/');
+    } else {
+      dir = root.getAttribute('data-path') || '';
+    }
+    var files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    window.__vdDropTree = { dir: dir, files: [] };
+    var pending = files.length;
+    files.forEach(function (f) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var url = String(reader.result || '');
+        window.__vdDropTree.files.push({ name: f.name, b64: url.split(',')[1] || '' });
+        if (--pending === 0) { var b = document.getElementById('vd-droptree-bridge'); if (b) b.click(); }
+      };
+      reader.onerror = function () { if (--pending === 0) { var b = document.getElementById('vd-droptree-bridge'); if (b) b.click(); } };
+      reader.readAsDataURL(f);
+    });
+  }, true);
+})();
+"#;
+
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
@@ -609,6 +707,18 @@ fn files_panel(
     next_id: Signal<u64>,
 ) -> Element {
     let file_ctx = use_signal(|| None::<FileCtx>);
+    let uploading = use_signal(|| false);
+    // one-shot: install the file-tree drag & drop bridge (client only)
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        let mut js_init = use_signal(|| false);
+        if !*js_init.read() {
+            js_init.set(true);
+            spawn(async move {
+                let _ = dioxus::document::eval(DROP_TREE_JS);
+            });
+        }
+    }
     let list = entries.read().clone();
     let msg = files_msg.read().clone();
 
@@ -927,9 +1037,97 @@ fn files_panel(
         VNode::empty()
     };
 
+    let uploading_el: Element = if *uploading.read() {
+        rsx! { div { class: "filetree-uploading", "⬆ …" } }
+    } else {
+        VNode::empty()
+    };
+
     rsx! {
         div { class: "filetree",
+            // hidden bridge: DROP_TREE_JS parks dropped files on
+            // window.__vdDropTree and clicks this — the handler uploads
+            // them into the hovered directory (local or over SSH)
+            button {
+                id: "vd-droptree-bridge",
+                style: "display:none",
+                onclick: {
+                    let state = state.clone();
+                    let mut uploading = uploading.clone();
+                    let mut files_msg = files_msg.clone();
+                    let entries = entries.clone();
+                    let mut children = children.clone();
+                    let cwd2 = cwd.clone();
+                    let remote_id = remote_id.clone();
+                    let root = root.clone();
+                    let lang3 = lang.clone();
+                    move |_| {
+                        let state = state.clone();
+                        let mut uploading = uploading.clone();
+                        let mut files_msg = files_msg.clone();
+                        let mut entries = entries.clone();
+                        let mut children = children.clone();
+                        let cwd2 = cwd2.clone();
+                        let remote_id = remote_id.clone();
+                        let root = root.clone();
+                        let lang = lang3.clone();
+                        spawn(async move {
+                            // used only on web/desktop (the JS bridge below)
+                            let _ = &uploading;
+                            #[cfg(any(feature = "web", feature = "desktop"))]
+                            {
+                                let payload = dioxus::document::eval("return window.__vdDropTree || null;")
+                                    .join::<serde_json::Value>()
+                                    .await
+                                    .ok()
+                                    .unwrap_or(serde_json::Value::Null);
+                                let _ = dioxus::document::eval("window.__vdDropTree = null;").await;
+                                let dir = payload
+                                    .get("dir")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let files = payload
+                                    .get("files")
+                                    .and_then(|v| v.as_array().cloned())
+                                    .unwrap_or_default();
+                                let total = files.len();
+                                if total == 0 { return; }
+                                uploading.set(true);
+                                let tok = token(&state);
+                                let mut failed = 0usize;
+                                for f in files {
+                                    let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("file").to_string();
+                                    let b64 = f.get("b64").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    if b64.is_empty() { failed += 1; continue; }
+                                    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect();
+                                    let target = if dir.is_empty() { safe } else { format!("{dir}/{safe}") };
+                                    if crate::fsgit::api_write_binary(tok.clone(), target, b64, remote_id.clone(), root.clone()).await.is_err() {
+                                        failed += 1;
+                                    }
+                                }
+                                // reload the target directory listing
+                                match crate::fsgit::api_list_dir(tok.clone(), dir.clone(), remote_id.clone(), root.clone()).await {
+                                    Ok(v) => {
+                                        if dir.is_empty() || dir == *cwd2.read() {
+                                            entries.set(v.clone());
+                                        }
+                                        children.write().insert(dir.clone(), v);
+                                    }
+                                    Err(e) => files_msg.set(e.to_string()),
+                                }
+                                uploading.set(false);
+                                if failed > 0 {
+                                    files_msg.set(loc2(&lang, &format!("Nie wgrano {failed}/{total} plików"), &format!("{failed}/{total} files not uploaded")));
+                                }
+                            }
+                        });
+                    }
+                },
+            }
             div { class: "filetree-root", style: "display:flex;gap:2px;flex-wrap:wrap;",
+                // drop on the root crumb uploads into the displayed directory
+                "data-path": "{cur}",
                 {crumb_els.iter().cloned()}
             }
             {msg_el}
@@ -937,6 +1135,7 @@ fn files_panel(
                 {row_els.iter().cloned()}
                 {empty_el}
             }
+            {uploading_el}
             {ctx_el}
         }
     }
@@ -984,9 +1183,12 @@ fn file_row(
     };
     rsx! {
         div {
-            class: "filetree-item",
+            class: if is_open { "filetree-item open" } else { "filetree-item" },
             style: "padding-left:{depth * 12 + 4}px;",
             title: "{path}",
+            // drop target for the file-tree drag & drop upload (DROP_TREE_JS)
+            "data-path": "{path}",
+            "data-isdir": if is_dir { "1" } else { "0" },
             oncontextmenu: {
                 let mut file_ctx = file_ctx.clone();
                 let path = path.clone();

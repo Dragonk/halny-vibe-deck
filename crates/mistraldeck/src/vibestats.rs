@@ -182,6 +182,18 @@ mod imp {
         })
     }
 
+    /// Full tool-result content for one tool call of a session, read from
+    /// the on-disk message log (Nexus `stats:vibe-session-messages` +
+    /// BashBlock's "Ran X" enrichment).
+    pub fn tool_result(session_id: &str, tool_call_id: &str) -> Option<String> {
+        mistraldeck_vibe::stats::load_session_messages(session_id)
+            .into_iter()
+            .find(|m| {
+                m.role == "tool" && m.tool_call_id.as_deref() == Some(tool_call_id)
+            })
+            .and_then(|m| m.content)
+    }
+
     pub fn content_matches(query: &str) -> Vec<ContentMatchView> {
         mistraldeck_vibe::stats::search_session_content(query)
             .into_iter()
@@ -226,6 +238,18 @@ pub async fn api_session_preview(
 ) -> Result<Option<Vec<PreviewMessageView>>, ServerFnError> {
     imp::check(&token)?;
     Ok(imp::session_preview(&session_id))
+}
+
+/// Full tool-result content for one tool call of a session (chat BashBlock
+/// enrichment when the wire output is only a "Ran X" summary).
+#[server]
+pub async fn api_session_tool_result(
+    token: String,
+    session_id: String,
+    tool_call_id: String,
+) -> Result<Option<String>, ServerFnError> {
+    imp::check(&token)?;
+    Ok(imp::tool_result(&session_id, &tool_call_id))
 }
 
 /// Content search across stored session transcripts (History view).

@@ -4332,6 +4332,22 @@ code {
     background: var(--panel-hover);
     color: var(--text);
 }
+/* v1.99.9: drag & drop upload highlight on the file tree (stable v1.0.26 parity) */
+.filetree-root.drop-target {
+    background: var(--panel-hover);
+    box-shadow: inset 0 -2px 0 var(--accent, #4a9eff);
+}
+.filetree-item.drop-target {
+    background: var(--panel-hover);
+    box-shadow: inset 0 0 0 1px var(--accent, #4a9eff);
+    color: var(--text);
+}
+.filetree-uploading {
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+}
 .filetree-chevron {
     display: inline-flex;
     align-items: center;
@@ -6622,6 +6638,70 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
 @keyframes subagent-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.45; }
+}
+/* v1.99.9: agents.list result card (stable v1.0.37 AgentsListBlock parity) */
+.agents-list-card {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--panel-2, rgba(255,255,255,0.03));
+    border: 1px solid var(--border, #2a2a2f);
+    margin: 6px 0;
+}
+.agents-list-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.agents-list-header .subagent-status {
+    margin-left: auto;
+}
+.agents-list-title {
+    font-size: 12px;
+    color: var(--text);
+}
+.agents-list-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 4px;
+}
+.agents-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 6px;
+    font-size: 11px;
+}
+.agents-list-table th {
+    text-align: left;
+    color: var(--text-muted);
+    font-weight: 500;
+    padding: 2px 6px 2px 0;
+    border-bottom: 1px solid var(--border, #2a2a2f);
+}
+.agents-list-table td {
+    padding: 3px 6px 3px 0;
+    vertical-align: top;
+}
+.agents-list-name {
+    color: var(--text);
+    font-family: var(--font-mono, monospace);
+}
+.agents-list-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--text-muted);
+}
+.agents-list-status svg {
+    width: 11px;
+    height: 11px;
+}
+.agents-list-status.error {
+    color: var(--danger, #e5534b);
+}
+.agents-list-error {
+    color: var(--danger, #e5534b);
+    opacity: 0.8;
 }
 .subagent-task {
     display: flex;

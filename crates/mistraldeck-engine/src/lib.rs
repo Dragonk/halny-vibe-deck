@@ -687,6 +687,15 @@ impl Engine {
                     },
                     ..Default::default()
                 };
+                // v1.99.9: the CLI excludes subagent child-session tokens
+                // from the parent's usage — roll them in so the UsageBar
+                // shows the full cache in/out of the session tree.
+                let sub = mistraldeck_vibe::stats::subagent_usage_totals(&info.session_id);
+                session.usage.prompt_tokens += sub.usage.prompt_tokens;
+                session.usage.completion_tokens += sub.usage.completion_tokens;
+                session.usage.cached_tokens += sub.usage.cached_tokens;
+                session.usage.total_tokens += sub.usage.total_tokens;
+                session.usage.cost += sub.cost;
             }
             st.sessions.insert(0, session);
             st.current = Some(0);
@@ -2350,7 +2359,16 @@ pub fn complete_session_tool_calls(session: &mut ChatSession) {
     for msg in &mut session.messages {
         if msg.sender == MessageSender::Ai {
             for tc in &mut msg.tool_calls {
-                if tc.status == ToolStatus::Running {
+                // v1.0.37 parity: a subagent invocation (agents.spawn / task
+                // with a child session) stays `running` while the child works
+                // — the CLI closes the call itself when the child finishes,
+                // so PromptCompleted must not force it to done.
+                let subagent_live = tc
+                    .subagent
+                    .as_ref()
+                    .and_then(|s| s.child_session_id.as_deref())
+                    .is_some();
+                if tc.status == ToolStatus::Running && !subagent_live {
                     tc.status = ToolStatus::Done;
                 }
             }
@@ -2399,28 +2417,42 @@ fn preview_to_messages(messages: &[mistraldeck_vibe::PreviewMessage]) -> Vec<Mes
             msg.tool_calls = m
                 .tool_calls
                 .iter()
-                .map(|tc| ToolCall {
-                    id: new_id(),
-                    title: if tc.title.trim().is_empty() {
-                        tc.tool_name.clone()
-                    } else {
-                        tc.title.clone()
-                    },
-                    kind: "tool".to_string(),
-                    status: match tc.status.as_str() {
+                .map(|tc| {
+                    // v1.99.9: restore the subagent meta from disk so the
+                    // historical card keeps its prompt + "Show work"; a
+                    // restored subagent is finished, never stuck running.
+                    let subagent = tc.subagent.as_ref().map(|s| {
+                        mistraldeck_core::types::SubagentInfo {
+                            agent: s.agent.clone(),
+                            agent_name: s.agent_name.clone(),
+                            task: Some(s.task.clone()),
+                            child_session_id: s.child_session_id.clone(),
+                        }
+                    });
+                    let status = match tc.status.as_str() {
                         "error" => ToolStatus::Error,
-                        "running" | "in_progress" => ToolStatus::Running,
+                        "running" | "in_progress" if subagent.is_none() => ToolStatus::Running,
                         _ => ToolStatus::Done,
-                    },
-                    input_json: None,
-                    output: None,
-                    file_changes: Vec::new(),
-                    diffs: Vec::new(),
-                    tool_name: tc.tool_name.clone(),
-                    previous_content: None,
-                    raw_output_json: None,
-                    subagent: None,
-                    started_at: 0,
+                    };
+                    ToolCall {
+                        id: new_id(),
+                        title: if tc.title.trim().is_empty() {
+                            tc.tool_name.clone()
+                        } else {
+                            tc.title.clone()
+                        },
+                        kind: "tool".to_string(),
+                        status,
+                        input_json: None,
+                        output: None,
+                        file_changes: Vec::new(),
+                        diffs: Vec::new(),
+                        tool_name: tc.tool_name.clone(),
+                        previous_content: None,
+                        raw_output_json: None,
+                        subagent,
+                        started_at: 0,
+                    }
                 })
                 .collect();
             msg

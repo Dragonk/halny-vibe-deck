@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 mistraldeck-core = { path = "../mistraldeck-core" }
+mistraldeck-vibe = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

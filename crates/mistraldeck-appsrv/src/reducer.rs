@@ -195,7 +195,17 @@ impl Projection {
             }
             "session/statsUpdated" => {
                 let stats = params.get("stats");
-                let (prompt, completion, cached, total, cost) = stats_numbers(stats);
+                let (mut prompt, mut completion, mut cached, mut total, mut cost) =
+                    stats_numbers(stats);
+                // v1.99.9: the CLI reports subagent child-session usage
+                // separately from the parent's stats — roll the child
+                // sessions' token totals into the usage bar.
+                let sub = mistraldeck_vibe::stats::subagent_usage_totals(&self.session_id);
+                prompt += sub.usage.prompt_tokens;
+                completion += sub.usage.completion_tokens;
+                cached += sub.usage.cached_tokens;
+                total += sub.usage.total_tokens;
+                cost += sub.cost;
                 let ctx_used = usage_f64(
                     stats,
                     &["contextTokens", "context_tokens", "tokens"],

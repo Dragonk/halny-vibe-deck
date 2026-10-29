@@ -3638,7 +3638,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3676,7 +3676,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-appserver"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "mistraldeck",
 ]
@@ -3688,13 +3688,14 @@ dependencies = [
  "anyhow",
  "log",
  "mistraldeck-core",
+ "mistraldeck-vibe",
  "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "mistraldeck-core"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "js-sys",
  "serde",
@@ -3703,7 +3704,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-engine"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "dirs 5.0.1",
  "getrandom 0.2.17",
@@ -3720,7 +3721,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-setup"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -3729,7 +3730,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-vibe"
-version = "1.99.8"
+version = "1.99.9"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
