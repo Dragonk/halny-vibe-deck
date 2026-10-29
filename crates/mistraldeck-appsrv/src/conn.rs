@@ -65,7 +65,9 @@ impl Conn {
             .args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Agent stderr carries the CLI's own warnings and, with the e2e
+            // stub, its trace — forward it to the server log (CI diagnosis).
+            .stderr(Stdio::inherit())
             .spawn()
             .with_context(|| format!("spawn {:?} (is vibe-app-server installed?)", argv[0]))?;
 

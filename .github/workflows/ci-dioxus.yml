@@ -142,7 +142,7 @@ jobs:
       - name: Start headless server
         run: |
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
-          export VD_STUB_TRACE="$PWD/../.e2e-stub.log"
+          export VD_STUB_TRACE="$PWD/.e2e-stub.log"
           export RUST_LOG=info
           echo "::notice::server binary: $PWD/.e2e-run/halny-vibe-deck-appserver"
           cd .e2e-run
@@ -182,7 +182,7 @@ jobs:
               echo "== assertions =="
               grep -E "Expected|Received|toBe|locator|Timeout|waiting for" ../.e2e-tests.log | head -40
               echo "== stub trace (last 40) =="
-              tail -40 ../../.e2e-stub.log 2>/dev/null
+              tail -40 ../../.e2e-stub.log 2>/dev/null || tail -40 ../../.e2e-server.log 2>/dev/null
               echo "== server log (last 40) =="
               tail -40 ../../.e2e-server.log 2>/dev/null
             } | head -c 60000 | sed 's/^/| /' > ../.e2e-diag.txt

@@ -38,6 +38,7 @@ TRACE = os.environ.get("VD_STUB_TRACE", "")
 def trace(line):
     if not TRACE:
         return
+    print("[stub] " + line, file=sys.stderr, flush=True)
     try:
         with open(TRACE, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
