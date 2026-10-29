@@ -7,7 +7,7 @@
 
 import { expect, test } from '@playwright/test'
 
-const LOCAL = process.env.VD_LOCAL_URL || 'http://127.0.0.1:8080'
+const LOCAL = process.env.VD_LOCAL_URL || 'https://127.0.0.1:8080'
 const REMOTE = process.env.VD_REMOTE_URL || 'https://127.0.0.1:8443'
 const USER = process.env.VD_USER || 'e2e'
 const PASS = process.env.VD_PASS || 'e2e-secret'

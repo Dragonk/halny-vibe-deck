@@ -10,12 +10,23 @@
 
 import { expect, test, type Page } from '@playwright/test'
 
-const LOCAL = process.env.VD_LOCAL_URL || 'http://127.0.0.1:8080'
+const LOCAL = process.env.VD_LOCAL_URL || 'https://127.0.0.1:8080'
 
+// A session always belongs to a project (D1/D2): the e2e starts one from a
+// project group's ＋ when history exists, otherwise through the
+// “New project…” picker (which opens in the current/home directory).
 async function openNewSession(page: Page) {
   await page.goto(LOCAL, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('.sidebar-logout-btn')).toBeVisible({ timeout: 30_000 })
-  await page.click('.new-session-btn')
+
+  const groupPlus = page.locator('.project-group .pgh-plus').first()
+  if (await groupPlus.count()) {
+    await groupPlus.click({ force: true })
+  } else {
+    await page.click('.sidebar-np-btn')
+    await expect(page.locator('.np-modal')).toBeVisible({ timeout: 15_000 })
+    await page.click('.np-modal .modal-btn-primary')
+  }
   await expect(page.locator('textarea.input-card-editor')).toBeVisible({ timeout: 30_000 })
 }
 

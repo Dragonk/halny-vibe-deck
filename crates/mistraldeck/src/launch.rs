@@ -156,10 +156,11 @@ pub fn main_dispatch(force_headless: bool) {
                 let local_router = router
                     .clone()
                     .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
-                let require_login = cfg_local.auth.is_some();
+                // Loopback is trusted: no login here (the remote listener keeps
+                // its credentials). Only the transport moves to TLS.
                 tokio::spawn(async move {
                     if let Err(e) =
-                        crate::serve::run_local_https(local_router, port, require_login).await
+                        crate::serve::run_local_https(local_router, port, false).await
                     {
                         eprintln!("mistraldeck: local HTTPS server error: {e}");
                     }

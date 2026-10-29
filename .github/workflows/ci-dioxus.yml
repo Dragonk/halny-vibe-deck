@@ -150,7 +150,7 @@ jobs:
           echo $! > ../.e2e-server.pid
           ok=0
           for i in $(seq 1 90); do
-            if curl -sf http://127.0.0.1:8080/manifest.webmanifest >/dev/null; then ok=1; break; fi
+            if curl -skf https://127.0.0.1:8080/manifest.webmanifest >/dev/null; then ok=1; break; fi
             sleep 1
           done
           if [ "$ok" != "1" ]; then
@@ -169,7 +169,7 @@ jobs:
       - name: Run e2e
         working-directory: scripts/e2e
         env:
-          VD_LOCAL_URL: http://127.0.0.1:8080
+          VD_LOCAL_URL: https://127.0.0.1:8080
           VD_REMOTE_URL: https://127.0.0.1:8443
         run: |
           set +e
