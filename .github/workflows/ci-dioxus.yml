@@ -142,6 +142,7 @@ jobs:
       - name: Start headless server
         run: |
           export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          export VD_STUB_TRACE="$PWD/../.e2e-stub.log"
           echo "::notice::server binary: $PWD/.e2e-run/halny-vibe-deck-appserver"
           cd .e2e-run
           nohup ./halny-vibe-deck-appserver --mode headless --port 8080 > ../.e2e-server.log 2>&1 &
@@ -152,7 +153,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != "1" ]; then
-            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log || true)
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../../.e2e-server.log || true)
             exit 1
           fi
           for i in $(seq 1 30); do
@@ -160,7 +161,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != "2" ]; then
-            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log || true)
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../../.e2e-server.log || true)
             exit 1
           fi
 
@@ -176,7 +177,9 @@ jobs:
           if [ "$rc" != "0" ]; then
             while IFS= read -r line; do echo "::error::assert: $line"; done < <(grep -E "Expected|Received|toBe|locator|Timeout|waiting for" ../.e2e-tests.log | head -60)
             echo "::error::--- server log ---"
-            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log)
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../../.e2e-server.log)
+            echo "::error::--- stub trace ---"
+            while IFS= read -r line; do echo "::error::stub: $line"; done < <(tail -60 ../../.e2e-stub.log 2>/dev/null || true)
           fi
           exit $rc
 

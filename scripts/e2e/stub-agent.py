@@ -26,11 +26,23 @@ A turn is scripted by the prompt text:
 """
 
 import json
+import os
 import sys
 import threading
 import time
 
 LOCK = threading.Lock()
+TRACE = os.environ.get("VD_STUB_TRACE", "")
+
+
+def trace(line):
+    if not TRACE:
+        return
+    try:
+        with open(TRACE, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
 SESSIONS = {}
 STATE = {"counter": 0}
 
@@ -40,6 +52,7 @@ def now_ms():
 
 
 def send(msg):
+    trace("out " + (msg.get("method") or ("response " + str(msg.get("id")))))
     with LOCK:
         sys.stdout.write(json.dumps(msg) + "\n")
         sys.stdout.flush()
@@ -197,6 +210,7 @@ def run_turn(sid, text, approval_gate):
 def handle(msg):
     rid = msg.get("id")
     method = msg.get("method")
+    trace("in " + str(method))
     params = msg.get("params") or {}
     if rid is None:
         return  # notification
