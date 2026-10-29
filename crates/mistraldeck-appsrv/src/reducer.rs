@@ -65,7 +65,7 @@ impl Projection {
             });
         }
         if let Some(entries) = &state.history {
-            let msgs: Vec<Message> = entries.iter().map(entry_to_message).collect();
+            let msgs = entries_to_messages(entries);
             events.push(AgentEvent::SessionHistory {
                 session_id: self.session_id.clone(),
                 messages: msgs,
@@ -91,6 +91,51 @@ impl Projection {
             for cb in cbs {
                 if let Some(ev) = self.callback_event(cb) {
                     events.push(ev);
+                }
+            }
+        }
+        // Session-level token usage rides on the snapshot
+        // (`session.tokenUsage` / `session.contextUsage`, wire TokenUsage:
+        // inputTokens/outputTokens/totalTokens/cachedInputTokens) — emit it
+        // as a UsageUpdate so a resync/reconnect restores the usage bar
+        // instead of blanking it (user-reported round 4, E12).
+        if let Some(s) = &state.session {
+            if let Some(tu) = &s.token_usage {
+                let (prompt, completion, cached, total, _cost) = stats_numbers(Some(tu));
+                let ctx_used = s
+                    .context_usage
+                    .as_ref()
+                    .map(|c| {
+                        usage_f64(Some(c), &["inputTokens", "input_tokens", "totalTokens", "total_tokens"])
+                    })
+                    .unwrap_or(0.0);
+                let cost = {
+                    let prices = mistraldeck_vibe::config::model_prices();
+                    if prices.is_empty() {
+                        0.0
+                    } else {
+                        mistraldeck_vibe::stats::session_cost_from_prices(
+                            &prices,
+                            s.model.as_deref(),
+                            prompt,
+                            cached,
+                            completion,
+                        )
+                    }
+                };
+                if total > 0.0 || prompt > 0.0 || completion > 0.0 {
+                    events.push(AgentEvent::UsageUpdate {
+                        session_id: s.id.clone(),
+                        prompt_tokens: prompt,
+                        completion_tokens: completion,
+                        cached_tokens: cached,
+                        total_tokens: if total > 0.0 { total } else { prompt + completion },
+                        tokens_per_second: 0.0,
+                        last_turn_duration_ms: 0.0,
+                        context_used: ctx_used,
+                        context_size: 0.0,
+                        cost,
+                    });
                 }
             }
         }
@@ -210,8 +255,11 @@ impl Projection {
                     stats,
                     &["contextTokens", "context_tokens", "tokens"],
                 );
+                // Wire: `contextWindow` (StatsUpdatedParams.context_window,
+                // camelCase alias on the wire).
                 let ctx_size = params
-                    .get("context_window")
+                    .get("contextWindow")
+                    .or_else(|| params.get("context_window"))
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0);
                 events.push(AgentEvent::UsageUpdate {
@@ -224,10 +272,20 @@ impl Projection {
                         stats,
                         &["tokensPerSecond", "tokens_per_second"],
                     ),
-                    last_turn_duration_ms: usage_f64(
-                        stats,
-                        &["lastTurnDurationMs", "last_turn_duration_ms"],
-                    ),
+                    // Wire: `lastTurnDuration` is a float of SECONDS
+                    // (AgentStatsSnapshot.last_turn_duration) — the GUI
+                    // wants milliseconds.
+                    last_turn_duration_ms: {
+                        let ms = usage_f64(
+                            stats,
+                            &["lastTurnDurationMs", "last_turn_duration_ms"],
+                        );
+                        if ms > 0.0 {
+                            ms
+                        } else {
+                            usage_f64(stats, &["lastTurnDuration", "last_turn_duration"]) * 1000.0
+                        }
+                    },
                     context_used: ctx_used,
                     context_size: ctx_size,
                     cost,
@@ -493,6 +551,56 @@ fn effect_tool_name(detail: &Value) -> Option<String> {
     )
 }
 
+/// Build the GUI [`ToolCall`] for one `effect` history entry (shared by the
+/// live stream and the snapshot/resume grouping).
+fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
+    let id = entry
+        .id
+        .clone()
+        .unwrap_or_else(|| entry.title.clone().unwrap_or_default());
+    let state_str = status_str(entry.state.as_ref());
+    let status = ToolStatus::normalize(&state_str);
+    let title = entry.title.clone().unwrap_or_default();
+    let detail = entry.detail.clone().unwrap_or(Value::Null);
+    let detail_json = serde_json::to_string(&detail).ok();
+    let subagent = detail
+        .get("childSessionId")
+        .or_else(|| detail.get("child_session_id"))
+        .and_then(Value::as_str)
+        .map(|cid| mistraldeck_core::types::SubagentInfo {
+            agent: detail
+                .get("agent")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            agent_name: detail
+                .get("agentName")
+                .or_else(|| detail.get("agent_name"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            task: detail
+                .get("task")
+                .or_else(|| detail.get("prompt"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            child_session_id: Some(cid.to_string()),
+        });
+    ToolCall {
+        id,
+        title,
+        kind: "appserver-effect".into(),
+        status,
+        input_json: None,
+        output: detail_json,
+        file_changes: Vec::new(),
+        diffs: Vec::new(),
+        tool_name: effect_tool_name(&detail).unwrap_or_default(),
+        previous_content: None,
+        raw_output_json: None,
+        subagent,
+        started_at: 0,
+    }
+}
+
 /// Map an effect entry to ToolCallStarted/Updated.
 fn effect_events(
     session_id: &str,
@@ -503,26 +611,10 @@ fn effect_events(
         .id
         .clone()
         .unwrap_or_else(|| entry.title.clone().unwrap_or_default());
-    let state_str = status_str(entry.state.as_ref());
-    let status = ToolStatus::normalize(&state_str);
-    let title = entry.title.clone().unwrap_or_default();
-    let detail = entry.detail.clone().unwrap_or(Value::Null);
-    let detail_json = serde_json::to_string(&detail).ok();
-    let tc = ToolCall {
-        id: id.clone(),
-        title,
-        kind: "appserver-effect".into(),
-        status,
-        input_json: None,
-        output: detail_json.clone(),
-        file_changes: Vec::new(),
-        diffs: Vec::new(),
-        tool_name: effect_tool_name(&detail).unwrap_or_default(),
-        previous_content: None,
-        raw_output_json: None,
-        subagent: None,
-        started_at: 0,
-    };
+    let tc = effect_tool_call(entry);
+    let status = tc.status;
+    let output = tc.output.clone();
+    let subagent = tc.subagent.clone();
     vec![if started {
         AgentEvent::ToolCallStarted {
             session_id: session_id.to_string(),
@@ -533,8 +625,8 @@ fn effect_events(
             session_id: session_id.to_string(),
             tool_call_id: id,
             status,
-            output: detail_json,
-            subagent: None,
+            output,
+            subagent,
         }
     }]
 }
@@ -545,25 +637,97 @@ fn is_assistant(entry: &HistoryEntry) -> bool {
     entry.kind == "message" && entry.role.as_deref() == Some("assistant")
 }
 
-pub fn entry_to_message(entry: &HistoryEntry) -> Message {
-    let text = match entry.kind.as_str() {
-        "message" if entry.role.as_deref() == Some("assistant") => entry.text_content(),
-        "message" if entry.role.as_deref() == Some("user") => entry.text_content(),
-        "reasoning" => entry.text.clone().unwrap_or_default(),
-        "effect" => entry.title.clone().unwrap_or_default(),
-        "notice" => entry.message.clone().unwrap_or_default(),
-        _ => String::new(),
-    };
-    let mut msg = if entry.kind == "message" && entry.role.as_deref() == Some("user") {
-        Message::new_user(&text)
-    } else {
+/// Group wire history entries into GUI messages (snapshot / resume path).
+///
+/// Wire layout (vibe/app_server/_history_projection.py): per turn one user
+/// `message` entry, then per assistant LLMMessage a `reasoning` entry
+/// (thinking), an assistant `message` entry (text) and one `effect` entry
+/// per tool call (the tool result updates the same effect's `state`).
+/// `notice` entries are system lines. Reasoning buffered before an
+/// assistant text belongs to that text's message; effects attach to the
+/// last assistant message — so a resumed session keeps thinking blocks and
+/// tool calls instead of flattening them to plain text (round 4, E5).
+pub fn entries_to_messages(entries: &[HistoryEntry]) -> Vec<Message> {
+    use mistraldeck_core::types::{MessageSender, ThinkingBlock};
+    let mut out: Vec<Message> = Vec::new();
+    let mut pending_thinking: Vec<ThinkingBlock> = Vec::new();
+    for e in entries {
+        match e.kind.as_str() {
+            "message" if e.role.as_deref() == Some("user") => {
+                pending_thinking.clear();
+                let mut m = Message::new_user(&e.text_content());
+                m.id = e.id.clone().unwrap_or(m.id);
+                out.push(m);
+            }
+            "message" if e.role.as_deref() == Some("assistant") => {
+                let mut m = Message::new_ai();
+                m.content = e.text_content();
+                m.is_complete = true;
+                m.id = e.id.clone().unwrap_or(m.id);
+                m.thinking = std::mem::take(&mut pending_thinking);
+                out.push(m);
+            }
+            "message" if e.role.as_deref() == Some("system") => {
+                pending_thinking.clear();
+                let mut m = Message::new_system(&e.text_content());
+                m.id = e.id.clone().unwrap_or(m.id);
+                out.push(m);
+            }
+            "reasoning" => {
+                let text = e.text.clone().unwrap_or_default();
+                if text.is_empty() {
+                    continue;
+                }
+                pending_thinking.push(ThinkingBlock {
+                    id: e
+                        .id
+                        .clone()
+                        .unwrap_or_else(|| format!("t-{}", pending_thinking.len())),
+                    content: text,
+                    is_complete: true,
+                    started_at: 0,
+                    completed_at: 0,
+                });
+            }
+            "effect" => {
+                // attach to the last AI message (create one if the turn had
+                // tool calls but no assistant text yet)
+                let needs_new = !matches!(
+                    out.last(),
+                    Some(m) if m.sender == MessageSender::Ai
+                );
+                if needs_new {
+                    out.push(Message::new_ai());
+                    out.last_mut().unwrap().is_complete = true;
+                }
+                let msg = out.last_mut().unwrap();
+                let tc = effect_tool_call(e);
+                match msg.tool_calls.iter_mut().find(|t| t.id == tc.id) {
+                    Some(existing) => *existing = tc,
+                    None => msg.tool_calls.push(tc),
+                }
+            }
+            "notice" => {
+                pending_thinking.clear();
+                let text = e.message.clone().unwrap_or_default();
+                if text.is_empty() {
+                    continue;
+                }
+                let mut m = Message::new_system(&text);
+                m.id = e.id.clone().unwrap_or(m.id);
+                out.push(m);
+            }
+            _ => {}
+        }
+    }
+    // trailing reasoning with no following assistant text still deserves a bubble
+    if !pending_thinking.is_empty() {
         let mut m = Message::new_ai();
-        m.content = text;
         m.is_complete = true;
-        m
-    };
-    msg.id = entry.id.clone().unwrap_or(msg.id);
-    msg
+        m.thinking = pending_thinking;
+        out.push(m);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -874,5 +1038,74 @@ mod tests {
         p.consume("session/snapshot", &snapshot_json("s1"));
         p.note_response_watermark(20);
         assert!(p.resync_needed);
+    }
+
+    /// Round 4 (E5): a resumed session's snapshot history must keep
+    /// reasoning as thinking blocks and effects as tool calls — not
+    /// flatten them to plain assistant text.
+    #[test]
+    fn snapshot_history_groups_reasoning_and_effects() {
+        let entries = vec![
+            json!({"type": "message", "role": "user", "id": "u1",
+                   "content": [{"type": "text", "text": "hi"}]}),
+            json!({"type": "reasoning", "id": "r1", "text": "thinking hard"}),
+            json!({"type": "message", "role": "assistant", "id": "a1",
+                   "content": [{"type": "text", "text": "answer"}]}),
+            json!({"type": "effect", "id": "e1", "title": "bash",
+                   "detail": {"toolName": "bash", "output": "ok"},
+                   "state": {"type": "completed"}}),
+            json!({"type": "notice", "id": "n1", "message": "note"}),
+        ];
+        let list: Vec<HistoryEntry> = entries
+            .iter()
+            .filter_map(|e| serde_json::from_value(e.clone()).ok())
+            .collect();
+        let msgs = entries_to_messages(&list);
+        assert_eq!(msgs.len(), 3, "{msgs:?}");
+        assert_eq!(msgs[0].content, "hi");
+        assert_eq!(msgs[1].content, "answer");
+        assert_eq!(msgs[1].thinking.len(), 1);
+        assert_eq!(msgs[1].thinking[0].content, "thinking hard");
+        assert!(msgs[1].thinking[0].is_complete);
+        assert_eq!(msgs[1].tool_calls.len(), 1);
+        assert_eq!(msgs[1].tool_calls[0].tool_name, "bash");
+        assert!(matches!(msgs[1].tool_calls[0].status, ToolStatus::Done));
+        assert_eq!(msgs[2].content, "note");
+    }
+
+    /// Round 4 (E12): the session snapshot's tokenUsage/contextUsage must
+    /// produce a UsageUpdate so a resync does not blank the usage bar.
+    #[test]
+    fn snapshot_emits_usage_from_session_token_usage() {
+        let mut p = proj();
+        let evs = p.consume(
+            "session/snapshot",
+            &json!({
+                "state": {
+                    "eventId": 5,
+                    "session": {"id": "s1", "title": "t",
+                        "status": {"type": "idle"},
+                        "model": "mistral-large-latest",
+                        "tokenUsage": {"inputTokens": 100, "outputTokens": 20,
+                                       "totalTokens": 120, "cachedInputTokens": 40},
+                        "contextUsage": {"inputTokens": 120, "totalTokens": 120}},
+                    "history": [],
+                    "activeCallbacks": []
+                },
+                "lastEventId": 5
+            }),
+        );
+        let usage = evs.iter().find_map(|e| match e {
+            AgentEvent::UsageUpdate {
+                prompt_tokens,
+                completion_tokens,
+                cached_tokens,
+                total_tokens,
+                context_used,
+                ..
+            } => Some((*prompt_tokens, *completion_tokens, *cached_tokens, *total_tokens, *context_used)),
+            _ => None,
+        });
+        assert_eq!(usage, Some((100.0, 20.0, 40.0, 120.0, 120.0)), "{evs:?}");
     }
 }

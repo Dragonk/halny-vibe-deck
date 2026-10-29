@@ -48,6 +48,11 @@ pub struct SlotState {
     /// Images belonging to `pending_prompt` (v1.0.8) — kept beside
     /// it so a lazy wake does not drop attachments.
     pub pending_images: Vec<mistraldeck_core::proto::PromptImage>,
+    /// Server-side prompt queue (round 4, E6/E7): prompts that arrived
+    /// while the slot was busy wait here and are sent one at a time when
+    /// the running turn completes — so the queue is guarded even in
+    /// headless mode with no UI client attached.
+    pub queue: std::collections::VecDeque<(String, Vec<mistraldeck_core::proto::PromptImage>)>,
     /// Config option to apply as soon as `session/new` completes.
     pub pending_option: Option<(String, String)>,
     pub approval: Option<PendingApproval>,
@@ -161,6 +166,7 @@ pub fn spawn_slot(slot_id: u64, purpose: SlotPurpose) -> SlotState {
         last_activity: std::time::Instant::now(),
         pending_prompt: None,
         pending_images: Vec::new(),
+        queue: std::collections::VecDeque::new(),
         pending_option: None,
         approval: None,
         question: None,

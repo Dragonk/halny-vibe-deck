@@ -406,15 +406,16 @@ pub fn Sidebar() -> Element {
                     span { class: "sidebar-np-plus", "＋" }
                 }
             }
+            // Round 4 (B1): physically ONE scrollable list — project groups
+            // and SSH connection groups share the same scroll container, so
+            // expanded sessions can never push the SSH section off screen.
             nav { class: "session-list session-list-projects",
-                if group_els.is_empty() {
+                if group_els.is_empty() && remote_els.is_empty() {
                     span { class: "session-empty", "{tr(&lang, \"noSessionsYet\")}" }
                 }
                 {group_els.iter().cloned()}
-            }
-            if !remote_els.is_empty() {
-                div { class: "sidebar-sessions-label", "SSH" }
-                nav { class: "session-list",
+                if !remote_els.is_empty() {
+                    div { class: "sidebar-sessions-label ssh-section-label", "SSH" }
                     {remote_els.iter().cloned()}
                 }
             }
@@ -650,7 +651,7 @@ fn group_el(
     let mut hist_rows: Vec<Element> = g
         .history
         .iter()
-        .map(|info| backend_el(state.clone(), info, confirm.clone(), false))
+        .map(|info| backend_el(state.clone(), &lang, info, confirm.clone(), false))
         .collect();
     let total = rows.len() + hist_rows.len();
     let more_el: Element = if total > GROUP_LIMIT && !all_expanded {
@@ -771,8 +772,22 @@ fn session_row(
     let active = current == Some(idx);
     let cls = if active { "session-item active" } else { "session-item" };
 
+    // Round 4 (B4): the empty span rendered nothing — use the stable
+    // edition's SVG arc spinner so a running session is visibly marked.
     let busy_el: Element = if m.busy {
-        rsx! { span { class: "session-busy-spinner", title: "streaming" } }
+        rsx! {
+            svg {
+                class: "session-busy-spinner",
+                xmlns: "http://www.w3.org/2000/svg",
+                view_box: "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "2",
+                stroke_linecap: "round",
+                title { "streaming" }
+                path { d: "M21 12a9 9 0 1 1-6.219-8.56" }
+            }
+        }
     } else {
         VNode::empty()
     };
@@ -783,6 +798,7 @@ fn session_row(
     let empty = m.message_count == 0;
     let agent_id = m.agent_session_id.clone();
     let busy = m.busy;
+    let is_remote = m.remote_id.is_some();
 
     rsx! {
         button {
@@ -795,7 +811,13 @@ fn session_row(
                     let agent_id = agent_id.clone();
                     async move {
                         let tok = token(&state);
-                        if empty && has_agent {
+                        // Round 4 (E1): a remote (SSH) mirror already IS the
+                        // remote session — switching to it must never go
+                        // through the LOCAL backend open (that produced
+                        // "session/resume: Session not found: <remote id>").
+                        if is_remote {
+                            let _ = crate::api::api_switch_session(tok, idx).await;
+                        } else if empty && has_agent {
                             if let Some(sid) = agent_id.clone() {
                                 let _ = crate::api::api_open_backend_session(tok, sid).await;
                             }
@@ -880,13 +902,16 @@ fn session_row(
 /// the project directory to the meta line — off inside project groups.
 fn backend_el(
     state: Signal<ClientState>,
+    lang: &str,
     info: &mistraldeck_core::proto::AgentSessionInfo,
     confirm: Signal<Option<ConfirmTarget>>,
     show_dir: bool,
 ) -> Element {
     let sid = info.session_id.clone();
+    // Round 4 (B3): never show a bare "(CLI)" placeholder — the server
+    // enriches the name (index title / first prompt) before it arrives.
     let name = if info.name.is_empty() {
-        "(CLI)".to_string()
+        tr(lang, "untitledSession").to_string()
     } else {
         info.name.clone()
     };

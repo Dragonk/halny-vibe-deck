@@ -174,6 +174,10 @@ pub struct SessionListItem {
     pub id: String,
     #[serde(default)]
     pub title: Option<String>,
+    /// First user prompt of the session (PublicSession.preview) — the
+    /// fallback display name when the CLI has not generated a title yet.
+    #[serde(default)]
+    pub preview: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
     /// epoch ms (int) or ISO string depending on the release — kept raw
@@ -209,17 +213,64 @@ pub fn usage_num(v: Option<&Value>, keys: &[&str]) -> f64 {
     0.0
 }
 
-/// AgentStatsSnapshot → (prompt, completion, cached, total, cost, context_used)
+/// AgentStatsSnapshot → (prompt, completion, cached, total, cost).
+///
+/// The installed CLI 3.0.x serializes `AgentStatsSnapshot`
+/// (vibe/app_server/models.py) with camelCase aliases:
+/// `sessionPromptTokens`, `sessionCompletionTokens`, `sessionCachedTokens`,
+/// … The snapshot carries NO cost field — cost is derived from the
+/// per-million price fields (`inputPricePerMillion`, …), falling back to an
+/// explicit cost key when a release adds one.
 pub fn stats_numbers(stats: Option<&Value>) -> (f64, f64, f64, f64, f64) {
     let Some(s) = stats else { return (0.0, 0.0, 0.0, 0.0, 0.0) };
     let get = |keys: &[&str]| usage_num(Some(s), keys);
-    (
-        get(&["promptTokens", "prompt_tokens", "inputTokens"]),
-        get(&["completionTokens", "completion_tokens", "outputTokens"]),
-        get(&["cachedTokens", "cached_tokens"]),
-        get(&["totalTokens", "total_tokens"]),
-        get(&["costUsd", "cost_usd", "cost", "totalCostUsd"]),
-    )
+    let prompt = get(&[
+        "sessionPromptTokens",
+        "session_prompt_tokens",
+        "promptTokens",
+        "prompt_tokens",
+        "inputTokens",
+    ]);
+    let completion = get(&[
+        "sessionCompletionTokens",
+        "session_completion_tokens",
+        "completionTokens",
+        "completion_tokens",
+        "outputTokens",
+    ]);
+    let cached = get(&[
+        "sessionCachedTokens",
+        "session_cached_tokens",
+        "cachedInputTokens",
+        "cached_input_tokens",
+        "cachedTokens",
+        "cached_tokens",
+    ]);
+    let total = get(&[
+        "sessionTotalLlmTokens",
+        "totalTokens",
+        "total_tokens",
+    ]);
+    let total = if total > 0.0 {
+        total
+    } else {
+        prompt + completion
+    };
+    // Explicit cost first; otherwise derive from the price fields.
+    let cost = get(&["costUsd", "cost_usd", "cost", "totalCostUsd"]);
+    let cost = if cost > 0.0 {
+        cost
+    } else {
+        let in_p = get(&["inputPricePerMillion", "input_price_per_million"]);
+        let out_p = get(&["outputPricePerMillion", "output_price_per_million"]);
+        let cached_p = get(&[
+            "cachedInputPricePerMillion",
+            "cached_input_price_per_million",
+        ]);
+        let cached_p = if cached_p > 0.0 { cached_p } else { in_p };
+        (in_p * prompt + out_p * completion + cached_p * cached) / 1_000_000.0
+    };
+    (prompt, completion, cached, total, cost)
 }
 
 #[cfg(test)]
@@ -265,8 +316,19 @@ mod tests {
 
     #[test]
     fn stats_numbers_tolerates_field_names() {
-        assert_eq!(stats_numbers(Some(&json!({"prompt_tokens": 1, "completionTokens": 2}))), (1.0, 2.0, 0.0, 0.0, 0.0));
+        // total falls back to prompt+completion (round 4, E12: the CLI's
+        // AgentStatsSnapshot has no total field)
+        assert_eq!(stats_numbers(Some(&json!({"prompt_tokens": 1, "completionTokens": 2}))), (1.0, 2.0, 0.0, 3.0, 0.0));
         assert_eq!(stats_numbers(None), (0.0, 0.0, 0.0, 0.0, 0.0));
+        // the installed CLI 3.0.x wire shape (camelCase aliases)
+        assert_eq!(
+            stats_numbers(Some(&json!({
+                "sessionPromptTokens": 10, "sessionCompletionTokens": 5,
+                "sessionCachedTokens": 4, "inputPricePerMillion": 2.0,
+                "outputPricePerMillion": 10.0, "cachedInputPricePerMillion": 1.0
+            }))),
+            (10.0, 5.0, 4.0, 15.0, (10.0 * 2.0 + 5.0 * 10.0 + 4.0 * 1.0) / 1_000_000.0)
+        );
     }
 
     #[test]

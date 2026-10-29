@@ -36,6 +36,9 @@ pub struct AgentFile {
     pub tool_permissions: Vec<(String, String)>,
     /// Approval safety profile (`safety = "…"`), stable parity.
     pub safety: Option<String>,
+    /// Extra system instructions appended to the system prompt
+    /// (`instructions` in the CLI's AgentProfile).
+    pub instructions: Option<String>,
 }
 
 impl AgentFile {
@@ -152,6 +155,11 @@ pub fn agent_file_data(a: &AgentFile) -> Table {
             table.insert("safety".into(), Value::from(safety.as_str()));
         }
     }
+    if let Some(instructions) = &a.instructions {
+        if !instructions.is_empty() {
+            table.insert("instructions".into(), Value::from(instructions.as_str()));
+        }
+    }
     table
 }
 
@@ -174,6 +182,10 @@ fn parse_agent(name: &str, table: &Table) -> AgentFile {
         .map(str::to_string);
     let safety = table
         .get("safety")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let instructions = table
+        .get("instructions")
         .and_then(Value::as_str)
         .map(str::to_string);
     let mut tool_permissions = Vec::new();
@@ -227,6 +239,7 @@ fn parse_agent(name: &str, table: &Table) -> AgentFile {
             })
             .unwrap_or_default(),
         tool_permissions,
+        instructions,
     }
 }
 

@@ -139,41 +139,71 @@ fn text_html(s: &str) -> String {
 // DOCX
 // ---------------------------------------------------------------------------
 
-#[derive(Default, Clone)]
-struct Run {
-    bold: bool,
-    italic: bool,
-    strike: bool,
-    link: bool,
-    text: String,
-}
-
-impl Run {
-    fn html(&self) -> String {
-        let mut t = text_html(&self.text);
-        if t.is_empty() {
-            return t;
-        }
-        if self.link {
-            t = format!("<u>{t}</u>");
-        }
-        if self.bold {
-            t = format!("<b>{t}</b>");
-        }
-        if self.italic {
-            t = format!("<i>{t}</i>");
-        }
-        if self.strike {
-            t = format!("<s>{t}</s>");
-        }
-        t
-    }
-}
-
 pub fn docx_to_html(path: &Path) -> Result<String, String> {
     let xml = read_zip_entry(path, "word/document.xml")?;
     let xml = String::from_utf8_lossy(&xml).into_owned();
-    Ok(docx_xml(&xml))
+    // Round 4 (C3): relationship table (hyperlinks + image targets).
+    let rels_xml = read_zip_entry(path, "word/_rels/document.xml.rels").unwrap_or_default();
+    let rels_xml = String::from_utf8_lossy(&rels_xml).into_owned();
+    let rels = parse_docx_rels(&rels_xml);
+    Ok(docx_xml_full(&xml, |rid| rels.get(rid).cloned(), |target| {
+        // media targets are relative to word/
+        let inner = if target.starts_with('/') {
+            target.trim_start_matches('/').to_string()
+        } else {
+            format!("word/{target}")
+        };
+        read_zip_entry(path, &inner).ok().map(|bytes| {
+            let mime = mime_for(&inner).to_string();
+            (mime, bytes)
+        })
+    }))
+}
+
+fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "emf" => "image/x-emf",
+        "wmf" => "image/x-wmf",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `word/_rels/document.xml.rels` → rId → (target, kind).
+fn parse_docx_rels(xml: &str) -> std::collections::HashMap<String, (String, String)> {
+    let mut out = std::collections::HashMap::new();
+    let mut reader = XmlReader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if local(&e) == "Relationship" {
+                    if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
+                        let ty = attr(&e, "Type").unwrap_or_default();
+                        let kind = if ty.contains("hyperlink") {
+                            "link"
+                        } else if ty.contains("image") {
+                            "image"
+                        } else {
+                            "other"
+                        };
+                        out.insert(id, (target, kind.to_string()));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    out
 }
 
 fn heading_level(style: &str) -> Option<u32> {
@@ -191,22 +221,131 @@ fn heading_level(style: &str) -> Option<u32> {
     }
 }
 
-fn docx_xml(xml: &str) -> String {
+/// One run: rich formatting (round 4, C3: underline/color/highlight/size/
+/// super-subscript) plus inline images.
+#[derive(Default, Clone)]
+struct Run {
+    bold: bool,
+    italic: bool,
+    strike: bool,
+    underline: bool,
+    link: Option<String>,
+    color: String,
+    highlight: String,
+    size_half_pt: Option<f64>,
+    vert: String,
+    text: String,
+    /// data-URI images collected for this run (drawing inside the run)
+    images: Vec<String>,
+}
+
+impl Run {
+    fn html(&self) -> String {
+        let mut t = text_html(&self.text);
+        for img in &self.images {
+            t.push_str(&format!("<img class=\"doc-img\" src=\"{img}\" alt=\"image\"/>"));
+        }
+        if t.is_empty() {
+            return t;
+        }
+        if !self.vert.is_empty() {
+            t = format!(
+                "<{}>{}</{}>",
+                if self.vert == "superscript" { "sup" } else { "sub" },
+                t,
+                if self.vert == "superscript" { "sup" } else { "sub" }
+            );
+        }
+        if !self.size_half_pt.is_none() {
+            if let Some(sz) = self.size_half_pt {
+                t = format!("<span style=\"font-size:{:.1}pt;\">{}</span>", sz / 2.0, t);
+            }
+        }
+        if !self.color.is_empty() {
+            t = format!("<span style=\"color:{};\">{}</span>", self.color, t);
+        }
+        if !self.highlight.is_empty() && self.highlight != "none" {
+            t = format!(
+                "<span style=\"background-color:{};\">{}</span>",
+                highlight_color(&self.highlight),
+                t
+            );
+        }
+        if self.underline {
+            t = format!("<u>{t}</u>");
+        }
+        if self.strike {
+            t = format!("<s>{t}</s>");
+        }
+        if self.bold {
+            t = format!("<b>{t}</b>");
+        }
+        if self.italic {
+            t = format!("<i>{t}</i>");
+        }
+        if let Some(href) = &self.link {
+            t = format!("<a href=\"{}\" class=\"doc-link\">{}</a>", esc(href), t);
+        }
+        t
+    }
+}
+
+fn highlight_color(name: &str) -> String {
+    match name {
+        "yellow" => "#ffff00".into(),
+        "green" => "#00ff00".into(),
+        "cyan" => "#00ffff".into(),
+        "magenta" => "#ff00ff".into(),
+        "blue" => "#0000ff".into(),
+        "red" => "#ff0000".into(),
+        "black" => "#000000".into(),
+        "white" => "#ffffff".into(),
+        "darkBlue" => "#00008b".into(),
+        "darkRed" => "#8b0000".into(),
+        "darkGreen" => "#006400".into(),
+        "gray" | "grey" => "#808080".into(),
+        other => format!("#{}", other),
+    }
+}
+
+/// docx parser with images, TOC, and full run/paragraph formatting
+/// (round 4, C3). `resolve_rel(rId) -> Option<(target, kind)>`,
+/// `resolve_media(target) -> Option<(mime, bytes)>`.
+fn docx_xml_full(
+    xml: &str,
+    resolve_rel: impl Fn(&str) -> Option<(String, String)>,
+    resolve_media: impl Fn(&str) -> Option<(String, Vec<u8>)>,
+) -> String {
     let mut out = String::from("<div class=\"doc-render\">");
     let mut list_open = false;
+    let mut list_num = false;
 
     let mut reader = XmlReader::from_str(xml);
     let mut buf = Vec::new();
 
+    // paragraph state
     let mut para_style = String::new();
     let mut para_list = false;
+    let mut para_num = false;
     let mut para_html = String::new();
+    let mut para_css = String::new();
     let mut in_para = false;
 
     let mut run = Run::default();
     let mut in_run = false;
-    let mut link_depth = 0usize;
+    let mut link_id: Option<String> = None;
     let mut capture_text = false;
+    let mut capture_instr = false;
+
+    // drawing / blip capture
+    let mut in_drawing = 0usize;
+    let mut blip_rid = String::new();
+
+    // TOC (round 4, C3): headings collected for a generated TOC when the
+    // document carries a TOC field/SDT.
+    let mut headings: Vec<(u32, String)> = Vec::new();
+    let mut toc_marker = false;
+    let mut heading_counter = 0usize;
 
     let mut in_table = false;
     let mut in_cell = false;
@@ -227,23 +366,41 @@ fn docx_xml(xml: &str) -> String {
                     }
                 } else {
                     blocks += 1;
-                    if let Some(level) = heading_level(&para_style) {
-                        out.push_str(&format!("<h{level}>{para_html}</h{level}>"));
+                    let level = heading_level(&para_style);
+                    if let Some(level) = level {
+                        heading_counter += 1;
+                        // remember plain text of the heading for the TOC
+                        let plain: String = strip_tags(&para_html);
+                        headings.push((level, plain.clone()));
+                        if list_open {
+                            out.push_str(if list_num { "</ol>" } else { "</ul>" });
+                            list_open = false;
+                        }
+                        out.push_str(&format!(
+                            "<h{level} id=\"doc-h-{heading_counter}\" style=\"{para_css}\">{para_html}</h{level}>"
+                        ));
                     } else if para_list {
                         if !list_open {
-                            out.push_str("<ul>");
+                            out.push_str(if para_num { "<ol class=\"doc-list-num\">" } else { "<ul>" });
                             list_open = true;
+                            list_num = para_num;
+                        } else if list_num != para_num {
+                            out.push_str(if list_num { "</ol>" } else { "</ul>" });
+                            out.push_str(if para_num { "<ol class=\"doc-list-num\">" } else { "<ul>" });
+                            list_num = para_num;
                         }
-                        out.push_str(&format!("<li>{para_html}</li>"));
+                        out.push_str(&format!(
+                            "<li style=\"{para_css}\">{para_html}</li>"
+                        ));
                     } else {
                         if list_open {
-                            out.push_str("</ul>");
+                            out.push_str(if list_num { "</ol>" } else { "</ul>" });
                             list_open = false;
                         }
                         if para_html.is_empty() {
                             out.push_str("<p class=\"doc-spacer\">&nbsp;</p>");
                         } else {
-                            out.push_str(&format!("<p>{para_html}</p>"));
+                            out.push_str(&format!("<p style=\"{para_css}\">{para_html}</p>"));
                         }
                     }
                 }
@@ -261,7 +418,9 @@ fn docx_xml(xml: &str) -> String {
                     "p" => {
                         para_style.clear();
                         para_list = false;
+                        para_num = false;
                         para_html.clear();
+                        para_css.clear();
                         in_para = true;
                     }
                     "r" => {
@@ -283,23 +442,120 @@ fn docx_xml(xml: &str) -> String {
                             run.strike = true;
                         }
                     }
+                    "u" if in_run => {
+                        if !attr(&e, "val").map(|v| is_zero_val(&v)).unwrap_or(false) {
+                            run.underline = true;
+                        }
+                    }
+                    "color" if in_run => {
+                        if let Some(c) = attr(&e, "val") {
+                            if c != "auto" {
+                                run.color = format!("#{}", c.trim_start_matches('#'));
+                            }
+                        }
+                    }
+                    "highlight" if in_run => {
+                        if let Some(h) = attr(&e, "val") {
+                            run.highlight = h;
+                        }
+                    }
+                    "sz" if in_run => {
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<f64>().ok()) {
+                            run.size_half_pt = Some(v);
+                        }
+                    }
+                    "vertAlign" if in_run => {
+                        if let Some(v) = attr(&e, "val") {
+                            run.vert = v;
+                        }
+                    }
                     "t" => capture_text = true,
+                    "instrText" => capture_instr = true,
                     "tab" if in_run => run.text.push('\t'),
                     "br" if in_run => run.text.push('\n'),
                     "pStyle" if in_para => {
                         para_style = attr(&e, "val").unwrap_or_default();
                     }
-                    "numPr" if in_para => para_list = true,
+                    "numPr" if in_para => {
+                        para_list = true;
+                    }
                     "numId" if in_para => {
                         if attr(&e, "val").as_deref() == Some("0") {
                             para_list = false;
                         }
                     }
-                    "hyperlink" => link_depth += 1,
+                    "ilvl" if in_para => {}
+                    "ind" if in_para => {
+                        // round 4 (C3): paragraph indentation (twips → pt)
+                        let left = attr(&e, "left").and_then(|v| v.parse::<f64>().ok());
+                        let hanging = attr(&e, "hanging").and_then(|v| v.parse::<f64>().ok());
+                        let first = attr(&e, "firstLine").and_then(|v| v.parse::<f64>().ok());
+                        if let Some(l) = left {
+                            let pt = l / 20.0;
+                            if pt > 0.0 {
+                                para_css.push_str(&format!("margin-left:{pt:.1}pt;"));
+                            }
+                            if let Some(h) = hanging {
+                                if h > 0.0 {
+                                    para_css.push_str(&format!("text-indent:-{:.1}pt;", h / 20.0));
+                                }
+                            }
+                        }
+                        if let Some(f) = first {
+                            if f != 0.0 {
+                                para_css.push_str(&format!("text-indent:{:.1}pt;", f / 20.0));
+                            }
+                        }
+                    }
+                    "jc" if in_para => {
+                        match attr(&e, "val").as_deref() {
+                            Some("center") => para_css.push_str("text-align:center;"),
+                            Some("right") => para_css.push_str("text-align:right;"),
+                            Some("both") => para_css.push_str("text-align:justify;"),
+                            _ => {}
+                        }
+                    }
+                    "spacing" if in_para => {
+                        if let Some(b) = attr(&e, "before").and_then(|v| v.parse::<f64>().ok()) {
+                            if b > 0.0 {
+                                para_css.push_str(&format!("margin-top:{:.1}pt;", b / 20.0));
+                            }
+                        }
+                        if let Some(a) = attr(&e, "after").and_then(|v| v.parse::<f64>().ok()) {
+                            if a > 0.0 {
+                                para_css.push_str(&format!("margin-bottom:{:.1}pt;", a / 20.0));
+                            }
+                        }
+                    }
+                    "hyperlink" => {
+                        link_id = attr(&e, "id");
+                    }
+                    "drawing" => {
+                        in_drawing += 1;
+                        blip_rid.clear();
+                    }
+                    "blip" => {
+                        if let Some(rid) = attr(&e, "embed").or_else(|| attr(&e, "link")) {
+                            blip_rid = rid;
+                        }
+                    }
+                    "imagedata" => {
+                        if let Some(rid) = attr(&e, "id") {
+                            blip_rid = rid;
+                        }
+                    }
+                    "sdt" => {}
+                    "docPartGallery" => {
+                        if let Some(v) = attr(&e, "val") {
+                            if v.contains("Table of Contents") || v.contains("TableOfContents") {
+                                toc_marker = true;
+                            }
+                        }
+                    }
                     "tbl" if !in_cell => {
                         flush_para!();
                         if list_open {
-                            out.push_str("</ul>");
+                            out.push_str(if list_num { "</ol>" } else { "</ul>" });
                             list_open = false;
                         }
                         in_table = true;
@@ -321,6 +577,7 @@ fn docx_xml(xml: &str) -> String {
                         out.push_str("<p class=\"doc-spacer\">&nbsp;</p>");
                     }
                     "t" => {}
+                    "instrText" => capture_instr = true,
                     "br" if in_run => run.text.push('\n'),
                     "tab" if in_run => run.text.push('\t'),
                     "b" if in_run => {
@@ -338,24 +595,99 @@ fn docx_xml(xml: &str) -> String {
                             run.strike = true;
                         }
                     }
+                    "u" if in_run => {
+                        if !attr(&e, "val").map(|v| is_zero_val(&v)).unwrap_or(false) {
+                            run.underline = true;
+                        }
+                    }
+                    "color" if in_run => {
+                        if let Some(c) = attr(&e, "val") {
+                            if c != "auto" {
+                                run.color = format!("#{}", c.trim_start_matches('#'));
+                            }
+                        }
+                    }
+                    "highlight" if in_run => {
+                        if let Some(h) = attr(&e, "val") {
+                            run.highlight = h;
+                        }
+                    }
+                    "sz" if in_run => {
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<f64>().ok()) {
+                            run.size_half_pt = Some(v);
+                        }
+                    }
+                    "vertAlign" if in_run => {
+                        if let Some(v) = attr(&e, "val") {
+                            run.vert = v;
+                        }
+                    }
                     "pStyle" if in_para => {
                         para_style = attr(&e, "val").unwrap_or_default();
                     }
-                    "numPr" if in_para => para_list = true,
+                    "numPr" if in_para => {
+                        para_list = true;
+                    }
+                    "ind" if in_para => {
+                        let left = attr(&e, "left").and_then(|v| v.parse::<f64>().ok());
+                        if let Some(l) = left {
+                            if l > 0.0 {
+                                para_css.push_str(&format!("margin-left:{:.1}pt;", l / 20.0));
+                            }
+                        }
+                    }
+                    "jc" if in_para => {
+                        match attr(&e, "val").as_deref() {
+                            Some("center") => para_css.push_str("text-align:center;"),
+                            Some("right") => para_css.push_str("text-align:right;"),
+                            Some("both") => para_css.push_str("text-align:justify;"),
+                            _ => {}
+                        }
+                    }
+                    "blip" => {
+                        if let Some(rid) = attr(&e, "embed").or_else(|| attr(&e, "link")) {
+                            blip_rid = rid;
+                        }
+                    }
+                    "imagedata" => {
+                        if let Some(rid) = attr(&e, "id") {
+                            blip_rid = rid;
+                        }
+                    }
+                    "docPartGallery" => {
+                        if let Some(v) = attr(&e, "val") {
+                            if v.contains("Table of Contents") || v.contains("TableOfContents") {
+                                toc_marker = true;
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
             Ok(Event::Text(t)) => {
                 if capture_text && in_run {
                     run.text.push_str(&t.xml10_content());
+                } else if capture_instr {
+                    let instr = t.xml10_content();
+                    if instr.contains("TOC") {
+                        toc_marker = true;
+                    }
                 }
             }
             Ok(Event::End(e)) => {
                 let name = local_end(&e);
                 match name.as_str() {
                     "t" => capture_text = false,
+                    "instrText" => capture_instr = false,
                     "r" => {
                         if in_run {
+                            if let Some(rid) = &link_id {
+                                if let Some((target, kind)) = resolve_rel(rid) {
+                                    if kind == "link" && !target.is_empty() {
+                                        run.link = Some(target);
+                                    }
+                                }
+                            }
                             let html = run.html();
                             if !html.is_empty() {
                                 para_html.push_str(&html);
@@ -363,7 +695,22 @@ fn docx_xml(xml: &str) -> String {
                             in_run = false;
                         }
                     }
-                    "hyperlink" => link_depth = link_depth.saturating_sub(1),
+                    "hyperlink" => link_id = None,
+                    "drawing" => {
+                        in_drawing = in_drawing.saturating_sub(1);
+                        if in_drawing == 0 && !blip_rid.is_empty() {
+                            // resolve the image through the rels table
+                            if let Some((target, kind)) = resolve_rel(&blip_rid) {
+                                if kind == "image" {
+                                    if let Some((mime, bytes)) = resolve_media(&target) {
+                                        run.images
+                                            .push(format!("data:{mime};base64,{}", b64(&bytes)));
+                                    }
+                                }
+                            }
+                            blip_rid.clear();
+                        }
+                    }
                     "p" => flush_para!(),
                     "tc" if in_table => {
                         out_row_cell(&mut row_html, &cell_html);
@@ -388,10 +735,52 @@ fn docx_xml(xml: &str) -> String {
         }
     }
     if list_open {
-        out.push_str("</ul>");
+        out.push_str(if list_num { "</ol>" } else { "</ul>" });
+    }
+
+    // Round 4 (C3): generate a real table of contents from the headings
+    // when the document carries a TOC field/SDT (Word stores it as a field
+    // that only updates inside Word — render it ourselves).
+    if toc_marker && headings.len() >= 2 {
+        let mut toc = String::from("<div class=\"doc-toc\"><div class=\"doc-toc-title\">Table of contents</div><ul>");
+        let mut last_level = 1u32;
+        for (i, (level, text)) in headings.iter().enumerate() {
+            let lvl = *level;
+            let pad = "&nbsp;&nbsp;".repeat((lvl.saturating_sub(last_level)).min(4) as usize);
+            let _ = pad;
+            let indent = (lvl.saturating_sub(1)) * 14;
+            toc.push_str(&format!(
+                "<li style=\"margin-left:{indent}px;\"><a href=\"#doc-h-{}\">{}</a></li>",
+                i + 1,
+                esc(text)
+            ));
+            last_level = lvl;
+        }
+        toc.push_str("</ul></div>");
+        out.push_str(&toc);
     }
     out.push_str("</div>");
     out
+}
+
+/// Plain text of an html fragment (for TOC entries).
+fn strip_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Backward-compatible wrapper used by the unit tests (no rels/media).
+fn docx_xml(xml: &str) -> String {
+    docx_xml_full(xml, |_| None, |_| None)
 }
 
 fn out_row_cell(row_html: &mut String, cell_html: &str) {
@@ -788,6 +1177,9 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
     let mut workbook =
         calamine::open_workbook_auto(path).map_err(|e| format!("workbook: {e}"))?;
     let names = workbook.sheet_names().to_vec();
+    // Round 4 (C4): workbook cell styles (xl/styles.xml) so the preview
+    // keeps bold/italic/colors/fills instead of a plain table.
+    let style_css: Vec<String> = xlsx_style_table(path).unwrap_or_default();
     let mut out: Vec<SheetData> = Vec::new();
     for name in names {
         if out.len() >= SHEET_MAX {
@@ -807,12 +1199,328 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
                     .collect()
             })
             .collect();
-        out.push(SheetData { name, rows });
+        let idx_map = xlsx_sheet_style_index(path, &name).unwrap_or_default();
+        let styles: Vec<Vec<Option<String>>> = rows
+            .iter()
+            .enumerate()
+            .map(|(r, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(c, _)| {
+                        idx_map
+                            .get(r)
+                            .and_then(|rr| rr.get(c))
+                            .copied()
+                            .flatten()
+                            .and_then(|i| style_css.get(i).cloned())
+                    })
+                    .collect()
+            })
+            .collect();
+        out.push(SheetData { name, rows, styles });
     }
     if out.is_empty() {
         return Err("no sheets with data".into());
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// XLSX styles (xl/styles.xml + per-cell `s` attribute) — round 4 (C4)
+// ---------------------------------------------------------------------------
+
+/// `cellXfs` index → inline CSS (font weight/style/color/size, fill).
+fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
+    let xml = read_zip_entry(path, "xl/styles.xml").ok()?;
+    let xml = String::from_utf8_lossy(&xml).into_owned();
+    let mut reader = XmlReader::from_str(&xml);
+    let mut buf = Vec::new();
+
+    let mut numfmts: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut fonts: Vec<(bool, bool, String, f64)> = Vec::new(); // (bold, italic, color, size)
+    let mut fills: Vec<String> = Vec::new(); // css background-color
+    let mut cellxfs: Vec<String> = Vec::new();
+
+    let mut section = String::new();
+    let mut cur_font = (false, false, String::new(), 11.0);
+    let mut cur_fill = String::new();
+    let mut in_font = false;
+    let mut in_fill = false;
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let name = local(&e);
+                match name.as_str() {
+                    "numFmts" => section = "numfmts".into(),
+                    "numFmt" => {
+                        if let (Some(id), Some(code)) = (
+                            attr(&e, "numFmtId").and_then(|v| v.parse::<u32>().ok()),
+                            attr(&e, "formatCode"),
+                        ) {
+                            numfmts.insert(id, code);
+                        }
+                    }
+                    "fonts" => section = "fonts".into(),
+                    "font" => {
+                        in_font = true;
+                        cur_font.0 = false;
+                        cur_font.1 = false;
+                        cur_font.2 = String::new();
+                        cur_font.3 = 11.0;
+                    }
+                    "b" if in_font => cur_font.0 = true,
+                    "i" if in_font => cur_font.1 = true,
+                    "sz" if in_font => {
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<f64>().ok()) {
+                            cur_font.3 = v;
+                        }
+                    }
+                    "color" if in_font => {
+                        if let Some(rgb) = attr(&e, "rgb") {
+                            cur_font.2 = xlsx_color(&rgb);
+                        }
+                    }
+                    "fills" => section = "fills".into(),
+                    "fill" => {
+                        in_fill = true;
+                        cur_fill = String::new();
+                    }
+                    "fgColor" if in_fill => {
+                        if let Some(rgb) = attr(&e, "rgb") {
+                            cur_fill = xlsx_color(&rgb);
+                        }
+                    }
+                    "cellXfs" => section = "cellxfs".into(),
+                    "xf" if section == "cellxfs" => {
+                        let font_id = attr(&e, "fontId").and_then(|v| v.parse::<usize>().ok());
+                        let fill_id = attr(&e, "fillId").and_then(|v| v.parse::<usize>().ok());
+                        let numfmt_id = attr(&e, "numFmtId").and_then(|v| v.parse::<u32>().ok());
+                        let mut css = String::new();
+                        if let Some(f) = font_id.and_then(|i| fonts.get(i)) {
+                            if f.0 {
+                                css.push_str("font-weight:bold;");
+                            }
+                            if f.1 {
+                                css.push_str("font-style:italic;");
+                            }
+                            if !f.2.is_empty() {
+                                css.push_str(&format!("color:{};", f.2));
+                            }
+                            if (f.3 - 11.0).abs() > 0.01 {
+                                css.push_str(&format!("font-size:{:.0}pt;", f.3));
+                            }
+                        }
+                        if let Some(fl) = fill_id.and_then(|i| fills.get(i)) {
+                            if !fl.is_empty() && fl != "#FFFFFF" {
+                                css.push_str(&format!("background-color:{};", fl));
+                            }
+                        }
+                        let _ = numfmt_id.and_then(|id| numfmts.get(&id));
+                        cellxfs.push(css);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = local(&e);
+                match name.as_str() {
+                    "b" if in_font => cur_font.0 = true,
+                    "i" if in_font => cur_font.1 = true,
+                    "sz" if in_font => {
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<f64>().ok()) {
+                            cur_font.3 = v;
+                        }
+                    }
+                    "color" if in_font => {
+                        if let Some(rgb) = attr(&e, "rgb") {
+                            cur_font.2 = xlsx_color(&rgb);
+                        }
+                    }
+                    "fgColor" if in_fill => {
+                        if let Some(rgb) = attr(&e, "rgb") {
+                            cur_fill = xlsx_color(&rgb);
+                        }
+                    }
+                    "xf" if section == "cellxfs" => {
+                        let font_id = attr(&e, "fontId").and_then(|v| v.parse::<usize>().ok());
+                        let fill_id = attr(&e, "fillId").and_then(|v| v.parse::<usize>().ok());
+                        let mut css = String::new();
+                        if let Some(f) = font_id.and_then(|i| fonts.get(i)) {
+                            if f.0 {
+                                css.push_str("font-weight:bold;");
+                            }
+                            if f.1 {
+                                css.push_str("font-style:italic;");
+                            }
+                            if !f.2.is_empty() {
+                                css.push_str(&format!("color:{};", f.2));
+                            }
+                            if (f.3 - 11.0).abs() > 0.01 {
+                                css.push_str(&format!("font-size:{:.0}pt;", f.3));
+                            }
+                        }
+                        if let Some(fl) = fill_id.and_then(|i| fills.get(i)) {
+                            if !fl.is_empty() && fl != "#FFFFFF" {
+                                css.push_str(&format!("background-color:{};", fl));
+                            }
+                        }
+                        cellxfs.push(css);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = local_end(&e);
+                match name.as_str() {
+                    "font" if in_font => {
+                        fonts.push(cur_font.clone());
+                        in_font = false;
+                    }
+                    "fill" if in_fill => {
+                        fills.push(cur_fill.clone());
+                        in_fill = false;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    Some(cellxfs)
+}
+
+/// `FFRRGGBB`/`RRGGBB` ARGB → `#RRGGBB` css color.
+fn xlsx_color(rgb: &str) -> String {
+    let h = rgb.trim_start_matches('#');
+    let (r, g, b) = if h.len() == 8 {
+        (&h[2..4], &h[4..6], &h[6..8])
+    } else if h.len() == 6 {
+        (&h[0..2], &h[2..4], &h[4..6])
+    } else {
+        return String::new();
+    };
+    format!("#{}{}{}", r, g, b)
+}
+
+/// Sheet name → `xl/worksheets/sheetN.xml`, then per-cell style indices:
+/// `Vec<row><col> = Some(cellXfs index)`.
+fn xlsx_sheet_style_index(path: &Path, sheet_name: &str) -> Option<Vec<Vec<Option<usize>>>> {
+    let wb = read_zip_entry(path, "xl/workbook.xml").ok()?;
+    let wb = String::from_utf8_lossy(&wb).into_owned();
+    let rels = read_zip_entry(path, "xl/_rels/workbook.xml.rels").ok()?;
+    let rels = String::from_utf8_lossy(&rels).into_owned();
+
+    // rId for the sheet name
+    let mut rid = String::new();
+    {
+        let mut reader = XmlReader::from_str(&wb);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    if local(&e) == "sheet" {
+                        let name = attr(&e, "name").unwrap_or_default();
+                        if name == sheet_name {
+                            rid = attr(&e, "id")
+                                .or_else(|| attr(&e, "r:id"))
+                                .unwrap_or_default();
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+    if rid.is_empty() {
+        return None;
+    }
+    // rid → target
+    let mut target = String::new();
+    {
+        let mut reader = XmlReader::from_str(&rels);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    if local(&e) == "Relationship" {
+                        if attr(&e, "Id").as_deref() == Some(rid.as_str()) {
+                            target = attr(&e, "Target").unwrap_or_default();
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+    if target.is_empty() {
+        return None;
+    }
+    let sheet_path = if target.starts_with('/') {
+        target.trim_start_matches('/').to_string()
+    } else {
+        format!("xl/{target}")
+    };
+    let xml = read_zip_entry(path, &sheet_path).ok()?;
+    let xml = String::from_utf8_lossy(&xml).into_owned();
+
+    let mut out: Vec<Vec<Option<usize>>> = Vec::new();
+    let mut reader = XmlReader::from_str(&xml);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                if local(&e) == "c" {
+                    if let (Some(r), Some(s)) = (attr(&e, "r"), attr(&e, "s")) {
+                        if let (Some((row, col)), Some(si)) = (cell_ref(&r), s.parse::<usize>().ok()) {
+                            while out.len() <= row {
+                                out.push(Vec::new());
+                            }
+                            while out[row].len() <= col {
+                                out[row].push(None);
+                            }
+                            out[row][col] = Some(si);
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// `B12` → (row=11, col=1) zero-based.
+fn cell_ref(r: &str) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    let mut row = 0usize;
+    let mut seen_digit = false;
+    for ch in r.chars() {
+        if ch.is_ascii_alphabetic() && !seen_digit {
+            col = col * 26 + (ch.to_ascii_uppercase() as usize - 'A' as usize + 1);
+        } else if ch.is_ascii_digit() {
+            seen_digit = true;
+            row = row * 10 + (ch as usize - '0' as usize);
+        } else {
+            return None;
+        }
+    }
+    if col == 0 || row == 0 {
+        return None;
+    }
+    Some((row - 1, col - 1))
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +1617,8 @@ mod tests {
 <w:r><w:t>Hi</w:t></w:r></w:p>\
 <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r></w:p></w:body>";
         let html = docx_xml(xml);
-        assert!(html.contains("<h1>Hi</h1>"), "{html}");
+        // headings carry a TOC anchor id + style attr now (round 4, C3)
+        assert!(html.contains("<h1 id=\"doc-h-1\"") && html.contains(">Hi</h1>"), "{html}");
         assert!(html.contains("<b>bold</b>"), "{html}");
     }
 
@@ -921,7 +1630,7 @@ mod tests {
         let html = docx_xml(xml);
         assert!(html.contains("<table class=\"doc-table\">"), "{html}");
         assert!(html.contains("<td>a</td>"), "{html}");
-        assert!(html.contains("<ul><li>item</li></ul>"), "{html}");
+        assert!(html.contains("<ul>") && html.contains("<li") && html.contains(">item</li>"), "{html}");
     }
 
     #[test]

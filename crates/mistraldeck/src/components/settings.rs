@@ -446,6 +446,7 @@ fn save_agent_field(
             "active_model" => patch.active_model = Some(value),
             "system_prompt_id" => patch.system_prompt_id = Some(value),
             "safety" => patch.safety = Some(value),
+            "instructions" => patch.instructions = Some(value),
             "enabled_tools" => patch.enabled_tools = Some(value),
             "disabled_tools" => patch.disabled_tools = Some(value),
             _ => {}
@@ -556,59 +557,148 @@ fn agents_panel(
         .map(|t| rsx! { option { key: "{t}", value: "{t}", "{t}" } })
         .collect();
 
-    // per-agent tool permission rows
+    // per-agent tool permission rows (round 4, A3): every configured row
+    // gets a permission select AND a remove button; an always-visible add
+    // row offers every available tool that is not configured yet, so new
+    // `[tools.*]` entries can be created and the section never renders as
+    // an unlabeled nameless button.
     let agent_tool_rows: Vec<Element> = if let Some(a) = &sel_agent {
-        let mut rows: Vec<(String, String)> = a.tool_permissions.clone();
-        if rows.is_empty() {
-            Vec::new()
-        } else {
-            rows.iter()
-                .map(|(tool, perm)| {
-                    let tool = tool.clone();
-                    let perm = perm.clone();
-                    let options: Vec<Element> = ["ask", "allow", "deny"]
-                        .iter()
-                        .map(|p| rsx! { option { value: "{p}", selected: *p == perm, "{p}" } })
-                        .collect();
-                    let state = state.clone();
-                    let files = files.clone();
-                    let sc = sc.clone();
-                    let name = selected.clone();
-                    let all = rows.clone();
-                    rsx! {
-                        div { key: "{tool}", class: "tool-perm-config-row",
-                            span { class: "tool-perm-name", "{tool}" }
-                            select {
-                                class: "field-select tool-perm-select",
-                                value: "{perm}",
-                                onchange: move |e| {
-                                    let value = e.value();
-                                    let mut next = all.clone();
-                                    if let Some(r) = next.iter_mut().find(|(t, _)| *t == tool) {
-                                        r.1 = value;
-                                    }
-                                    let state = state.clone();
-                                    let files = files.clone();
-                                    let sc = sc.clone();
-                                    let name = name.clone();
-                                    spawn(async move {
-                                        let patch = crate::vibeconfig::AgentPatch {
-                                            tool_permissions: Some(next),
-                                            ..Default::default()
-                                        };
-                                        let _ = crate::vibeconfig::api_save_agent(
-                                            token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name, patch,
-                                        ).await;
-                                        reload_files(state, "agents".to_string(), sc, files).await;
-                                    });
-                                },
-                                {options.iter().cloned()}
-                            }
+        let rows: Vec<(String, String)> = a.tool_permissions.clone();
+        let mut els: Vec<Element> = rows
+            .iter()
+            .map(|(tool, perm)| {
+                let tool = tool.clone();
+                let perm = perm.clone();
+                let options: Vec<Element> = ["ask", "allow", "deny"]
+                    .iter()
+                    .map(|p| rsx! { option { value: "{p}", selected: *p == perm, "{p}" } })
+                    .collect();
+                let state = state.clone();
+                let files = files.clone();
+                let sc = sc.clone();
+                let name = selected.clone();
+                let all = rows.clone();
+                let tool_for_remove = tool.clone();
+                let all_rm = rows.clone();
+                let state_rm = state.clone();
+                let files_rm = files.clone();
+                let sc_rm = sc.clone();
+                let name_rm = selected.clone();
+                rsx! {
+                    div { key: "{tool}", class: "tool-perm-config-row",
+                        span { class: "tool-perm-name", "{tool}" }
+                        select {
+                            class: "field-select tool-perm-select",
+                            value: "{perm}",
+                            onchange: move |e| {
+                                let value = e.value();
+                                let mut next = all.clone();
+                                if let Some(r) = next.iter_mut().find(|(t, _)| *t == tool) {
+                                    r.1 = value;
+                                }
+                                let state = state.clone();
+                                let files = files.clone();
+                                let sc = sc.clone();
+                                let name = name.clone();
+                                spawn(async move {
+                                    let patch = crate::vibeconfig::AgentPatch {
+                                        tool_permissions: Some(next),
+                                        ..Default::default()
+                                    };
+                                    let _ = crate::vibeconfig::api_save_agent(
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name, patch,
+                                    ).await;
+                                    reload_files(state, "agents".to_string(), sc, files).await;
+                                });
+                            },
+                            {options.iter().cloned()}
+                        }
+                        button {
+                            class: "field-btn danger tool-perm-remove",
+                            title: "{remove_lbl}",
+                            onclick: move |_| {
+                                let mut next = all_rm.clone();
+                                next.retain(|(t, _)| *t != tool_for_remove);
+                                let state = state_rm.clone();
+                                let files = files_rm.clone();
+                                let sc = sc_rm.clone();
+                                let name = name_rm.clone();
+                                spawn(async move {
+                                    let patch = crate::vibeconfig::AgentPatch {
+                                        tool_permissions: Some(next),
+                                        ..Default::default()
+                                    };
+                                    let _ = crate::vibeconfig::api_save_agent(
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name, patch,
+                                    ).await;
+                                    reload_files(state, "agents".to_string(), sc, files).await;
+                                });
+                            },
+                            "✕"
                         }
                     }
-                })
-                .collect()
+                }
+            })
+            .collect();
+        // add row: candidate tools = available tools (or built-in defaults)
+        // minus the already-configured ones
+        let configured: std::collections::HashSet<String> =
+            rows.iter().map(|(t, _)| t.clone()).collect();
+        let mut candidates: Vec<String> = available_tools
+            .iter()
+            .map(|(n, _)| n.clone())
+            .chain(default_tools.iter().map(|t| t.to_string()))
+            .filter(|n| !n.is_empty() && !configured.contains(n))
+            .collect();
+        candidates.sort();
+        candidates.dedup();
+        let mut cand_opts: Vec<Element> = vec![rsx! {
+            option { value: "", disabled: true, selected: true, "＋ {add_lbl}" }
+        }];
+        for c in &candidates {
+            cand_opts.push(rsx! { option { key: "{c}", value: "{c}", "{c}" } });
         }
+        {
+            let state = state.clone();
+            let files = files.clone();
+            let sc = sc.clone();
+            let name = selected.clone();
+            let all = rows.clone();
+            els.push(rsx! {
+                div { class: "tool-perm-config-row tool-perm-add-row",
+                    select {
+                        class: "field-select tool-perm-select",
+                        value: "",
+                        onchange: move |e| {
+                            let picked = e.value();
+                            if picked.is_empty() {
+                                return;
+                            }
+                            let mut next = all.clone();
+                            if !next.iter().any(|(t, _)| *t == picked) {
+                                next.push((picked, "ask".to_string()));
+                            }
+                            let state = state.clone();
+                            let files = files.clone();
+                            let sc = sc.clone();
+                            let name = name.clone();
+                            spawn(async move {
+                                let patch = crate::vibeconfig::AgentPatch {
+                                    tool_permissions: Some(next),
+                                    ..Default::default()
+                                };
+                                let _ = crate::vibeconfig::api_save_agent(
+                                    token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name, patch,
+                                ).await;
+                                reload_files(state, "agents".to_string(), sc, files).await;
+                            });
+                        },
+                        {cand_opts.iter().cloned()}
+                    }
+                }
+            });
+        }
+        els
     } else {
         Vec::new()
     };
@@ -772,9 +862,26 @@ fn agents_panel(
                                             },
                                     }
                                 }
+                                div { class: "field",
+                                    label { class: "field-label", "{loc(&lang, \"Instrukcje (instructions)\", \"Instructions\")}" }
+                                    textarea {
+                                        class: "field-input field-textarea",
+                                        value: "{a.instructions}",
+                                        placeholder: "{tr(&lang, \"systemPromptPlaceholder\")}",
+                                        onchange: {
+                                                let state = state.clone();
+                                                let files = files.clone();
+                                                let sc = sc.clone();
+                                                let nm = a.name.clone();
+                                                move |e| {
+                                                    save_agent_field(state.clone(), files.clone(), sc.clone(), nm.clone(), "instructions", e.value())
+                                                }
+                                            },
+                                    }
+                                }
                                 if a.agent_type != "subagent" {
                                     div { class: "field",
-                                        label { class: "field-label", "safety" }
+                                        label { class: "field-label", "{tr(&lang, \"agentSafety\")}" }
                                         select {
                                             class: "field-select",
                                             value: "{a.safety}",
@@ -824,6 +931,9 @@ fn agents_panel(
                                             },
                                         {prompt_opts.iter().cloned()}
                                     }
+                                    div { class: "field-hint",
+                                        "{loc(&lang, \"„builtin” to prompt systemowy dołączony do pakietu Mistral Vibe CLI (cli, explore, tests, lean, minimal); pozostałe pozycje to Twoje pliki .md z katalogu prompts.\", \"'builtin' entries are the system prompts bundled with the Mistral Vibe CLI (cli, explore, tests, lean, minimal); the rest are your .md files from the prompts folder.\")}"
+                                    }
                                 }
                                 div { class: "field",
                                     label { class: "field-label", "{tr(&lang, \"enabledTools\")}" }
@@ -861,11 +971,9 @@ fn agents_panel(
                                             },
                                     }
                                 }
-                                if !agent_tool_rows.is_empty() {
-                                    div { class: "field",
-                                        label { class: "field-label", "{tr(&lang, \"toolPermissions\")}" }
-                                        div { class: "tool-perm-list", {agent_tool_rows.iter().cloned()} }
-                                    }
+                                div { class: "field",
+                                    label { class: "field-label", "{tr(&lang, \"toolPermissions\")}" }
+                                    div { class: "tool-perm-list", {agent_tool_rows.iter().cloned()} }
                                 }
                             } else {
                                 div { class: "master-detail-empty", "{tr(&lang, \"noData\")}" }
@@ -1394,54 +1502,33 @@ pub fn SettingsView() -> Element {
                     div { class: "field-hint",
                         "{loc(&lang, \"Gdy oba pola są puste, serwer używa certyfikatu self-signed generowanego automatycznie. Własny certyfikat (np. z Let's Encrypt) jest używany do hostowania HTTPS.\", \"When both fields are empty, the server uses an automatically generated self-signed certificate. A custom certificate (e.g. Let's Encrypt) is used for HTTPS hosting.\")}"
                     }
-                    button {
-                        class: "save-btn",
-                        onclick: {
-                            let state = state.clone();
-                            let cert_saved = cert_saved.clone();
-                            let mut serve_info = serve_info.clone();
-                            let lang_c = lang.clone();
-                            move |_| {
-                                let state = state.clone();
-                                let mut cert_saved = cert_saved.clone();
-                                let lang = lang_c.clone();
-                                let cert = r_cert.read().clone();
-                                let key = r_key.read().clone();
-                                spawn(async move {
-                                    match crate::api::api_set_remote_certs(token(&state), cert, key).await {
-                                        Ok(()) => {
-                                            cert_saved.set(loc(&lang, "Zapisano.", "Saved."));
-                                            if let Ok(info) = crate::api::api_serve_info(token(&state)).await {
-                                                serve_info.set(Some(info));
-                                            }
-                                        }
-                                        Err(e) => cert_saved.set(format!("{}: {e}", loc(&lang, "Nie udało się zapisać", "Failed to save"))),
-                                    }
-                                });
-                            }
-                        },
-                        "{tr(&lang, \"saveLabel\")}"
-                    }
-                    if !cert_saved.read().is_empty() {
-                        span { class: "field-hint", style: "margin-left:10px;", "{*cert_saved.read()}" }
-                    }
                 }
+                // Round 4 (A1): ONE save button for the whole Server tab —
+                // it persists the remote credentials/port/enable AND the
+                // custom certificate paths in a single click (previously two
+                // identical "Zapisz" buttons sat in the same tab).
                 div { class: "field",
                     button {
                         class: "save-btn",
                         onclick: {
                             let state = state.clone();
                             let saved = saved.clone();
+                            let cert_saved = cert_saved.clone();
+                            let mut serve_info = serve_info.clone();
                             let lang_c = lang.clone();
                             move |_| {
                                 let state = state.clone();
                                 let mut saved = saved.clone();
+                                let mut cert_saved = cert_saved.clone();
+                                let mut serve_info = serve_info.clone();
                                 let lang = lang_c.clone();
                                 async move {
                                     let user = r_user.read().clone();
                                     let pass = r_pass.read().clone();
                                     let enable = *r_enable.read();
                                     let port = r_port.read().parse::<u16>().unwrap_or(8080);
+                                    let cert = r_cert.read().clone();
+                                    let key = r_key.read().clone();
                                     if user.trim().is_empty() || pass.is_empty() {
                                         saved.set(loc(&lang, "Podaj login i hasło.", "Enter username and password."));
                                         return;
@@ -1450,12 +1537,18 @@ pub fn SettingsView() -> Element {
                                         token(&state), user, pass, port, enable,
                                     )
                                     .await;
-                                    match res {
-                                        Ok(()) => {
+                                    // certificate paths ride along with the same save
+                                    let cert_res = crate::api::api_set_remote_certs(token(&state), cert, key).await;
+                                    match (res, cert_res) {
+                                        (Ok(()), Ok(())) => {
                                             saved.set(String::new());
+                                            cert_saved.set(loc(&lang, "Zapisano.", "Saved."));
+                                            if let Ok(info) = crate::api::api_serve_info(token(&state)).await {
+                                                serve_info.set(Some(info));
+                                            }
                                             refresh_after_save(state).await;
                                         }
-                                        Err(e) => {
+                                        (Err(e), _) | (_, Err(e)) => {
                                             let lbl = loc(&lang, "Nie udało się zapisać", "Failed to save");
                                             saved.set(format!("{}: {e}", lbl));
                                         }
@@ -1467,6 +1560,9 @@ pub fn SettingsView() -> Element {
                     }
                     if !saved.read().is_empty() {
                         span { class: "field-hint", style: "margin-left:10px;", "{*saved.read()}" }
+                    }
+                    if !cert_saved.read().is_empty() {
+                        span { class: "field-hint", style: "margin-left:10px;", "{*cert_saved.read()}" }
                     }
                 }
                 div { class: "field",
@@ -4335,6 +4431,8 @@ fn skills_panel(
         })
         .collect();
 
+    // Round 4 (A4): file rows get a per-file delete button (stable parity),
+    // and the column gets an add-file row on top.
     let file_rows: Vec<Element> = files
         .iter()
         .map(|f| {
@@ -4346,15 +4444,46 @@ fn skills_panel(
             } else {
                 "cfg-file-item"
             };
+            let mut skill_path_c = skill_path.clone();
+            let mut skill_editor_c = skill_editor.clone();
+            let del_path = path.clone();
+            let state_c = state.clone();
+            let sc_c = sc.clone();
+            let sel_c = selected.clone();
+            let mut skill_files_c = skill_files.clone();
             rsx! {
-                button {
-                    key: "{path}",
-                    class: "{cls}",
-                    onclick: move |_| {
-                        skill_path.set(path.clone());
-                        skill_editor.set(content.clone());
-                    },
-                    "{label}"
+                div { key: "{path}", class: "cfg-file-row",
+                    button {
+                        class: "{cls}",
+                        onclick: move |_| {
+                            skill_path_c.set(path.clone());
+                            skill_editor_c.set(content.clone());
+                        },
+                        "{label}"
+                    }
+                    button {
+                        class: "cfg-file-del",
+                        title: "{tr(&lang, \"deleteLabel\")}",
+                        onclick: move |e| {
+                            e.stop_propagation();
+                            let state = state_c.clone();
+                            let sc = sc_c.clone();
+                            let name = sel_c.clone();
+                            let p = del_path.clone();
+                            let mut skill_files = skill_files_c.clone();
+                            spawn(async move {
+                                let _ = crate::vibeconfig::api_delete_vibe_file(
+                                    token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), p,
+                                ).await;
+                                if let Ok(list) = crate::vibeconfig::api_list_skill_files(
+                                    token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name,
+                                ).await {
+                                    skill_files.set(list);
+                                }
+                            });
+                        },
+                        "✕"
+                    }
                 }
             }
         })
@@ -4443,7 +4572,9 @@ fn skills_panel(
                             let sc = sc.clone();
                             let mut skills = skills;
                             spawn(async move {
-                                let is_zip = false;
+                                // Round 4 (A4): pick the importer by extension —
+                                // a .zip path must go to the zip importer.
+                                let is_zip = src.to_lowercase().ends_with(".zip");
                                 let res = if is_zip {
                                     crate::vibeconfig::api_import_skill_zip(
                                         token(&state),
@@ -4580,6 +4711,7 @@ fn skills_panel(
                             "{loc(&lang, \"Wybierz umiejętność z listy\", \"Pick a skill on the left\")}"
                         }
                     } else {
+                      div { class: "skill-detail",
                         div { class: "config-item-header-row",
                             h4 { class: "config-item-name", "{selected}" }
                             button {
@@ -4650,58 +4782,112 @@ fn skills_panel(
                                 "🗑 {tr(&lang, \"deleteLabel\")}"
                             }
                         }
-                        div { class: "dirtree-col", {file_rows.iter().cloned()} }
-                        if !cur_path.is_empty() {
-                            textarea {
-                                class: "field-input",
-                                style: "min-height:200px;font-family:monospace;font-size:12px;white-space:pre;",
-                                value: "{skill_editor.read()}",
-                                oninput: move |e| skill_editor.set(e.value()),
-                            }
-                            button {
-                                class: "field-btn primary",
-                                style: "margin-top:8px;",
-                                onclick: {
-                                    let state = state.clone();
-                                    let sc = sc.clone();
-                                    let name = selected.clone();
-                                    move |_| {
-                                        let state = state.clone();
-                                        let sc = sc.clone();
-                                        let path = skill_path.read().clone();
-                                        let body = skill_editor.read().clone();
-                                        let name = name.clone();
-                                        spawn(async move {
-                                            let res = crate::vibeconfig::api_save_vibe_file(
-                                                token(&state),
-                                                sc.scope.clone(),
-                                                sc.cwd.clone(),
-                                                sc.conn.clone(),
-                                                path,
-                                                body,
-                                            )
-                                            .await;
-                                            match res {
-                                                Ok(()) => {
-                                                    skill_msg.set(String::new());
-                                                    if let Ok(list) = crate::vibeconfig::api_list_skill_files(
-                                                        token(&state),
-                                                        sc.scope.clone(),
-                                                        sc.cwd.clone(),
-                                                        sc.conn.clone(),
-                                                        name,
-                                                    )
-                                                    .await
-                                                    {
-                                                        skill_files.set(list);
-                                                    }
-                                                }
-                                                Err(e) => skill_msg.set(e.to_string()),
-                                            }
-                                        });
+                        // Round 4 (A4): stable layout — left column with an
+                        // add-file row + per-file delete, right column with a
+                        // filling editor box (path label + save on top).
+                        div { class: "skill-detail-body",
+                            div { class: "dirtree-col",
+                                div { class: "config-item-header-row",
+                                    input {
+                                        class: "field-input",
+                                        r#type: "text",
+                                        placeholder: "{loc(&lang, \"Nowy plik (np. notes.md)\", \"New file (e.g. notes.md)\")}",
+                                        value: "{new_name.read()}",
+                                        oninput: move |e| new_name.set(e.value()),
                                     }
-                                },
-                                "{tr(&lang, \"saveLabel\")}"
+                                    button {
+                                        class: "field-btn",
+                                        onclick: {
+                                            let state = state.clone();
+                                            let sc = sc.clone();
+                                            let name = selected.clone();
+                                            move |_| {
+                                                let fname = new_name.read().trim().to_string();
+                                                if fname.is_empty() { return; }
+                                                let state = state.clone();
+                                                let sc = sc.clone();
+                                                let name = name.clone();
+                                                spawn(async move {
+                                                    let path = format!("skills/{name}/{fname}");
+                                                    if crate::vibeconfig::api_save_vibe_file(
+                                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                                        path, String::new(),
+                                                    ).await.is_ok() {
+                                                        new_name.set(String::new());
+                                                        if let Ok(list) = crate::vibeconfig::api_list_skill_files(
+                                                            token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name,
+                                                        ).await {
+                                                            skill_files.set(list);
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        },
+                                        "＋ {tr(&lang, \"add\")}"
+                                    }
+                                }
+                                div { class: "dirtree-list", {file_rows.iter().cloned()} }
+                            }
+                            div { class: "vibe-editor-col",
+                                if !cur_path.is_empty() {
+                                    div { class: "config-item-header-row",
+                                        span { class: "field-label", "{cur_path}" }
+                                        button {
+                                            class: "field-btn primary",
+                                            onclick: {
+                                                let state = state.clone();
+                                                let sc = sc.clone();
+                                                let name = selected.clone();
+                                                move |_| {
+                                                    let state = state.clone();
+                                                    let sc = sc.clone();
+                                                    let path = skill_path.read().clone();
+                                                    let body = skill_editor.read().clone();
+                                                    let name = name.clone();
+                                                    spawn(async move {
+                                                        let res = crate::vibeconfig::api_save_vibe_file(
+                                                            token(&state),
+                                                            sc.scope.clone(),
+                                                            sc.cwd.clone(),
+                                                            sc.conn.clone(),
+                                                            path,
+                                                            body,
+                                                        )
+                                                        .await;
+                                                        match res {
+                                                            Ok(()) => {
+                                                                skill_msg.set(String::new());
+                                                                if let Ok(list) = crate::vibeconfig::api_list_skill_files(
+                                                                    token(&state),
+                                                                    sc.scope.clone(),
+                                                                    sc.cwd.clone(),
+                                                                    sc.conn.clone(),
+                                                                    name,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    skill_files.set(list);
+                                                                }
+                                                            }
+                                                            Err(e) => skill_msg.set(e.to_string()),
+                                                        }
+                                                    });
+                                                }
+                                            },
+                                            "{tr(&lang, \"saveLabel\")}"
+                                        }
+                                    }
+                                    div { class: "vibe-editor-box",
+                                        textarea {
+                                            class: "field-input skill-file-editor",
+                                            spellcheck: "false",
+                                            value: "{skill_editor.read()}",
+                                            oninput: move |e| skill_editor.set(e.value()),
+                                        }
+                                    }
+                                } else {
+                                    p { class: "empty-text", "{loc(&lang, \"Wybierz plik po lewej\", \"Pick a file on the left\")}" }
+                                }
                             }
                         }
                     }
@@ -4709,4 +4895,5 @@ fn skills_panel(
             }
         }
     }
+}
 }

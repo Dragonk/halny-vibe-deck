@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.99.10 — user-reported defects round 4 (2026-10-29)
+
+All 26 reported defects fixed; each row in `docs/next-bugs-round4.md` carries its root cause + fix. Highlights:
+
+**Settings**
+- **Server tab**: ONE Save button (previously two identical "Zapisz") persists remote credentials/port/enable **and** the custom certificate paths in a single click.
+- **Server tab IP hint**: `local_lan_ips()` now enumerates every non-loopback IPv4 on ALL platforms via `if-addrs` (GetAdaptersAddresses on Windows) — stable `os.networkInterfaces()` parity. The old unix-only getifaddrs + single-UDP fallback showed only the outbound (e.g. VPN/VPS) address on Windows.
+- **Agents tab**: tool-permission rows are a real editor — per-row ask/allow/deny select, per-row remove, and an always-visible labeled add row offering every unconfigured tool; the model dropdown has its label again (missing `model` i18n key added in all 6 languages, plus `agentSafety`); `instructions` is mapped end-to-end (local + SSH); the system-prompt dropdown explains that `builtin` = the prompts bundled with the Mistral Vibe CLI (`cli`, `explore`, `tests`, `lean`, `minimal` — `vibe/core/prompts`), the rest are the user's prompt `.md` files. The full CLI agent/subagent model (`vibe/core/agents/models.py`) is covered: builtins `ask`/`accept-edits`/`smart-approve`/`auto-approve`/`explore`/`lean` plus custom `~/.vibe/agents/*.toml` overrides (`agent_type`, `safety`, `display_name`, `description`, `active_model`, `system_prompt_id`, `enabled_tools`/`disabled_tools`, `[tools.*]` permissions, `instructions`).
+- **Skills tab**: stable layout again — header row (Create / Import folder / Import .zip / Open folder; `.zip` detection fixed), file counts in the master list, detail with add-file row, per-file delete, and an editor box that fills the panel.
+
+**Sidebar**
+- Projects and SSH connection groups are physically ONE scrollable list — expanded sessions can no longer push SSH off screen.
+- SSH sessions visible (mount-time pane load + `session/list` now parses the CLI 3.0.x `items` wrapper, not only the legacy bare array).
+- Untitled sessions get a real name (index title → first user prompt `preview`), never `(CLI)`.
+- Running sessions show the stable SVG arc spinner (the old marker was an invisible empty span).
+
+**Preview / dock**
+- The file editor fills the preview body height (was a fixed 420px).
+- Mermaid fences render in md previews too (renderer installed once at shell level; mermaid@12, `securityLevel: strict`, theme follows `data-theme`, re-renders on theme flip).
+- DOCX: embedded images (rels → media, data URIs), a generated table of contents when the document carries a TOC field/SDT, real hyperlinks, and full run/paragraph formatting (underline, color, highlight, font size, super/subscript, `w:ind`/`w:jc`/`w:spacing`).
+- XLSX: cell styles extracted from `xl/styles.xml` + per-cell `s=` attributes (bold/italic/color/fill/size) render in the sheet table with a styled sticky header and zebra rows.
+- Context menu per type: folder → rename/delete only; text files → preview/edit/download/open/rename/delete; docx-like files → no Edit (no built-in editor).
+- On desktop the preview FAB moves to the dock's left edge when the dock is open instead of covering it.
+
+**Chat**
+- Remote (SSH) mirror rows switch correctly — no more `session/resume: Session not found` after adding an SSH chat.
+- New sessions auto-select the default model (global `active_model` → first configured model); reopening a session restores its recorded model.
+- `SessionHistory` now MERGES instead of replacing: the just-sent user message and local system notices survive a resync; wire history is grouped properly (reasoning → thinking blocks, effect entries → tool calls), so resumed sessions keep thinking/tool info after the first answer.
+- Server-side prompt queue per slot (drained on turn end) — the queue is guarded even headless; the client sees `busy` immediately after send (send button flips to stop), and queued prompts send one at a time.
+- Event-stream reconnects (and the visibility bridge) resync the authoritative session state, so returning to a tab after minutes backfills ALL missed messages/actions.
+- `@` picker: file/folder names are left-aligned again (only the path hint rides right).
+- `/` picker always lists the CLI's built-in slash commands (from `vibe/acp/commands/registry.py`) plus agent-reported ones and the session-scoped skills/prompts (global + project, remote host for SSH).
+- Usage bar no longer blanks mid-conversation: `session/statsUpdated` is parsed with the real wire fields (`sessionPromptTokens`, `sessionCachedTokens`, `contextWindow`, `lastTurnDuration`, cost derived from the per-million price fields), and snapshots emit usage from `session.tokenUsage`/`contextUsage`.
+
 ## 1.99.9 — preview drop-upload + tools/subagent/usage round (2026-10-29)
 
 **Preview (dock)**

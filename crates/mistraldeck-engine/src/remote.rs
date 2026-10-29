@@ -374,14 +374,29 @@ pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
                         if session_id.is_empty() {
                             continue;
                         }
-                        sessions.push(RemoteSessionInfo {
-                            session_id,
-                            title: s
-                                .get("title")
-                                .or_else(|| s.get("name"))
+                        // Round 4 (B3): untitled sessions fall back to the
+                        // first user prompt (`preview`) so the list never
+                        // shows a nameless row.
+                        let mut title = s
+                            .get("title")
+                            .or_else(|| s.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if title.trim().is_empty() {
+                            title = s
+                                .get("preview")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
-                                .to_string(),
+                                .trim()
+                                .to_string();
+                        }
+                        if title.len() > 80 {
+                            title = format!("{}…", &title[..80]);
+                        }
+                        sessions.push(RemoteSessionInfo {
+                            session_id,
+                            title,
                             cwd: s
                                 .get("cwd")
                                 .or_else(|| s.get("workingDirectory"))

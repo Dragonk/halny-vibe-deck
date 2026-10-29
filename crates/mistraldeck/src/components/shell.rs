@@ -22,6 +22,10 @@ pub fn Shell() -> Element {
                 dioxus::document::eval(crate::components::mobile::MOBILE_JS);
                 dioxus::document::eval(crate::components::mobile::BACK_JS);
                 dioxus::document::eval(VISIBILITY_JS);
+                // Round 4 (C2): mermaid renderer for the whole page — chat
+                // AND the file-preview dock (md previews) both mount
+                // `.mermaid-container` divs.
+                dioxus::document::eval(MERMAID_JS);
                 // Layout probe: only the desktop webview keeps the header
                 // (the SSR pass and the browser both render the web layout,
                 // so hydration stays stable).
@@ -46,9 +50,16 @@ pub fn Shell() -> Element {
                     }
                 }
                 Err(_) => {
-                    // Stream dropped (server restart, token expiry).
+                    // Stream dropped (server restart, token expiry, hidden
+                    // tab). Round 4 (E9): ask the agent for the authoritative
+                    // session state too, so messages emitted while the stream
+                    // was down are backfilled, then refetch + drain the queue.
                     crate::state::sleep_ms(2_000).await;
+                    let tok = state.read().token.clone().unwrap_or_default();
+                    let _ = crate::api::api_resync_current(tok).await;
+                    crate::state::sleep_ms(250).await;
                     refresh(state).await;
+                    crate::state::drain_queue(state).await;
                 }
             }
         }
@@ -281,6 +292,87 @@ fn approval_el(
 /// Sidebar (120–400 px) and dock (260–720 px) resize handles, like Nexus
 /// Sidebar/Dock. The widths live in CSS vars on <html> (`.sidebar` and
 /// `.dock` read them) and persist in localStorage.
+/// Client-side mermaid bootstrap (round 4, C2: installed once at shell
+/// level so the chat AND the md file preview both render ```mermaid
+/// fences). Lazily injects mermaid from the CDN, then a MutationObserver
+/// renders every `.mermaid-container[data-src]`. securityLevel 'strict'
+/// like the stable edition; theme follows <html data-theme>; re-renders
+/// on theme change. mermaid v10+ `render()` returns a promise when no
+/// callback is passed, so one code path covers v10–v12.
+#[cfg(any(feature = "web", feature = "desktop"))]
+pub(crate) const MERMAID_JS: &str = r#"
+(function(){
+  if (window.__vdMermaid) return; window.__vdMermaid = true;
+  function theme(){ return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default'; }
+  function load(cb){
+    if (window.mermaid) return cb();
+    if (window.__vdMermaidLoading) return window.__vdMermaidLoading.then(cb);
+    window.__vdMermaidLoading = new Promise(function(res){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/mermaid@12/dist/mermaid.min.js';
+      s.onload = res; s.onerror = res;
+      document.head.appendChild(s);
+    });
+    window.__vdMermaidLoading.then(cb);
+  }
+  function fail(el, err){
+    el.classList.remove('mermaid-ready');
+    el.classList.add('mermaid-error');
+    el.innerHTML = '<div class="mermaid-error-title">Mermaid error</div><pre></pre>';
+    var pre = el.querySelector('pre');
+    if (pre) pre.textContent = String(err && err.message ? err.message : err);
+  }
+  function renderEl(el){
+    load(function(){
+      if (!window.mermaid) {
+        el.classList.add('mermaid-error');
+        el.innerHTML = '<div class="mermaid-error-title">mermaid.js unavailable</div>';
+        return;
+      }
+      try {
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: theme() });
+        var src = el.getAttribute('data-src') || '';
+        var id = 'vdGraph' + (el.__vdId || (el.__vdId = Math.random().to_string(36).slice(2)));
+        var r;
+        try { r = window.mermaid.render(id, src); } catch (e) { return fail(el, e); }
+        if (r && typeof r.then === 'function') {
+          r.then(function(o){ el.innerHTML = (o && o.svg) ? o.svg : String(o); el.classList.add('mermaid-ready'); el.classList.remove('mermaid-error'); })
+           .catch(function(e){ fail(el, e); });
+        } else if (typeof r === 'string') {
+          el.innerHTML = r; el.classList.add('mermaid-ready');
+        }
+      } catch (e) { fail(el, e); }
+    });
+  }
+  function scan(){
+    document.querySelectorAll('.mermaid-container:not([data-vd-done])').forEach(function(el){
+      el.setAttribute('data-vd-done', '1');
+      renderEl(el);
+    });
+  }
+  function rescan(){
+    // theme switch: re-render everything from its data-src
+    document.querySelectorAll('.mermaid-container').forEach(function(el){
+      el.removeAttribute('data-vd-done');
+      el.classList.remove('mermaid-ready');
+    });
+    scan();
+  }
+  var mo = new MutationObserver(function(){ scan(); });
+  mo.observe(document.body, { childList: true, subtree: true });
+  // re-render diagrams when the app theme flips (data-theme on <html>)
+  var moTheme = new MutationObserver(function(muts){
+    for (var i = 0; i < muts.length; i++) {
+      if (muts[i].attributeName === 'data-theme') { rescan(); break; }
+    }
+  });
+  moTheme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  var mq = window.matchMedia('(prefers-color-scheme: dark)');
+  if (mq && mq.addEventListener) mq.addEventListener('change', rescan);
+  scan();
+})();
+"#;
+
 /// v1.0.17: on return to a (frozen) tab the event stream may have
 /// dropped events while backgrounded — clicking the hidden
 /// `vd-visibility-resync` bridge button triggers a full snapshot

@@ -332,6 +332,14 @@ code {
     color: var(--text-dim);
 }
 
+/* Round 4 (B1): the SSH divider sits inside the single scrollable list */
+.ssh-section-label {
+    flex-shrink: 0;
+    margin-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 10px;
+}
+
 .session-list {
     flex: 1;
     overflow-y: auto;
@@ -4844,6 +4852,8 @@ code {
     top: 0;
     font-weight: 600;
 }
+/* Round 4 (C4): zebra striping so styled sheets read like a real table */
+.sheet-table tr.sheet-row-even td { background: rgba(128, 128, 128, 0.05); }
 
 /* DOCX */
 .preview-docx {
@@ -5429,6 +5439,12 @@ code {
 .file-preview-body { position: relative; }
 .file-preview-body:has(.cm-host) { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .file-preview-body:has(.cm-host) > *:not(.cm-host) { flex-shrink: 0; }
+/* Round 4 (C1): the edit mode must fill the whole preview body height
+   (the .code-editor used to stay at a fixed 420px regardless of the
+   window/dock height). */
+.file-preview-body:has(.preview-edit) { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.file-preview-body:has(.preview-edit) .preview-edit { flex: 1; min-height: 0; }
+.file-preview-body:has(.preview-edit) .code-editor { height: 100%; flex: 1; min-height: 0; }
 
 /* v0.5.0: MCP raw JSON view */
 .mcp-json-textarea {
@@ -5716,8 +5732,58 @@ code {
   flex: 1 1 auto;
   min-height: 0;
   gap: 10px;
-  height: 440px;
 }
+/* Round 4 (A4): skill file rows carry a delete button; the list scrolls. */
+.dirtree-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.cfg-file-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.cfg-file-row .cfg-file-item {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cfg-file-del {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.cfg-file-del:hover { background: var(--panel-hover); color: var(--color-danger); }
+/* The skill file editor fills the editor box (round 4, A4). */
+.vibe-editor-box .skill-file-editor {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  padding: 12px;
+  box-sizing: border-box;
+}
+.vibe-editor-box { min-height: 0; }
 .sandbox-planned-card {
   border: 1px dashed var(--border);
   border-radius: 8px;
@@ -5979,6 +6045,16 @@ pre.code-view { white-space: pre; }
 .doc-render .doc-spacer { margin: 4px 0; }
 .doc-render table.doc-table { border-collapse: collapse; margin: 12px 0; max-width: 100%; }
 .doc-render table.doc-table td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+/* Round 4 (C3): embedded images, generated TOC, real hyperlinks */
+.doc-render img.doc-img { max-width: 100%; height: auto; display: block; margin: 10px 0; border-radius: 6px; }
+.doc-render a.doc-link { color: var(--accent); text-decoration: underline; }
+.doc-render .doc-toc { border: 1px solid var(--border-subtle); background: var(--panel); border-radius: 8px; padding: 12px 16px; margin: 14px 0; max-width: 480px; }
+.doc-render .doc-toc-title { font-weight: 600; font-size: 0.95em; margin-bottom: 6px; color: var(--text); }
+.doc-render .doc-toc ul { list-style: none; padding-left: 0; margin: 0; }
+.doc-render .doc-toc li { margin: 3px 0; font-size: 0.9em; }
+.doc-render .doc-toc a { color: var(--accent); text-decoration: none; }
+.doc-render .doc-toc a:hover { text-decoration: underline; }
+.doc-render ol.doc-list-num { padding-left: 24px; margin: 8px 0; }
 .doc-render table.doc-table tr:first-child td { font-weight: 600; background: var(--panel-hover); }
 .preview-doc { flex: 1; overflow: auto; }
 
@@ -7195,6 +7271,14 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     .web-fab-right.dock-open { display: none; }
     .web-fab-left.dock-open { display: none; }
     .web-fab-right.sidebar-open { display: none; }
+}
+/* Round 4 (D1): on desktop widths the preview FAB must NOT cover the open
+   dock — it moves to the dock's left edge (the dock width is the
+   --vd-dock-w CSS variable set by the resize handle). */
+@media (min-width: 769px) {
+    .web-fab-right.dock-open {
+        right: calc(var(--vd-dock-w, 400px) + 12px);
+    }
 }
 
 /* ---- "New project…" (Z2/D3): header button + folder picker ---- */

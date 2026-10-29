@@ -10,6 +10,25 @@ use mistraldeck_core::proto::ConfigOption;
 use crate::i18n::{tf, tr};
 use crate::state::{lang, submit, token, ClientState};
 
+/// The CLI's built-in slash commands (vibe/acp/commands/registry.py
+/// `_build_commands`, advertised via available_commands_update). Round 4
+/// (E11): offered even before any agent slot is live, so `/` always shows a
+/// real list — merged with whatever the running session reports.
+#[cfg(any(feature = "web", feature = "desktop", feature = "server"))]
+const BUILTIN_SLASH_COMMANDS: &[(&str, &str, &str)] = &[
+    ("help", "Show available commands and keyboard shortcuts", ""),
+    ("compact", "Compact conversation history by summarizing", "Optional instructions to guide the compaction summary"),
+    ("reload", "Reload configuration, agent instructions, and skills from disk", ""),
+    ("log", "Show path to current session log directory", ""),
+    ("mcp", "Show MCP OAuth status, login guidance, or log out an OAuth MCP server", "status | login <alias> | logout <alias>"),
+    ("teleport", "Teleport session to Vibe Code Web", ""),
+    ("proxy-setup", "Configure proxy and SSL certificate settings", "KEY value to set, KEY to unset, or empty for help"),
+    ("retry", "Continue an interrupted model response", "Optional additional instructions for the continuation"),
+    ("leanstall", "Install the Lean 4 agent (leanstral)", ""),
+    ("unleanstall", "Uninstall the Lean 4 agent", ""),
+    ("data-retention", "Show data retention information", ""),
+];
+
 /// One `/` picker entry (Nexus SlashItem).
 #[derive(Clone, Debug, PartialEq)]
 struct SlashItem {
@@ -339,8 +358,13 @@ pub fn InputBar() -> Element {
                             at_open.set(false);
                         },
                         span { class: "picker-item-icon", "{icon}" }
+                        // Round 4 (E10): the file name is the left-aligned
+                        // label (stable renders icon + path); only the path
+                        // hint rides on the right edge. `.picker-item-kind`
+                        // has margin-left:auto and pushed the NAME to the
+                        // right.
                         span { class: "picker-item-body",
-                            span { class: "picker-item-kind", "{name}" }
+                            span { class: "picker-item-label", "{name}" }
                             if !hint.is_empty() {
                                 span { class: "picker-item-hint", "{hint}" }
                             }
@@ -854,55 +878,91 @@ pub fn InputBar() -> Element {
                                 spawn(async move {
                                     if !*slash_loaded.read() {
                                         slash_loaded.set(true);
-                                        let sk = crate::vibeconfig::api_list_vibe_files(
-                                            token(&state),
-                                            "global".to_string(),
-                                            String::new(),
-                                            None,
-                                            "skills".to_string(),
-                                        )
-                                        .await;
-                                        let pr = crate::vibeconfig::api_list_vibe_files(
-                                            token(&state),
-                                            "global".to_string(),
-                                            String::new(),
-                                            None,
-                                            "prompts".to_string(),
-                                        )
-                                        .await;
+                                        // Round 4 (E11): the picker must
+                                        // always offer the CLI's built-in
+                                        // slash commands (vibe/acp/commands/
+                                        // registry.py) — the agent only
+                                        // reports them once a slot is live —
+                                        // plus the session-scoped skills and
+                                        // prompts (global + project for
+                                        // local sessions, the remote host for
+                                        // SSH sessions).
+                                        let (scwd, conn) = {
+                                            let s = state.read();
+                                            let cur = s.snapshot.current.and_then(|i| s.snapshot.sessions.get(i));
+                                            let rid = cur.and_then(|m| m.remote_id.clone());
+                                            let conn = rid.and_then(|id| {
+                                                s.snapshot
+                                                    .config
+                                                    .remote_connections
+                                                    .iter()
+                                                    .find(|c| c.id == id)
+                                                    .cloned()
+                                            });
+                                            (
+                                                cur.map(|m| m.working_directory.clone())
+                                                    .filter(|d| !d.is_empty())
+                                                    .unwrap_or_default(),
+                                                conn,
+                                            )
+                                        };
                                         let mut items: Vec<SlashItem> = Vec::new();
-                                        for c in state.read().snapshot.commands.clone() {
+                                        for c in BUILTIN_SLASH_COMMANDS {
                                             items.push(SlashItem {
-                                                id: format!("cmd:{}", c.name),
-                                                label: c.name.clone(),
+                                                id: format!("cmd:{}", c.0),
+                                                label: c.0.to_string(),
                                                 kind: "command",
-                                                content: format!("/{}", c.name),
-                                                description: c.description.clone(),
-                                                hint: c.hint.clone(),
+                                                content: format!("/{}", c.0),
+                                                description: c.1.to_string(),
+                                                hint: c.2.to_string(),
                                             });
                                         }
-                                        if let Ok(files) = sk {
-                                            for f in files {
+                                        for c in state.read().snapshot.commands.clone() {
+                                            if !items.iter().any(|i| i.label == c.name) {
                                                 items.push(SlashItem {
-                                                    id: format!("skill:{}", f.display_name),
-                                                    label: f.display_name.clone(),
-                                                    kind: "skill",
-                                                    content: f.content.clone(),
-                                                    description: String::new(),
-                                                    hint: String::new(),
+                                                    id: format!("cmd:{}", c.name),
+                                                    label: c.name.clone(),
+                                                    kind: "command",
+                                                    content: format!("/{}", c.name),
+                                                    description: c.description.clone(),
+                                                    hint: c.hint.clone(),
                                                 });
                                             }
                                         }
-                                        if let Ok(files) = pr {
-                                            for f in files {
-                                                items.push(SlashItem {
-                                                    id: format!("prompt:{}", f.display_name),
-                                                    label: f.display_name.clone(),
-                                                    kind: "prompt",
-                                                    content: f.content.clone(),
-                                                    description: String::new(),
-                                                    hint: String::new(),
-                                                });
+                                        // skills + prompts: global scope, plus
+                                        // the project scope for local sessions
+                                        let mut scopes: Vec<(String, String, Option<mistraldeck_core::snapshot::RemoteConnection>)> =
+                                            vec![("global".to_string(), String::new(), conn.clone())];
+                                        if conn.is_none() && !scwd.is_empty() {
+                                            scopes.push(("project".to_string(), scwd.clone(), None));
+                                        }
+                                        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                                        for (scope, cwd, c) in &scopes {
+                                            for kind in ["skills", "prompts"] {
+                                                if let Ok(files) = crate::vibeconfig::api_list_vibe_files(
+                                                    token(&state),
+                                                    scope.clone(),
+                                                    cwd.clone(),
+                                                    c.clone(),
+                                                    kind.to_string(),
+                                                )
+                                                .await
+                                                {
+                                                    for f in files {
+                                                        let key = format!("{}:{}", kind, f.display_name);
+                                                        if !seen.insert(key) {
+                                                            continue;
+                                                        }
+                                                        items.push(SlashItem {
+                                                            id: format!("{}:{}", kind, f.display_name),
+                                                            label: f.display_name.clone(),
+                                                            kind: if kind == "skills" { "skill" } else { "prompt" },
+                                                            content: f.content.clone(),
+                                                            description: String::new(),
+                                                            hint: String::new(),
+                                                        });
+                                                    }
+                                                }
                                             }
                                         }
                                         slash_items.set(items);

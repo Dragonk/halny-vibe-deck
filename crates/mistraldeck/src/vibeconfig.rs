@@ -123,6 +123,7 @@ pub struct AgentView {
     pub active_model: String,
     pub system_prompt_id: String,
     pub safety: String,
+    pub instructions: String,
     pub enabled_tools: String,
     pub disabled_tools: String,
     /// `(tool, permission)` pairs of the agent's `[tools.*]` table.
@@ -144,6 +145,7 @@ impl AgentView {
             active_model: a.active_model.clone().unwrap_or_default(),
             system_prompt_id: a.system_prompt_id.clone().unwrap_or_default(),
             safety: a.safety.clone().unwrap_or_else(|| "neutral".to_string()),
+            instructions: a.instructions.clone().unwrap_or_default(),
             enabled_tools: a.enabled_tools.join(", "),
             disabled_tools: a.disabled_tools.join(", "),
             tool_permissions: a.tool_permissions.clone(),
@@ -167,6 +169,8 @@ pub struct AgentPatch {
     pub system_prompt_id: Option<String>,
     #[serde(default)]
     pub safety: Option<String>,
+    #[serde(default)]
+    pub instructions: Option<String>,
     #[serde(default)]
     pub enabled_tools: Option<String>,
     #[serde(default)]
@@ -709,13 +713,20 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                 .collect(),
             "skills" => SkillFile::load_all()
                 .into_iter()
-                .map(|s| FileCard {
-                    kind: "skills".into(),
-                    display_name: s.name.clone(),
-                    path: format!("skills/{}/SKILL.md", s.name),
-                    content: s.content,
-                    meta: String::new(),
-                    agent: None,
+                .map(|s| {
+                    // Round 4 (A4): the master list shows the file count
+                    // (stable parity: `skill.files?.length ?? 0`).
+                    let dir = vibe_home().join("skills").join(&s.name);
+                    let mut files = Vec::new();
+                    collect_skill_files(&dir, &dir, &s.name, &mut files);
+                    FileCard {
+                        kind: "skills".into(),
+                        display_name: s.name.clone(),
+                        path: format!("skills/{}/SKILL.md", s.name),
+                        content: s.content,
+                        meta: files.len().to_string(),
+                        agent: None,
+                    }
                 })
                 .collect(),
             _ => Vec::new(),
@@ -1322,6 +1333,9 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
             if let Some(v) = &patch.safety {
                 a.safety = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
             }
+            if let Some(v) = &patch.instructions {
+                a.instructions = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
             if let Some(v) = &patch.enabled_tools {
                 a.enabled_tools = v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
             }
@@ -1349,6 +1363,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     disabled_tools: Vec::new(),
                     tool_permissions: Vec::new(),
                     safety: None,
+                    instructions: None,
                 });
                 apply(&mut a);
                 fs::create_dir_all(&agents)
@@ -1373,6 +1388,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     disabled_tools: Vec::new(),
                     tool_permissions: Vec::new(),
                     safety: None,
+                    instructions: None,
                 });
                 apply(&mut a);
                 remote_vibe::save_remote_agent_raw(conn, dir, name, &agent_file_toml(&a))

@@ -935,19 +935,28 @@ impl Engine {
             Some(agent_session_id) => {
                 if let Some(slot_id) = st.slot_of_session(&key) {
                     if let Some(slot) = st.slots.get_mut(&slot_id) {
-                        slot.busy = true;
-                        slot.last_activity = std::time::Instant::now();
-                        // v0.13.1: a failed prompt send unblocks the chat.
-                        if slot
-                            .cmd
-                            .send(AgentCommand::Prompt {
-                                session_id: agent_session_id,
-                                text,
-                                images,
-                            })
-                            .is_err()
-                        {
-                            mark_prompt_failed(slot);
+                        if slot.busy {
+                            // Round 4 (E6/E7): the agent is mid-turn — queue
+                            // the prompt server-side instead of firing it
+                            // now; it goes out when the turn completes
+                            // (pump_slot_queue on PromptCompleted).
+                            slot.queue.push_back((text.clone(), images.clone()));
+                            slot.last_activity = std::time::Instant::now();
+                        } else {
+                            slot.busy = true;
+                            slot.last_activity = std::time::Instant::now();
+                            // v0.13.1: a failed prompt send unblocks the chat.
+                            if slot
+                                .cmd
+                                .send(AgentCommand::Prompt {
+                                    session_id: agent_session_id,
+                                    text,
+                                    images,
+                                })
+                                .is_err()
+                            {
+                                mark_prompt_failed(slot);
+                            }
                         }
                     }
                 } else {
@@ -1045,15 +1054,24 @@ impl Engine {
                     let mut st = self.state.lock().unwrap();
                     if let Some(slot_id) = st.slot_of_session(&key) {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {
-                            slot.busy = true;
-                            slot.last_activity = std::time::Instant::now();
-                            slot.pending_prompt = Some(text);
-                            slot.pending_images = images;
+                            if slot.busy {
+                                // Round 4 (E6/E7): busy wake — queue behind it.
+                                slot.queue.push_back((text, images));
+                            } else {
+                                slot.busy = true;
+                                slot.last_activity = std::time::Instant::now();
+                                slot.pending_prompt = Some(text);
+                                slot.pending_images = images;
+                            }
                         }
                     }
                 }
             },
         }
+        // Round 4 (E8): publish the busy flip so every client refetches the
+        // snapshot immediately — the send button must not stay active while
+        // the agent is already streaming.
+        self.publish(BusEvent::StructureChanged);
     }
 
     pub fn cancel(&self) {
@@ -1933,7 +1951,49 @@ impl Engine {
                     if matches {
                         if let Some(i) = slot_session {
                             if let Some(session) = st.sessions.get_mut(i) {
-                                session.messages = messages;
+                                // Round 4 (E3): MERGE the authoritative
+                                // history with local-only messages instead
+                                // of replacing. The server history may lag
+                                // the just-sent prompt (it is persisted with
+                                // the turn) and never carries local system
+                                // notices (WARNING …, config changes) — a
+                                // blind replace made both vanish mid-turn.
+                                let new_user_texts: std::collections::HashSet<String> =
+                                    messages
+                                        .iter()
+                                        .filter(|m| m.sender == MessageSender::User)
+                                        .map(|m| m.content.clone())
+                                        .collect();
+                                let mut merged = messages;
+                                let mut missing_user: Vec<Message> = Vec::new();
+                                let mut missing_system: Vec<Message> = Vec::new();
+                                for old in &session.messages {
+                                    match old.sender {
+                                        MessageSender::System => {
+                                            missing_system.push(old.clone())
+                                        }
+                                        MessageSender::User
+                                            if !new_user_texts.contains(&old.content) =>
+                                        {
+                                            missing_user.push(old.clone())
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                // unpersisted user prompts belong before the
+                                // trailing AI answer (the turn is in flight)
+                                if !missing_user.is_empty() {
+                                    let insert_at = merged
+                                        .iter()
+                                        .rposition(|m| m.sender == MessageSender::User)
+                                        .map(|p| p + 1)
+                                        .unwrap_or(merged.len());
+                                    for (k, m) in missing_user.into_iter().enumerate() {
+                                        merged.insert(insert_at + k, m);
+                                    }
+                                }
+                                merged.extend(missing_system);
+                                session.messages = merged;
                                 session.plan = plan;
                                 session.last_active_ms = now_ms();
                                 session.stream_msg_id = None;
@@ -2263,6 +2323,18 @@ impl Engine {
             }
         }
         drop(guard);
+        // Round 4 (E6/E7): the turn ended (PromptCompleted / SessionReady)
+        // — release the next queued prompt, one at a time. This is the
+        // headless-safe queue guard: it lives in the engine, so it works
+        // with no UI client attached. On errors the queue stays put (the
+        // respawn fallback owns the pending prompt there).
+        if matches!(
+            event_out,
+            AgentEvent::PromptCompleted { .. } | AgentEvent::SessionReady { .. }
+        ) {
+            let mut st2 = self.state.lock().unwrap();
+            pump_slot_queue(&mut st2, slot_id);
+        }
         // Nexus §2.2 fallback: the lazy wake failed — start a fresh
         // session in the same cwd and send the pending prompt there.
         if let Some((prompt, cwd)) = respawn {
@@ -2304,6 +2376,37 @@ impl Engine {
 /// process is gone, so the turn can never complete; surface the error and
 /// free the slot. Its Disconnected status makes the next prompt respawn a
 /// fresh worker via `reuse_slot_or_cleanup`.
+/// Round 4 (E6/E7): send the slot's next queued prompt when the slot is
+/// idle. Call with the engine state lock held, after `busy` flipped false
+/// (PromptCompleted / SessionReady). No-op while busy or queue empty.
+fn pump_slot_queue(st: &mut crate::types::EngineState, slot_id: u64) {
+    let agent_id = st
+        .session_of_slot(slot_id)
+        .and_then(|i| st.sessions.get(i))
+        .and_then(|s| s.agent_session_id.clone());
+    let Some(agent_id) = agent_id else { return };
+    let Some(slot) = st.slots.get_mut(&slot_id) else { return };
+    if slot.busy {
+        return;
+    }
+    let Some((text, images)) = slot.queue.pop_front() else {
+        return;
+    };
+    slot.busy = true;
+    slot.last_activity = std::time::Instant::now();
+    if slot
+        .cmd
+        .send(AgentCommand::Prompt {
+            session_id: agent_id,
+            text,
+            images,
+        })
+        .is_err()
+    {
+        mark_prompt_failed(slot);
+    }
+}
+
 pub fn mark_prompt_failed(slot: &mut crate::types::SlotState) {
     slot.busy = false;
     slot.status = AgentStatus::Disconnected;
@@ -2523,6 +2626,18 @@ pub fn build_chip_options(
             }
         }
     }
+    // Round 4 (E2/E4): a session with no recorded model still shows the
+    // CLI default — the global `active_model`, else the first configured
+    // model — instead of an empty chip. New sessions and sessions reopened
+    // from the list both land here.
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| {
+            mistraldeck_vibe::VibeConfigFile::load()
+                .active_model()
+                .filter(|a| !a.trim().is_empty())
+        })
+        .or_else(|| models.first().map(|m| key_of(m)));
     let cur_model = model
         .as_deref()
         .and_then(|lm| models.iter().find(|m| key_of(m) == lm || m.name == lm));
@@ -2702,6 +2817,46 @@ mod idle_reaper_tests {
     use mistraldeck_core::snapshot::AgentStatus;
     use std::sync::mpsc;
 
+    /// Round 4 (E6/E7): the server-side prompt queue — a busy slot keeps
+    /// queued prompts; once idle, pump sends exactly the next one.
+    #[test]
+    fn queue_pumps_one_prompt_when_idle_and_holds_while_busy() {
+        let (mut s, rx) = slot(false, std::time::Duration::from_secs(0));
+        s.queue.push_back(("p1".to_string(), Vec::new()));
+        s.queue.push_back(("p2".to_string(), Vec::new()));
+        let mut st = EngineState::default();
+        st.sessions.push(ChatSession::new("s", "/tmp"));
+        st.sessions[0].agent_session_id = Some("agent-1".to_string());
+        st.current = Some(0);
+        st.slots.insert(7, s);
+        st.slot_of.insert("sess".to_string(), 7);
+        st.sessions[0].id = "sess".to_string();
+
+        // busy: nothing is sent
+        st.slots.get_mut(&7).unwrap().busy = true;
+        pump_slot_queue(&mut st, 7);
+        assert_eq!(st.slots[&7].queue.len(), 2);
+        assert!(rx.try_recv().is_err());
+
+        // idle: exactly one prompt goes out, the rest stays queued
+        st.slots.get_mut(&7).unwrap().busy = false;
+        pump_slot_queue(&mut st, 7);
+        assert!(st.slots[&7].busy);
+        assert_eq!(st.slots[&7].queue.len(), 1);
+        match rx.try_recv() {
+            Ok(AgentCommand::Prompt { session_id, text, .. }) => {
+                assert_eq!(session_id, "agent-1");
+                assert_eq!(text, "p1");
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
+        // still busy -> the second prompt waits
+        pump_slot_queue(&mut st, 7);
+        assert_eq!(st.slots[&7].queue.len(), 1);
+        assert!(rx.try_recv().is_err());
+    }
+
+
     fn slot(busy: bool, age: std::time::Duration) -> (SlotState, mpsc::Receiver<AgentCommand>) {
         let (tx, rx) = mpsc::channel();
         let s = SlotState {
@@ -2715,6 +2870,7 @@ mod idle_reaper_tests {
                 .unwrap_or_else(std::time::Instant::now),
             pending_prompt: None,
             pending_images: Vec::new(),
+            queue: std::collections::VecDeque::new(),
             pending_option: None,
             approval: None,
             question: None,
@@ -2844,6 +3000,7 @@ mod zombie_tests {
             last_activity: std::time::Instant::now(),
             pending_prompt: None,
             pending_images: Vec::new(),
+            queue: std::collections::VecDeque::new(),
             pending_option: None,
             approval: None,
             question: None,
@@ -3013,6 +3170,7 @@ mod prompt_unblock_tests {
             last_activity: std::time::Instant::now(),
             pending_prompt: None,
             pending_images: Vec::new(),
+            queue: std::collections::VecDeque::new(),
             pending_option: None,
             approval: None,
             question: None,

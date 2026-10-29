@@ -402,19 +402,36 @@ impl Worker {
                 return;
             }
         };
-        let items: Vec<SessionListItem> = res
-            .get("sessions")
-            .cloned()
+        // CLI 3.0.x wraps the list in `items` (SessionListResponse); older
+        // releases sent a bare array or `sessions` — accept all three.
+        let items: Vec<SessionListItem> = ["items", "sessions"]
+            .iter()
+            .find_map(|k| res.get(k).cloned())
             .or_else(|| Some(res.clone()))
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         let infos: Vec<AgentSessionInfo> = items
             .into_iter()
-            .map(|s| AgentSessionInfo {
-                session_id: s.id,
-                name: s.title.unwrap_or_default(),
-                cwd: s.cwd.unwrap_or_default(),
-                start_time: value_to_string(s.updated_at),
+            .map(|s| {
+                // Round 4 (B3): a session the CLI has not titled yet gets a
+                // real name — the index title, else the first user prompt
+                // (`preview`) — instead of a bare "(CLI)" placeholder.
+                let mut name = s.title.unwrap_or_default();
+                if name.trim().is_empty() {
+                    name = mistraldeck_vibe::stats::index_title(&s.id).unwrap_or_default();
+                }
+                if name.trim().is_empty() {
+                    name = s.preview.unwrap_or_default();
+                }
+                if name.len() > 80 {
+                    name = format!("{}…", &name[..name.len().min(80)]);
+                }
+                AgentSessionInfo {
+                    session_id: s.id,
+                    name,
+                    cwd: s.cwd.unwrap_or_default(),
+                    start_time: value_to_string(s.updated_at),
+                }
             })
             .collect();
         self.emit(AgentEvent::SessionsList(infos));

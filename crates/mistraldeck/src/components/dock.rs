@@ -73,6 +73,8 @@ struct PreviewTab {
     data: Option<PreviewData>,
     diff: String,
     loaded: bool,
+    /// Open straight into edit mode (context-menu "Edit", round 4 C5).
+    start_edit: bool,
 }
 
 fn close_tab(mut tabs: Signal<Vec<PreviewTab>>, mut active: Signal<Option<u64>>, id: u64) {
@@ -85,6 +87,7 @@ fn close_tab(mut tabs: Signal<Vec<PreviewTab>>, mut active: Signal<Option<u64>>,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_file_tab(
     state: Signal<ClientState>,
     mut tabs: Signal<Vec<PreviewTab>>,
@@ -95,12 +98,33 @@ fn open_file_tab(
     remote_id: Option<String>,
     root: String,
 ) {
+    open_file_tab_edit(state, tabs, active, next_id, path, name, remote_id, root, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_file_tab_edit(
+    state: Signal<ClientState>,
+    mut tabs: Signal<Vec<PreviewTab>>,
+    mut active: Signal<Option<u64>>,
+    mut next_id: Signal<u64>,
+    path: String,
+    name: String,
+    remote_id: Option<String>,
+    root: String,
+    start_edit: bool,
+) {
     let existing = tabs
         .read()
         .iter()
         .find(|t| t.kind == "file" && t.path == path && t.remote_id == remote_id)
         .map(|t| t.id);
     if let Some(id) = existing {
+        if start_edit {
+            let mut v = tabs.write();
+            if let Some(t) = v.iter_mut().find(|t| t.id == id) {
+                t.start_edit = true;
+            }
+        }
         active.set(Some(id));
         return;
     }
@@ -119,6 +143,7 @@ fn open_file_tab(
             data: None,
             diff: String::new(),
             loaded: false,
+            start_edit,
         });
     }
     active.set(Some(id));
@@ -173,6 +198,7 @@ fn open_diff_tab(
             data: None,
             diff: String::new(),
             loaded: false,
+            start_edit: false,
         });
     }
     active.set(Some(id));
@@ -866,57 +892,63 @@ fn files_panel(
                 class: "ctx-menu",
                 style: "left:{c.x}px;top:{c.y}px;",
                 onclick: move |e| e.stop_propagation(),
-                button {
-                    class: "ctx-menu-item",
-                    onclick: {
-                        let mut file_ctx = file_ctx2.clone();
-                        let c = c2.clone();
-                        let state = state2.clone();
-                        let mut tabs = tabs.clone();
-                        let mut active = active.clone();
-                        let mut next_id = next_id.clone();
-                        let rid = rid2.clone();
-                        let root = root2.clone();
-                        move |_| {
-                            file_ctx.set(None);
-                            let c = c.clone();
-                            let state = state.clone();
-                            let rid = rid.clone();
-                            let root = root.clone();
+                // Round 4 (C5): a FOLDER gets only rename + delete — no
+                // preview/edit/download/open entries. Files get the full
+                // set, with Edit only for text-editable files (docx/xlsx/…
+                // have no built-in editor).
+                if !c.is_dir {
+                    button {
+                        class: "ctx-menu-item",
+                        onclick: {
+                            let mut file_ctx = file_ctx2.clone();
+                            let c = c2.clone();
+                            let state = state2.clone();
                             let mut tabs = tabs.clone();
                             let mut active = active.clone();
                             let mut next_id = next_id.clone();
-                            let mut expanded = expanded.clone();
-                            let mut children = children.clone();
-                            let mut files_msg = files_msg.clone();
-                            if c.is_dir {
-                                // expand/collapse like a click
-                                let mut expanded = expanded.clone();
-                                let mut ch = children.clone();
-                                let mut fm = files_msg.clone();
-                                let dir = c.path.clone();
+                            let rid = rid2.clone();
+                            let root = root2.clone();
+                            move |_| {
+                                file_ctx.set(None);
+                                let c = c.clone();
                                 let state = state.clone();
                                 let rid = rid.clone();
                                 let root = root.clone();
-                                spawn(async move {
-                                    {
-                                        let mut e = expanded.write();
-                                        if e.iter().any(|p| *p == dir) { e.retain(|p| *p != dir); return; }
-                                        e.push(dir.clone());
-                                    }
-                                    if !ch.read().contains_key(&dir) {
-                                        match api_list_dir(token(&state), dir.clone(), rid, root).await {
-                                            Ok(v) => { ch.write().insert(dir, v); }
-                                            Err(e) => fm.set(e.to_string()),
-                                        }
-                                    }
-                                });
-                            } else {
+                                let mut tabs = tabs.clone();
+                                let mut active = active.clone();
+                                let mut next_id = next_id.clone();
                                 open_file_tab(state, tabs, active, next_id, c.path.clone(), c.name.clone(), rid, root);
                             }
+                        },
+                        "👁 {loc2(&lang2, \"Podgląd\", \"Preview\")}"
+                    }
+                    if crate::fsgit::editable_name(&c.name) {
+                        button {
+                            class: "ctx-menu-item",
+                            onclick: {
+                                let mut file_ctx = file_ctx2.clone();
+                                let c = c2.clone();
+                                let state = state2.clone();
+                                let mut tabs = tabs.clone();
+                                let mut active = active.clone();
+                                let mut next_id = next_id.clone();
+                                let rid = rid2.clone();
+                                let root = root2.clone();
+                                move |_| {
+                                    file_ctx.set(None);
+                                    let c = c.clone();
+                                    let state = state.clone();
+                                    let rid = rid.clone();
+                                    let root = root.clone();
+                                    let mut tabs = tabs.clone();
+                                    let mut active = active.clone();
+                                    let mut next_id = next_id.clone();
+                                    open_file_tab_edit(state, tabs, active, next_id, c.path.clone(), c.name.clone(), rid, root, true);
+                                }
+                            },
+                            "✏️ {loc2(&lang2, \"Edytuj\", \"Edit\")}"
                         }
-                    },
-                    "👁 {loc2(&lang2, \"Podgląd\", \"Preview\")}"
+                    }
                 }
                 if !c.is_dir {
                     button {
@@ -1285,12 +1317,14 @@ fn FilePreviewTab(
         .unwrap_or_else(|| "…".to_string());
 
     // editor state — keyed per tab so each file keeps its own state
-    let editing = use_signal(|| false);
-    let content = use_signal(String::new);
+    let mut editing = use_signal(|| false);
+    let mut content = use_signal(String::new);
     let saving = use_signal(|| false);
     let saved = use_signal(|| false);
     let save_err = use_signal(String::new);
     let active_sheet = use_signal(|| 0usize);
+    // Round 4 (C5): one-shot kick when the tab was opened via "Edit".
+    let mut edit_kick = use_signal(|| false);
 
     let is_editing = *editing.read();
     let is_saving = *saving.read();
@@ -1300,6 +1334,17 @@ fn FilePreviewTab(
     let body_el: Element = match tab.data.as_ref() {
         None => rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } },
         Some(data) => {
+            // Round 4 (C5): "Edit" from the context menu opens the editor
+            // immediately (once — never clobber later typing).
+            if tab.start_edit && !*edit_kick.read() {
+                edit_kick.set(true);
+                editing.set(true);
+                content.set(data.text.clone());
+                let mut v = tabs.write();
+                if let Some(t) = v.iter_mut().find(|t| t.id == tab.id) {
+                    t.start_edit = false;
+                }
+            }
             let dirty = is_editing && *content.read() != data.text;
             let is_editing_c = is_editing;
             let data = data.clone();
@@ -1367,7 +1412,7 @@ fn FilePreviewTab(
                         let html = crate::md::to_html(&data.text);
                         rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
                     }
-                    "csv" => sheet_table(&parse_csv(&data.text)),
+                    "csv" => sheet_table(&parse_csv(&data.text), &[]),
                     "xlsx" => {
                         if data.sheets.is_empty() {
                             rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } }
@@ -1389,11 +1434,11 @@ fn FilePreviewTab(
                                     }
                                 })
                                 .collect();
-                            let rows = data.sheets[idx].rows.clone();
+                            let sheet = data.sheets[idx].clone();
                             rsx! {
                                 div { class: "preview-sheet",
                                     div { class: "sheet-tabs", {tab_el_tabs.iter().cloned()} }
-                                    {sheet_table(&rows)}
+                                    {sheet_table(&sheet.rows, &sheet.styles)}
                                 }
                             }
                         }
@@ -1631,28 +1676,38 @@ fn FilePreviewTab(
     body_el
 }
 
-fn sheet_table(rows: &[Vec<String>]) -> Element {
+/// Render one sheet. `styles` (round 4, C4) carries per-cell inline CSS
+/// extracted from the workbook (bold/italic/color/fill).
+fn sheet_table(rows: &[Vec<String>], styles: &[Vec<Option<String>>]) -> Element {
     let row_els: Vec<Element> = rows
         .iter()
         .enumerate()
         .map(|(ri, row)| {
             let cells: Vec<Element> = row
                 .iter()
-                .map(|c| {
+                .enumerate()
+                .map(|(ci, c)| {
+                    let extra = styles
+                        .get(ri)
+                        .and_then(|r| r.get(ci))
+                        .cloned()
+                        .flatten()
+                        .unwrap_or_default();
                     if ri == 0 {
-                        rsx! { th { style: "border:1px solid var(--border);padding:4px 8px;text-align:left;", "{c}" } }
+                        rsx! { th { class: "sheet-header-cell", style: "border:1px solid var(--border);padding:4px 8px;text-align:left;font-weight:600;{extra}", "{c}" } }
                     } else {
-                        rsx! { td { style: "border:1px solid var(--border);padding:4px 8px;", "{c}" } }
+                        rsx! { td { style: "border:1px solid var(--border);padding:4px 8px;{extra}", "{c}" } }
                     }
                 })
                 .collect();
-            rsx! { tr { {cells.iter().cloned()} } }
+            let zebra = if ri % 2 == 0 { "sheet-row-even" } else { "sheet-row-odd" };
+            rsx! { tr { class: "{zebra}", {cells.iter().cloned()} } }
         })
         .collect();
     rsx! {
         div { class: "preview-sheet",
-            div { style: "overflow:auto;flex:1;",
-                table { style: "border-collapse:collapse;font-size:12px;font-family:monospace;",
+            div { class: "sheet-table-wrap",
+                table { class: "sheet-table",
                     {row_els.iter().cloned()}
                 }
             }

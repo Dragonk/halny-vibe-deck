@@ -24,6 +24,11 @@ pub struct FileEntry {
 pub struct SheetData {
     pub name: String,
     pub rows: Vec<Vec<String>>,
+    /// Per-cell inline CSS (same shape as `rows`), extracted from the
+    /// workbook styles — round 4 (C4): bold/italic/color/fill/number format
+    /// now survive into the preview instead of a plain table.
+    #[serde(default)]
+    pub styles: Vec<Vec<Option<String>>>,
 }
 
 /// One entry of a zip archive listing (Nexus FilePreview ZipView).
@@ -106,6 +111,36 @@ pub struct GitCommit {
     pub author: String,
     /// ISO date.
     pub date: String,
+}
+
+/// True when the built-in text editor can handle this file name (round 4,
+/// C5): the known text extensions plus any unknown non-binary extension —
+/// exactly the set `preview_from_path` marks `editable`. Office/pdf/zip/
+/// image files never get the Edit action.
+pub fn editable_name(name: &str) -> bool {
+    let ext = std::path::Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "md" | "markdown" | "csv" | "tsv" | "txt" | "log" | "rs" | "py" | "js" | "ts" | "tsx"
+            | "jsx" | "json" | "toml" | "yaml" | "yml" | "html" | "css" | "sh" | "sql" | "go"
+            | "c" | "h" | "cpp" | "java" | "kt" | "rb" | "php" | "xml" | "ini" | "conf"
+            | "env" | "lock" | ""
+    ) || !imp_is_probably_binary(&ext)
+}
+
+/// Binary-extension probe (client-safe mirror of the server-side one).
+fn imp_is_probably_binary(ext: &str) -> bool {
+    matches!(
+        ext,
+        "exe" | "dll" | "so" | "dylib" | "bin" | "tar" | "gz" | "7z" | "rar" | "zip" | "woff"
+            | "woff2" | "ttf" | "otf" | "class" | "jar" | "wasm" | "mp3" | "mp4" | "avi" | "mov"
+            | "sqlite" | "db" | "pyc" | "o" | "a" | "lib" | "obj" | "png" | "jpg" | "jpeg"
+            | "gif" | "webp" | "bmp" | "ico" | "tiff" | "pdf" | "docx" | "odt" | "xlsx" | "xls"
+            | "xlsm" | "ods" | "pptx" | "odp"
+    )
 }
 
 /// Parse `git status --porcelain=v1 -b` output (Nexus `gitStatus`).

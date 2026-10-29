@@ -342,6 +342,9 @@ pub struct RemoteAgentFile {
     pub description: Option<String>,
     #[serde(default)]
     pub safety: Option<String>,
+    /// Extra system instructions (`instructions` in the CLI AgentProfile).
+    #[serde(default)]
+    pub instructions: Option<String>,
     #[serde(default)]
     pub enabled_tools: Vec<String>,
     #[serde(default)]

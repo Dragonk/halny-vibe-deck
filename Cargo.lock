@@ -2951,6 +2951,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "image"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3638,7 +3648,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3649,9 +3659,9 @@ dependencies = [
  "dirs 5.0.1",
  "flate2",
  "gloo-timers",
+ "if-addrs",
  "image",
  "js-sys",
- "libc",
  "mistraldeck-core",
  "mistraldeck-engine",
  "mistraldeck-setup",
@@ -3676,7 +3686,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-appserver"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "mistraldeck",
 ]
@@ -3695,7 +3705,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-core"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "js-sys",
  "serde",
@@ -3704,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-engine"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "dirs 5.0.1",
  "getrandom 0.2.17",
@@ -3721,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-setup"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -3730,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "mistraldeck-vibe"
-version = "1.99.9"
+version = "1.99.10"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",

@@ -366,43 +366,37 @@ fn serve_dir() -> Option<PathBuf> {
 }
 
 /// Every non-loopback IPv4 address of the device — the physical NIC *and*
-/// VPN interfaces (stable parity: `os.networkInterfaces()` in
-/// `serveStatus().lanUrls`). Unix enumerates the interfaces via getifaddrs;
-/// other platforms fall back to the outbound-interface trick (a UDP
-/// "connect" sends no packets — it only consults the routing table).
+/// VPN/docker interfaces (stable parity: `os.networkInterfaces()` in
+/// `serveStatus().lanUrls`, which lists every non-internal IPv4 on ALL
+/// platforms). Round 4 (A2): the old unix-only getifaddrs + UDP-connect
+/// fallback returned just the outbound interface on Windows, so a machine
+/// whose traffic routes through a VPN/VPS showed only that one address and
+/// never its real LAN IP. `if-addrs` enumerates the adapters on Windows
+/// (GetAdaptersAddresses) and unix alike; the UDP trick stays only as a
+/// last-resort fallback.
 pub fn local_lan_ips() -> Vec<String> {
-    #[cfg(unix)]
-    {
-        let mut ips: Vec<String> = Vec::new();
-        unsafe {
-            let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
-            if libc::getifaddrs(&mut ifap) == 0 {
-                let mut cur = ifap;
-                while !cur.is_null() {
-                    let ifa = &*cur;
-                    if !ifa.ifa_addr.is_null() && (ifa.ifa_addr as u16) as i32 == libc::AF_INET {
-                        let sa: &libc::sockaddr_in = &*(ifa.ifa_addr as *const libc::sockaddr_in);
-                        let octets = sa.sin_addr.s_addr.to_ne_bytes();
-                        let ip = format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]);
-                        if !ip.starts_with("127.") && !ips.contains(&ip) {
-                            ips.push(ip);
-                        }
-                    }
-                    cur = ifa.ifa_next;
-                }
-                libc::freeifaddrs(ifap);
-            }
-        }
-        if !ips.is_empty() {
-            return ips;
-        }
+    let mut ips: Vec<String> = if_addrs::get_if_addrs()
+        .map(|list| {
+            list.into_iter()
+                .filter_map(|i| match i.ip() {
+                    std::net::IpAddr::V4(v4) if !v4.is_loopback() => Some(v4.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ips.sort();
+    ips.dedup();
+    if !ips.is_empty() {
+        return ips;
     }
-    let mut ips: Vec<String> = Vec::new();
+    // Fallback: the outbound interface (a UDP "connect" sends no packets —
+    // it only consults the routing table).
     if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if sock.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = sock.local_addr() {
                 let ip = addr.ip().to_string();
-                if !addr.ip().is_loopback() && !ips.contains(&ip) {
+                if !addr.ip().is_loopback() {
                     ips.push(ip);
                 }
             }

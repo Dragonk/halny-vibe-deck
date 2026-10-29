@@ -3019,61 +3019,16 @@ pub(crate) fn MarkdownLite(text: String) -> Element {
     rsx! { div { class: "markdown-content", dangerous_inner_html: html } }
 }
 
-/// Client-side mermaid bootstrap. Runs once per page load: lazily injects the
-/// mermaid script, then a MutationObserver renders every new
+/// Client-side mermaid bootstrap — lives in `crate::components::shell`
+/// (`MERMAID_JS`) so BOTH the chat and the file-preview dock render
+/// ```mermaid fences (round 4, C2). Runs once per page load: lazily injects
+/// the mermaid script, then a MutationObserver renders every new
 /// `.mermaid-container` (attribute `data-src` holds the escaped diagram
 /// source). Dioxus never manages children of these divs, so hydration and
 /// re-renders stay safe.
 #[cfg(any(feature = "web", feature = "desktop"))]
-const MERMAID_JS: &str = r#"
-(function(){
-  if (window.__vdMermaid) return; window.__vdMermaid = true;
-  function load(cb){
-    if (window.mermaid) return cb();
-    if (window.__vdMermaidLoading) return window.__vdMermaidLoading.then(cb);
-    window.__vdMermaidLoading = new Promise(function(res){
-      var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
-      s.onload = res; s.onerror = res;
-      document.head.appendChild(s);
-    });
-    window.__vdMermaidLoading.then(cb);
-  }
-  function renderEl(el){
-    load(function(){
-      if (!window.mermaid) {
-        el.classList.add('mermaid-error');
-        el.innerHTML = '<div class="mermaid-error-title">mermaid.js unavailable</div>';
-        return;
-      }
-      try {
-        window.mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'dark' });
-        var id = 'vdGraph' + (el.__vdId || (el.__vdId = Math.random().toString(36).slice(2)));
-        window.mermaid.render(id, el.getAttribute('data-src') || '', function(svg){
-          el.innerHTML = svg; el.classList.add('mermaid-ready');
-        }, function(err){
-          el.classList.add('mermaid-error');
-          el.innerHTML = '<div class="mermaid-error-title">Mermaid error</div><pre></pre>';
-          el.querySelector('pre').textContent = String(err && err.message ? err.message : err);
-        });
-      } catch (e) {
-        el.classList.add('mermaid-error');
-        el.innerHTML = '<div class="mermaid-error-title">Mermaid error</div><pre></pre>';
-        el.querySelector('pre').textContent = String(e);
-      }
-    });
-  }
-  function scan(){
-    document.querySelectorAll('.mermaid-container:not([data-vd-done])').forEach(function(el){
-      el.setAttribute('data-vd-done', '1');
-      renderEl(el);
-    });
-  }
-  var mo = new MutationObserver(function(){ scan(); });
-  mo.observe(document.body, { childList: true, subtree: true });
-  scan();
-})();
-"#;
+pub(crate) use crate::components::shell::MERMAID_JS;
+
 
 /// Click bridge for `.markdown-path-link` inline code (mounted through
 /// `dangerous_inner_html`, so listeners must live at the document level).
