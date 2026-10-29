@@ -156,3 +156,28 @@ path (only historical changelog entries and the migration doc's history);
 
 Each step: CI green (`cargo test --workspace`, e2e job) before moving on; dev
 builds land as v1.99.x tag artifacts per AGENTS.md.
+
+## 8. Open item — deep chat e2e (harness, not the product)
+
+The three chat specs (streamed reply, mid-turn approval, hidden-tab backfill)
+still fail. The stub trace proves where it stops:
+
+```
+in initialize / out response      (lister)
+in session/list                   (lister)
+in setup/status                   (lister)
+in initialize                     (per-session slot: connected)
+... then NOTHING
+```
+
+The per-session agent connects, but the client never sends `session/start`
+and never sends `session/turn/enqueue` — so the turn has nothing to stream.
+The UI shows the prompt plus "Agent is working…", which is the local
+optimistic state. The reducer mapping itself is proven by the unit test
+(`stub_agent_turn_sequence_produces_streamed_chunks`).
+
+Next step: trace the engine's slot lifecycle for a lazily spawned local slot
+(`ensure_slot(NewLocal)` → `NewSession` on `Initialized`/`SessionReady`) and
+make sure the slot is bound to the local session key, then the same stub
+sequence will exercise the chat UI for real.
+
