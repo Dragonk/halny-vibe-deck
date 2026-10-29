@@ -153,7 +153,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != "1" ]; then
-            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../../.e2e-server.log || true)
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log || true)
             exit 1
           fi
           for i in $(seq 1 30); do
@@ -161,7 +161,7 @@ jobs:
             sleep 1
           done
           if [ "$ok" != "2" ]; then
-            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../../.e2e-server.log || true)
+            while IFS= read -r line; do echo "::error::server: $line"; done < <(tail -40 ../.e2e-server.log || true)
             exit 1
           fi
 
