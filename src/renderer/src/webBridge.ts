@@ -8,7 +8,7 @@ import type { AppAPI, AcpApplyConfig } from '../../preload/index'
  */
 
 interface WsMsg {
-  t: 'invoke' | 'res' | 'ev'
+  t: 'invoke' | 'res' | 'ev' | 'ping' | 'pong'
   id?: string
   ch?: string
   args?: unknown[]
@@ -101,15 +101,56 @@ function invoke(ch: string, args: unknown[]): Promise<unknown> {
   })
 }
 
+/**
+ * v1.0.37: liveness watchdog. The server pings every 30 s, but a half-open
+ * socket (phone suspended, NAT dropped) never reports a close - events just
+ * stop. A round-trip ping every 25 s with a 70 s budget detects that and
+ * forces a reconnect, which in turn pulls a fresh snapshot.
+ */
+const PING_EVERY_MS = 25_000
+const PONG_BUDGET_MS = 70_000
+
+/** any inbound frame (event, response, pong) proves the link is alive */
+let lastSocketActivity = 0
+
+function startWatchdog(sock: WebSocket, onDead: () => void): () => void {
+  lastSocketActivity = Date.now()
+  let pingId = 0
+  const iv = window.setInterval(() => {
+    if (Date.now() - lastSocketActivity > PONG_BUDGET_MS) {
+      try {
+        sock.close()
+      } catch {
+        /* already closing */
+      }
+      onDead()
+      return
+    }
+    try {
+      pingId += 1
+      sock.send(JSON.stringify({ t: 'ping', id: 'p' + pingId }))
+    } catch {
+      onDead()
+    }
+  }, PING_EVERY_MS)
+  return () => {
+    window.clearInterval(iv)
+  }
+}
+
 function connectOnce(): Promise<void> {
   return new Promise((resolve, reject) => {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const sock = new WebSocket(`${proto}://${location.host}/ws`)
     let settled = false
+    let stopWatchdog: (() => void) | null = null
     sock.onopen = (): void => {
       ws = sock
       wsReady = true
       settled = true
+      stopWatchdog = startWatchdog(sock, () => {
+        wsReady = false
+      })
       flushDeferred()
       // v1.0.13: a RE-connect (network blip, server restart) means this
       // client's view may be stale - let the app re-sync the live/busy
@@ -124,6 +165,8 @@ function connectOnce(): Promise<void> {
       }
     }
     sock.onclose = (): void => {
+      stopWatchdog?.()
+      stopWatchdog = null
       const wasCurrent = ws === sock
       wsReady = false
       if (wasCurrent) ws = null
@@ -140,6 +183,7 @@ function connectOnce(): Promise<void> {
       }, 3000)
     }
     sock.onmessage = (ev: MessageEvent): void => {
+      lastSocketActivity = Date.now()
       let msg: WsMsg
       try {
         msg = JSON.parse(String(ev.data)) as WsMsg
@@ -213,6 +257,8 @@ function buildApi(): AppAPI {
         invoke('acp:is-running', [remoteId ?? undefined]) as Promise<boolean>,
       // v1.0.13: sessions running a turn right now (boot/reconnect sync)
       busySessions: (): Promise<unknown> => invoke('acp:busy-sessions', []),
+      sessionSnapshot: (acpSessionId: string, remoteId?: string): Promise<unknown> =>
+        invoke('acp:session-snapshot', [acpSessionId, remoteId ?? undefined]),
       refreshSessions: (): Promise<void> => invoke('acp:refresh-sessions', []).then(() => undefined),
       getContextSummary: (messages: Array<{ role: string; content: string }>, remoteId?: string): Promise<string> =>
         invoke('acp:get-context-summary', [messages, remoteId ?? undefined]) as Promise<string>,

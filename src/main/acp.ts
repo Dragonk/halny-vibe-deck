@@ -4,6 +4,7 @@ import * as readline from 'readline'
 import * as os from 'os'
 import { randomUUID } from 'crypto'
 import { broadcastToWeb } from './bus'
+import * as registry from './sessionRegistry'
 
 export interface AcpConfigOptionChoice {
   value: string
@@ -462,21 +463,52 @@ export class AcpManager {
         break
 
       case 'agent_message_chunk': {
-        const messageId = (update.messageId as string | undefined) ?? 'current'
+        // v1.0.37: the registry owns the delta + a stable message id. `text`
+        // stays for older clients; `delta`/`offset`/`msgId` let a new client
+        // apply the chunk idempotently (a duplicate or a lost chunk is
+        // detected by the offset instead of corrupting the bubble).
+        const acpMessageId = (update.messageId as string | undefined) ?? null
         const raw = this.contentText(update.content)
-        const text = this.dedupChunk(sessionId, 'm', messageId, raw)
-        if (text) {
-          this.emit({ type: 'MessageChunk', data: { sessionId, text, messageId } })
+        const d = registry.appendText(sessionId, acpMessageId, raw)
+        if (d && d.delta) {
+          this.emit({
+            type: 'MessageChunk',
+            data: {
+              sessionId,
+              text: d.delta,
+              delta: d.delta,
+              offset: d.offset,
+              msgId: d.msgId,
+              seq: d.seq,
+              messageId: acpMessageId ?? undefined,
+            },
+          })
         }
         break
       }
 
       case 'agent_thought_chunk': {
-        const blockId = (update.messageId as string | undefined) ?? 'thinking'
+        const acpBlockId = (update.messageId as string | undefined) ?? null
         const raw = this.contentText(update.content)
-        const text = this.dedupChunk(sessionId, 't', blockId, raw)
-        if (text) {
-          this.emit({ type: 'ThinkingChunk', data: { sessionId, blockId, text } })
+        const d = registry.appendThinking(sessionId, acpBlockId, raw)
+        if (d && d.delta) {
+          this.emit({
+            type: 'ThinkingChunk',
+            data: {
+              sessionId,
+              blockId: d.blockId,
+              text: d.delta,
+              delta: d.delta,
+              offset: d.offset,
+              msgId: d.msgId,
+              seq: d.seq,
+            },
+          })
+        } else if (d) {
+          this.emit({
+            type: 'ThinkingChunk',
+            data: { sessionId, blockId: d.blockId, text: '', delta: '', offset: d.offset, msgId: d.msgId, seq: d.seq },
+          })
         }
         break
       }
@@ -495,11 +527,22 @@ export class AcpManager {
         const toolName = (update.title ?? update.name) as string | undefined
         if (toolCallId && toolName) {
           this.toolCallNames.set(toolCallId, toolName)
+          const reg = registry.startToolCall(sessionId, {
+            id: toolCallId,
+            title: toolName,
+            kind: (update.kind ?? 'execute') as string,
+            status: this.normalizeToolStatus(update.status ?? 'in_progress'),
+            input: this.parseRawInput(update.rawInput ?? update.raw_input),
+            toolName: this.metaToolName(update),
+            subagent: this.metaSubagent(update),
+          })
           this.emit({
             type: 'ToolCall',
             data: {
               sessionId,
               toolCallId,
+              msgId: reg.msgId,
+              seq: reg.seq,
               title: toolName,
               kind: (update.kind ?? 'execute') as string,
               status: this.normalizeToolStatus(update.status ?? 'in_progress'),
@@ -519,11 +562,19 @@ export class AcpManager {
         const toolCallId = (update.toolCallId ?? update.tool_call_id) as string | undefined
         if (toolCallId) {
           const tcuStatus = this.normalizeToolStatus(update.status)
+          const regUpd = registry.updateToolCall(sessionId, toolCallId, {
+            status: tcuStatus,
+            output: this.toolOutputText(update),
+            toolName: this.metaToolName(update),
+            subagent: this.metaSubagent(update),
+          })
           this.emit({
             type: 'ToolCallUpdate',
             data: {
               sessionId,
               toolCallId,
+              msgId: regUpd.msgId ?? undefined,
+              seq: regUpd.seq,
               status: tcuStatus,
               output: this.toolOutputText(update),
               diffs: this.diffBlocks(update),
@@ -541,9 +592,23 @@ export class AcpManager {
       }
 
       case 'plan':
-      case 'plan_update':
-        this.emit({ type: 'Plan', data: { sessionId, entries: (update.entries as unknown[]) ?? [] } })
+      case 'plan_update': {
+        const rawEntries = (update.entries as Array<Record<string, unknown>>) ?? []
+        const planEntries = rawEntries.map((e) => {
+          const status = String(e.status ?? 'pending')
+          return {
+            content: String(e.content ?? ''),
+            status: (status === 'completed' || status === 'in_progress' ? status : 'pending') as
+              | 'completed'
+              | 'in_progress'
+              | 'pending',
+            priority: e.priority != null ? String(e.priority) : undefined,
+          }
+        })
+        const seq = registry.setPlan(sessionId, planEntries)
+        this.emit({ type: 'Plan', data: { sessionId, entries: rawEntries, seq } })
         break
+      }
 
       case 'available_commands_update': {
         const commands = (update.availableCommands as Array<Record<string, unknown>>) ?? []
@@ -580,6 +645,7 @@ export class AcpManager {
 
       case 'session_info_update': {
         const title = (update.title as string) ?? undefined
+        if (title) registry.setTitle(sessionId, title)
         this.emit({ type: 'SessionInfoUpdate', data: { sessionId, title } })
         break
       }
@@ -628,6 +694,47 @@ export class AcpManager {
   // Replay assembly (real session resume)
   // ---------------------------------------------------------------------------
 
+  /**
+   * v1.0.37: seed the live registry with a replay so the client gets stable
+   * message ids from both paths (live stream and session/load).
+   */
+  private snapshotFor(
+    sessionId: string,
+    messages: AcpHistoryMessage[],
+    title?: string,
+    plan?: PlanEntry[],
+  ): registry.SessionSnapshot {
+    registry.loadHistory(
+      sessionId,
+      messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        thinking: m.thinking,
+        toolCalls: (m.toolCalls ?? []).map((tc) => ({
+          id: tc.id,
+          title: tc.title,
+          kind: tc.kind,
+          status: tc.status,
+          input: tc.input,
+          output: tc.output,
+          diffs: tc.diffs,
+          previousContent: tc.previousContent,
+          toolName: tc.toolName ?? undefined,
+          rawOutput: tc.rawOutput?.toString ? (tc.rawOutput as Record<string, unknown>) : undefined,
+          subagent: tc.subagent ?? undefined,
+        })),
+      })),
+      title,
+      plan?.map((p) => ({ content: p.content, status: p.status, priority: p.priority })),
+    )
+    return registry.snapshot(sessionId)
+  }
+
+  /** v1.0.37: current registry snapshot (null when the session was never seen). */
+  sessionSnapshot(sessionId: string): registry.SessionSnapshot | null {
+    return registry.hasSession(sessionId) ? registry.snapshot(sessionId) : null
+  }
+
   private assembleHistory(rawUpdates: RawUpdate[]): { messages: AcpHistoryMessage[]; title?: string; plan?: PlanEntry[] } {
     const messages: AcpHistoryMessage[] = []
     const toolCallsById = new Map<string, AcpHistoryToolCall>()
@@ -643,10 +750,14 @@ export class AcpManager {
     // slice off the already-appended prefix instead of duplicating it.
     const msgSent = new Map<string, string>()
     const thoughtSent = new Map<string, string>()
+    // v1.0.37: exact resend handling (see sessionRegistry.sliceDelta). The old
+    // `prev.length >= 40` guard duplicated every resent text shorter than 40
+    // characters - one of the sources of the "glued, repeated fragments".
     const dedup = (sent: Map<string, string>, key: string, text: string): string => {
       const prev = sent.get(key) ?? ''
       let out = text
-      if (prev.length >= 40 && text.startsWith(prev)) out = text.slice(prev.length)
+      if (text === prev) out = ''
+      else if (text.length > prev.length && text.startsWith(prev)) out = text.slice(prev.length)
       sent.set(key, prev + out)
       return out
     }
@@ -1056,7 +1167,16 @@ export class AcpManager {
 
       this.emit({
         type: 'SessionHistory',
-        data: { sessionId, messages, title, plan: plan ?? [] }
+        data: {
+          sessionId,
+          messages,
+          title,
+          plan: plan ?? [],
+          // v1.0.37: the replayed history is loaded into the registry, so a
+          // resumed session has exactly the same ids/shape as a live one and
+          // the client can merge instead of replacing its messages.
+          snapshot: this.snapshotFor(sessionId, messages, title, plan ?? []),
+        }
       })
       this.emit({
         type: 'SessionInitialized',
@@ -1105,6 +1225,9 @@ export class AcpManager {
     // every pending request).
     this.turnsInFlight++
     this.busyTurns.add(sid)
+    // v1.0.37: the registry opens a new segment for this turn (and knows the
+    // session is busy) before the first chunk can arrive.
+    registry.beginTurn(sid)
     let result: Record<string, unknown>
     try {
       // v1.0.8: images travel as ACP ImageContentBlocks (base64 data +
@@ -1132,11 +1255,13 @@ export class AcpManager {
       this.busyTurns.delete(sid)
     }
 
+    const endSeq = registry.endTurn(sid)
     this.emit({
       type: 'PromptComplete',
       data: {
         sessionId: sid,
-        stopReason: (result?.stopReason as string) ?? 'end_turn'
+        stopReason: (result?.stopReason as string) ?? 'end_turn',
+        seq: endSeq,
       }
     })
     // v1.0.24: the turn truly ended - the server queue may deliver the
@@ -1379,6 +1504,9 @@ export class AcpManager {
     sessionId: string,
     msg: { id: string; text: string; attachments?: Array<{ path: string; isDir: boolean }> },
   ): void {
+    // the registry keeps the user bubble too, so a snapshot taken mid-turn
+    // contains the prompt that started it
+    if (!this._replaying.has(sessionId)) registry.noteUserMessage(sessionId, msg.id, msg.text)
     this.emit({
       type: 'UserMessage',
       data: { sessionId, remoteId: this.remoteTag ?? undefined, ...msg },

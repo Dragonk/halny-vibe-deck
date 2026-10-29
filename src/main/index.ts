@@ -743,6 +743,14 @@ app.whenReady().then(() => {
     return { ok: true };
   });
 
+  // v1.0.37: authoritative live transcript of one ACP session. A client that
+  // missed events (frozen tab, dropped websocket) rebuilds from this instead
+  // of replacing its messages with the (stale) session file from disk.
+  ipcMain.handle("acp:session-snapshot", (_e, acpSessionId: string, remoteId?: string) => {
+    const manager = remoteId ? remoteAcpManagers.get(remoteId) : acpManager;
+    if (!manager) return null;
+    return manager.sessionSnapshot(acpSessionId);
+  });
   ipcMain.handle("acp:busy-sessions", () => {
     const out: Array<{ acpSessionId: string; remoteId: string | null }> = []
     for (const sid of acpManager.busySessionIds()) out.push({ acpSessionId: sid, remoteId: null })

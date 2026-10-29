@@ -1111,6 +1111,13 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       } catch {
         return
       }
+      // v1.0.37: client-originated heartbeat. The server pings every 30 s, but
+      // a client cannot answer for a socket the OS silently dropped - it needs
+      // its own round-trip to detect a dead link in seconds, not in a minute.
+      if (msg.t === "ping") {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "pong", id: msg.id }))
+        return
+      }
       if (msg.t !== "invoke" || !msg.id || !msg.ch) return
       void dispatchForWeb(msg.ch, msg.args ?? [])
         .then((value) => {

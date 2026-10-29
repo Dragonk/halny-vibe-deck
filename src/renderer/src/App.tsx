@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
+import type { AcpSnapshot } from './store'
 import type { AcpHistoryMessage } from './store'
 import { useTranslation, t, resolveLanguage } from './i18n'
 import type { AppConfig, ConfigOption, PlanEntry, SubagentInfo, ToolCallDiff } from './types'
@@ -113,6 +114,21 @@ export default function App(): React.JSX.Element {
 
   // Per-session streaming state: localSessionId → streaming info
   const streamingState = useRef<Map<string, StreamingState>>(new Map())
+  /**
+   * v1.0.37: per-ACP-session `seq` of the last transcript event we applied.
+   * The main process numbers every event, so a jump means we missed something
+   * (frozen tab, dropped socket) - the view is repaired from a snapshot
+   * instead of waiting for the user to press F5.
+   */
+  const lastSeq = useRef<Map<string, number>>(new Map())
+  const noteSeq = (acpSessionId: string, seq: number | undefined): void => {
+    if (typeof seq !== 'number') return
+    const prev = lastSeq.current.get(acpSessionId)
+    if (typeof prev === 'number' && seq > prev + 1) {
+      void useStore.getState().requestSessionSnapshot(acpSessionId)
+    }
+    if (typeof prev !== 'number' || seq > prev) lastSeq.current.set(acpSessionId, seq)
+  }
 
   // v1.0.22: the busy flag set from streaming chunks can be STALE -
   // out-of-band chunks (the CLI's MCP warm-up warning arrives as an
@@ -297,7 +313,15 @@ export default function App(): React.JSX.Element {
           const messages = d.messages as AcpHistoryMessage[]
           const title = d.title as string | undefined
           if (messages) {
-            store.applySessionHistory(d.sessionId as string, messages, title)
+            // v1.0.37: the replay arrives with the registry snapshot - the same
+            // ids the live stream uses. Applying it makes a resumed session
+            // indistinguishable from a live one (later chunks just append).
+            const snap = d.snapshot as AcpSnapshot | undefined
+            if (snap && Array.isArray(snap.messages) && snap.messages.length > 0) {
+              useStore.getState().applySnapshot(d.sessionId as string, snap)
+            } else {
+              store.applySessionHistory(d.sessionId as string, messages, title)
+            }
             // v1.0.36: the replay replace deleted every streamed message -
             // including one a checkpoint ToolCall seeded mid-load (the
             // recorded model apply runs inside session/load). Drop its
@@ -396,8 +420,31 @@ export default function App(): React.JSX.Element {
         case 'MessageChunk': {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
+          noteSeq(acpSessId, d.seq as number | undefined)
+          // v1.0.37: the registry path. The chunk carries a stable message id
+          // and a byte offset, so a duplicate is dropped and a gap triggers a
+          // snapshot - the renderer no longer guesses which bubble to extend.
+          if (typeof d.msgId === 'string' && d.msgId.length > 0) {
+            const local = store.getSessionByAcpId(acpSessId)
+            if (!local) {
+              void store.requestSessionSnapshot(acpSessId)
+              break
+            }
+            if (store.pendingLoadSessionId !== acpSessId) {
+              markSessionBusy(local.id)
+              armBusyVerify(local.id)
+            }
+            store.applyTextChunk(
+              local.id,
+              d.msgId,
+              ((d.delta as string) ?? (d.text as string)) ?? '',
+              d.offset as number | undefined,
+              acpSessId,
+            )
+            break
+          }
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
+          const localId = local?.id
           if (!localId) break
           if (store.pendingLoadSessionId !== acpSessId) {
             markSessionBusy(localId)
@@ -443,8 +490,29 @@ export default function App(): React.JSX.Element {
         case 'ThinkingChunk': {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
+          noteSeq(acpSessId, d.seq as number | undefined)
+          if (typeof d.msgId === 'string' && d.msgId.length > 0) {
+            const localReg = store.getSessionByAcpId(acpSessId)
+            if (!localReg) {
+              void store.requestSessionSnapshot(acpSessId)
+              break
+            }
+            if (store.pendingLoadSessionId !== acpSessId) {
+              markSessionBusy(localReg.id)
+              armBusyVerify(localReg.id)
+            }
+            store.applyThinkingChunk(
+              localReg.id,
+              d.msgId,
+              (d.blockId as string) ?? 'thinking',
+              ((d.delta as string) ?? (d.text as string)) ?? '',
+              d.offset as number | undefined,
+              acpSessId,
+            )
+            break
+          }
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
+          const localId = local?.id
           const blockId = (d.blockId as string) ?? 'thinking'
           if (!localId) break
           if (store.pendingLoadSessionId !== acpSessId) {
@@ -486,7 +554,7 @@ export default function App(): React.JSX.Element {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
+          const localId = local?.id
           const blockId = (d.blockId as string) ?? 'thinking'
           const state = localId ? streamingState.current.get(localId) : null
           if (localId && state) {
@@ -500,7 +568,7 @@ export default function App(): React.JSX.Element {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
+          const localId = local?.id
           const state = localId ? streamingState.current.get(localId) : null
           if (localId && state) {
             // v0.10.2: close open thinking blocks and stuck tool calls -
@@ -524,7 +592,7 @@ export default function App(): React.JSX.Element {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
+          const localId = local?.id
           if (!localId) break
           // Model-change checkpoints are CLI bookkeeping, not agent activity+�u���T
           // they must never flip the session into the busy state.
@@ -533,8 +601,13 @@ export default function App(): React.JSX.Element {
             markSessionBusy(localId)
             armBusyVerify(localId)
           }
-          // Ensure there's an active AI message to attach tool calls to
-          if (!streamingState.current.has(localId)) {
+          // v1.0.37: the registry says WHICH message this tool call belongs to
+          // (`msgId`). Attaching to "the last AI message" glued tool calls into
+          // an older bubble as soon as a replay or another client changed the
+          // list - one of the reasons long sessions looked scrambled.
+          noteSeq(acpSessId, d.seq as number | undefined)
+          const regMsgId = typeof d.msgId === 'string' ? d.msgId : undefined
+          if (!regMsgId && !streamingState.current.has(localId)) {
             const msgId = store.startAiMessage(localId)
             streamingState.current.set(localId, {
               msgId,
@@ -547,7 +620,7 @@ export default function App(): React.JSX.Element {
             // v0.10.2: tool activity means thinking is over (no thought_end).
             store.finalizeAllThinking(localId, tcState.msgId)
           }
-          updateToolCall(localId, {
+          store.upsertToolCall(localId, regMsgId, {
             id: d.toolCallId as string,
             title: (d.title as string) ?? '',
             kind: (d.kind as string) ?? '',
@@ -565,17 +638,17 @@ export default function App(): React.JSX.Element {
         case 'ToolCallUpdate': {
           const acpSessId = d.sessionId as string
           const store = useStore.getState()
+          noteSeq(acpSessId, d.seq as number | undefined)
           const local = store.getSessionByAcpId(acpSessId)
-          const localId = local?.id ?? store.currentSessionId
-          if (localId) {
-            mergeToolCall(localId, d.toolCallId as string, {
+          if (local) {
+            store.patchToolCall(local.id, d.toolCallId as string, {
               status: (d.status as 'running' | 'done' | 'error') ?? 'running',
               output: d.output as string | undefined,
               diffs: d.diffs as ToolCallDiff[] | undefined,
               previousContent: (d.previousContent as string | null | undefined) ?? null,
               toolName: (d.toolName as string | null | undefined) ?? null,
               rawOutput: (d.rawOutput as Record<string, unknown> | null | undefined) ?? null,
-            subagent: (d.subagent as SubagentInfo | null | undefined) ?? null,
+              subagent: (d.subagent as SubagentInfo | null | undefined) ?? null,
             })
           }
           break

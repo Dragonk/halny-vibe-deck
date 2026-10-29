@@ -62,6 +62,25 @@ export interface AcpHistoryToolCall {
   subagent?: { agent: string | null; agentName?: string | null; task: string; childSessionId: string | null } | null;
 }
 
+/** v1.0.37: authoritative transcript sent by the main process. */
+export interface AcpSnapshotMessage {
+  id: string;
+  role: "user" | "ai";
+  content: string;
+  thinking: Array<{ id: string; content: string }>;
+  toolCalls: AcpHistoryToolCall[];
+  complete: boolean;
+}
+export interface AcpSnapshot {
+  sessionId: string;
+  seq: number;
+  messages: AcpSnapshotMessage[];
+  busy: boolean;
+  title?: string;
+  plan?: PlanEntry[];
+  updatedAt?: number;
+}
+
 export interface AcpHistoryMessage {
   role: "user" | "ai";
   content: string;
@@ -293,6 +312,37 @@ interface AppStore {
   ) => void;
   /** v1.0.11: sessions whose history was loaded from disk (per client). */
   historyLoadedSessions: string[];
+  /**
+   * v1.0.37: last `seq` applied per ACP session. The main process numbers every
+   * transcript event, so a gap (a chunk lost while the tab was frozen) is
+   * detectable and healed with a snapshot instead of a stale disk replace.
+   */
+  snapshotSeqs: Record<string, number>;
+  /** Apply the authoritative transcript of a live session (merge by id). */
+  applySnapshot: (acpSessionId: string, snapshot: AcpSnapshot) => void;
+  /** Fetch + apply a snapshot (used on reconnect, visibility, or a seq gap). */
+  requestSessionSnapshot: (acpSessionId: string, remoteId?: string | null) => Promise<void>;
+  /** Idempotent text delta (offset-checked) with a stable message id. */
+  applyTextChunk: (
+    sessionId: string,
+    msgId: string,
+    delta: string,
+    offset: number | undefined,
+    acpSessionId: string,
+  ) => void;
+  /** Idempotent thinking delta with a stable message id. */
+  applyThinkingChunk: (
+    sessionId: string,
+    msgId: string,
+    blockId: string,
+    delta: string,
+    offset: number | undefined,
+    acpSessionId: string,
+  ) => void;
+  /** Attach/refresh a tool call on the message the registry assigned it to. */
+  upsertToolCall: (sessionId: string, msgId: string | undefined, toolCall: ToolCall) => void;
+  /** Patch a tool call wherever it lives (by id, never "last AI message"). */
+  patchToolCall: (sessionId: string, toolCallId: string, updates: Partial<ToolCall>) => void;
   loadAcpSession: (localSessionId: string, internalAttempt?: number) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
@@ -942,15 +992,35 @@ export const useStore = create<AppStore>((set, get) => ({
     } catch {
       /* server unreachable - keep the state */
     }
-    const withHistory = get().sessions.filter(
-      (s) => s.acpSessionId && s.messages.length > 0,
+    // v1.0.37: sessions with a live/busy worker rebuild from the SERVER
+    // transcript (stable ids + seq), not from the session file. The old code
+    // skipped busy sessions on purpose ("do not clobber the live tail") - but
+    // that is exactly the session in which the frozen tab lost events, so the
+    // gap in the middle of an answer was never filled. The snapshot carries
+    // the whole turn, including the part streamed while we were away.
+    const currentId = get().currentSessionId;
+    const needsLive = get().sessions.filter(
+      (s) =>
+        s.acpSessionId &&
+        (get().busySessions.includes(s.id) ||
+          get().liveSessions.includes(s.id) ||
+          s.id === currentId),
     );
-    // A session the user is actively streaming into (locally busy) is
-    // skipped - its live tail must not be clobbered by the disk state.
     await Promise.allSettled(
-      withHistory
-        .filter((s) => !get().busySessions.includes(s.id) && !s.loading)
-        .map((s) => get().previewSession(s.id)),
+      needsLive.map(async (s) => {
+        await get().requestSessionSnapshot(s.acpSessionId!, s.remoteId ?? null);
+        // a session the worker does not know (app restarted, worker stopped)
+        // still falls back to the on-disk transcript
+        if (typeof get().snapshotSeqs[s.acpSessionId!] !== 'number' && s.messages.length === 0) {
+          await get().previewSession(s.id);
+        }
+      }),
+    );
+    const withHistory = get().sessions.filter(
+      (s) => s.acpSessionId && s.messages.length > 0 && !needsLive.some((x) => x.id === s.id),
+    );
+    await Promise.allSettled(
+      withHistory.filter((s) => !s.loading).map((s) => get().previewSession(s.id)),
     );
     // v1.0.25: the server-owned queue view + the current session's chips
     // (model/mode/thinking may have changed on ANOTHER device while this
@@ -1899,6 +1969,228 @@ export const useStore = create<AppStore>((set, get) => ({
     if (st.pendingLoadSessionId === acpSessionId) st.setPendingLoadSessionId(null);
   },
 
+  // ---------------------------------------------------------------------
+  // v1.0.37: snapshot / delta protocol (main = single source of truth)
+  // ---------------------------------------------------------------------
+
+  applySnapshot: (acpSessionId, snapshot) => {
+    const local = get().getSessionByAcpId(acpSessionId);
+    if (!local) return;
+    const known = get().snapshotSeqs[acpSessionId];
+    // A snapshot older than what is already on screen is a late IPC reply -
+    // applying it would roll the view back (or duplicate text).
+    if (typeof known === "number" && snapshot.seq < known) return;
+    const messages: Message[] = snapshot.messages.map((m) => ({
+      id: m.id,
+      sender: m.role,
+      content: m.content,
+      isComplete: m.complete,
+      timestamp: Date.now(),
+      thinking:
+        m.thinking.length > 0
+          ? m.thinking.map((b) => ({
+              id: b.id,
+              content: b.content,
+              isComplete: true,
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+            }))
+          : undefined,
+      toolCalls:
+        m.toolCalls && m.toolCalls.length > 0
+          ? m.toolCalls.map((tc) => ({
+              id: tc.id,
+              title: tc.title,
+              kind: tc.kind,
+              status: tc.status,
+              input: tc.input,
+              output: tc.output,
+              diffs: tc.diffs,
+              previousContent: tc.previousContent,
+              toolName: tc.toolName ?? null,
+              rawOutput: tc.rawOutput ?? null,
+              subagent: (tc.subagent ?? null) as ToolCall["subagent"],
+            }))
+          : undefined,
+    }));
+    // The optimistic echo of a prompt that the registry has not seen yet (it
+    // is older than the snapshot) must survive the merge - v1.0.36 behaviour,
+    // kept on purpose.
+    const seenUser = new Set(
+      snapshot.messages.filter((m) => m.role === "user").map((m) => m.content.trim()),
+    );
+    for (let i = local.messages.length - 1; i >= 0; i--) {
+      const m = local.messages[i];
+      if (m.sender !== "user") break;
+      if (seenUser.has(m.content.trim())) break;
+      messages.push(m);
+    }
+    get().updateSession(local.id, {
+      messages,
+      loading: false,
+      lastActive: Date.now(),
+      updatedAt: Date.now(),
+      ...(snapshot.title && snapshot.title !== local.name ? { name: snapshot.title } : {}),
+    });
+    set((st) => ({ snapshotSeqs: { ...st.snapshotSeqs, [acpSessionId]: snapshot.seq } }));
+    if (snapshot.plan) get().setSessionPlan(acpSessionId, snapshot.plan);
+    if (snapshot.busy) {
+      get().markSessionLive(local.id);
+      get().markSessionBusy(local.id);
+    } else {
+      get().markSessionIdle(local.id);
+    }
+    if (get().pendingLoadSessionId === acpSessionId) get().setPendingLoadSessionId(null);
+    set((st) => ({
+      historyLoadedSessions: st.historyLoadedSessions.includes(local.id)
+        ? st.historyLoadedSessions
+        : [...st.historyLoadedSessions, local.id],
+    }));
+  },
+
+  requestSessionSnapshot: async (acpSessionId, remoteId) => {
+    try {
+      const api = window.api.acp as unknown as {
+        sessionSnapshot?: (id: string, remoteId?: string) => Promise<AcpSnapshot | null>;
+      };
+      if (!api.sessionSnapshot) return;
+      const snap = await api.sessionSnapshot(acpSessionId, remoteId ?? undefined);
+      if (snap && Array.isArray(snap.messages)) get().applySnapshot(acpSessionId, snap);
+    } catch (err) {
+      console.error("[store] session snapshot failed:", err);
+    }
+  },
+
+  applyTextChunk: (sessionId, msgId, delta, offset, acpSessionId) => {
+    const sess = get().sessions.find((x) => x.id === sessionId);
+    if (!sess) return;
+    const existing = sess.messages.find((m) => m.id === msgId);
+    if (!existing) {
+      // the bubble does not exist yet: create it with the registry's id so the
+      // rest of the turn (thinking, tool calls, more text) lands in the same
+      // place on every client
+      const msg: Message = {
+        id: msgId,
+        sender: "ai",
+        content: "",
+        isComplete: false,
+        timestamp: Date.now(),
+      };
+      set((st) => ({
+        sessions: st.sessions.map((x) =>
+          x.id === sessionId ? { ...x, messages: [...x.messages, msg] } : x,
+        ),
+        streamingMessage: "",
+        streamingSessions: st.streamingSessions.includes(sessionId)
+          ? st.streamingSessions
+          : [...st.streamingSessions, sessionId],
+      }));
+      if (delta) get().applyTextChunk(sessionId, msgId, delta, 0, acpSessionId);
+      return;
+    }
+    if (!delta) return;
+    // Offset mismatch means a chunk was lost (or arrived twice): appending
+    // would silently corrupt the answer - repair from the registry instead.
+    if (typeof offset === "number" && offset !== existing.content.length) {
+      const already = existing.content.slice(offset, offset + delta.length) === delta;
+      if (already) return;
+      void get().requestSessionSnapshot(acpSessionId, sess.remoteId ?? null);
+      return;
+    }
+    get().updateSession(sessionId, {
+      messages: sess.messages.map((m) =>
+        m.id === msgId ? { ...m, content: m.content + delta, isComplete: false } : m,
+      ),
+    });
+    set((st) => ({
+      streamingMessage: (st.streamingMessage ?? "") + delta,
+      streamingSessions: st.streamingSessions.includes(sessionId)
+        ? st.streamingSessions
+        : [...st.streamingSessions, sessionId],
+    }));
+  },
+
+  applyThinkingChunk: (sessionId, msgId, blockId, delta, offset, acpSessionId) => {
+    const sess = get().sessions.find((x) => x.id === sessionId);
+    if (!sess) return;
+    let msg = sess.messages.find((m) => m.id === msgId);
+    if (!msg) {
+      get().applyTextChunk(sessionId, msgId, "", undefined, acpSessionId);
+      msg = get().sessions.find((x) => x.id === sessionId)?.messages.find((m) => m.id === msgId);
+      if (!msg) return;
+    }
+    const block = (msg.thinking ?? []).find((b) => b.id === blockId);
+    if (block && typeof offset === "number" && offset !== block.content.length) {
+      const already = block.content.slice(offset, offset + delta.length) === delta;
+      if (already) return;
+      void get().requestSessionSnapshot(acpSessionId, sess.remoteId ?? null);
+      return;
+    }
+    if (!delta) return;
+    const current = get().sessions.find((x) => x.id === sessionId);
+    const target = current?.messages.find((m) => m.id === msgId);
+    if (!current || !target) return;
+    const thinking = target.thinking ? [...target.thinking] : [];
+    const idx = thinking.findIndex((b) => b.id === blockId);
+    if (idx >= 0) {
+      thinking[idx] = { ...thinking[idx], content: thinking[idx].content + delta, isComplete: false };
+    } else {
+      thinking.push({
+        id: blockId,
+        content: delta,
+        isComplete: false,
+        startedAt: Date.now(),
+      });
+    }
+    get().updateSession(sessionId, {
+      messages: current.messages.map((m) => (m.id === msgId ? { ...m, thinking } : m)),
+    });
+  },
+
+  upsertToolCall: (sessionId, msgId, toolCall) => {
+    const sess = get().sessions.find((x) => x.id === sessionId);
+    if (!sess) return;
+    // without a registry id (old worker) fall back to the last AI message
+    const targetId = msgId ?? [...sess.messages].reverse().find((m) => m.sender === "ai")?.id;
+    if (!targetId) return;
+    let messages = sess.messages;
+    if (!messages.some((m) => m.id === targetId)) {
+      const msg: Message = {
+        id: targetId,
+        sender: "ai",
+        content: "",
+        isComplete: false,
+        timestamp: Date.now(),
+      };
+      messages = [...messages, msg];
+    }
+    get().updateSession(sessionId, {
+      messages: messages.map((m) => {
+        if (m.id !== targetId) return m;
+        const list = m.toolCalls ? [...m.toolCalls] : [];
+        const at = list.findIndex((tc) => tc.id === toolCall.id);
+        if (at >= 0) list[at] = { ...list[at], ...toolCall };
+        else list.push({ ...toolCall, startedAt: toolCall.startedAt ?? Date.now() });
+        return { ...m, toolCalls: list };
+      }),
+    });
+  },
+
+  patchToolCall: (sessionId, toolCallId, updates) => {
+    const sess = get().sessions.find((x) => x.id === sessionId);
+    if (!sess) return;
+    get().updateSession(sessionId, {
+      messages: sess.messages.map((m) => {
+        const calls = m.toolCalls;
+        if (!calls || !calls.some((tc) => tc.id === toolCallId)) return m;
+        return {
+          ...m,
+          toolCalls: calls.map((tc) => (tc.id === toolCallId ? { ...tc, ...updates } : tc)),
+        };
+      }),
+    });
+  },
+
   loadAcpSession: async (localSessionId, attempt) => {
     const session = get().sessions.find((s) => s.id === localSessionId);
     if (!session?.acpSessionId) return;
@@ -2168,6 +2460,7 @@ export const useStore = create<AppStore>((set, get) => ({
   remoteErrors: {},
   backStack: [],
   historyLoadedSessions: [],
+  snapshotSeqs: {},
   pushBack: (run) => {
     const id = Date.now() + Math.random();
     set((s) => ({ backStack: [...s.backStack.slice(-31), { id, run }] }));
