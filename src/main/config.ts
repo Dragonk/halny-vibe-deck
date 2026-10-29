@@ -55,6 +55,12 @@ export interface ServeConfig {
   /** optional custom certificate (PEM); both must be set to take effect */
   certPath: string
   keyPath: string
+  /**
+   * v1.0.37: bumped on every credentials change. Signed session tokens carry
+   * the version they were issued with, so changing the password logs every
+   * existing device out without a server-side session table.
+   */
+  tokenVersion?: number
 }
 
 /** One SSH remote where vibe-acp runs (Codex-style remote projects). */
@@ -116,6 +122,7 @@ const defaultConfig: AppConfig = {
     hash: '',
     certPath: '',
     keyPath: '',
+    tokenVersion: 0,
   },
   remoteConnections: []
 }

@@ -140,20 +140,36 @@ export interface RemoteSessionInfo {
   updatedAt: string
 }
 
-/** List sessions on the remote host by speaking JSON-RPC to vibe-acp over ssh. */
-export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessionInfo[]> {
+export interface RemoteSessionsResult {
+  sessions: RemoteSessionInfo[]
+  ok: boolean
+  /** exit code + stderr when the handshake failed (surfaced in the UI) */
+  error: string | null
+}
+
+/**
+ * List sessions on the remote host by speaking JSON-RPC to vibe-acp over ssh.
+ *
+ * v1.0.37: failures are REPORTED instead of looking like an empty history.
+ * The old version resolved `[]` for a refused ssh, a missing vibe-acp, a
+ * timeout or a protocol error alike, so the phone showed an empty SSH group
+ * with no explanation at all.
+ */
+export function listRemoteSessionsDetailed(conn: RemoteConnection): Promise<RemoteSessionsResult> {
   return new Promise((resolve) => {
     const tokens = tokenizeCmd(conn.sshCmd)
     if (tokens.length === 0) {
-      resolve([])
+      resolve({ sessions: [], ok: false, error: "Empty ssh command" })
       return
     }
     let proc
     try {
       // Login shell so the remote PATH includes ~/.local/bin (uv tools).
-    proc = spawn(tokens[0], [...tokens.slice(1), ...SSH_CONNECT_OPTS, 'bash -lc "exec vibe-acp"'], { windowsHide: true })
-    } catch {
-      resolve([])
+      proc = spawn(tokens[0], [...tokens.slice(1), ...SSH_CONNECT_OPTS, 'bash -lc "exec vibe-acp"'], {
+        windowsHide: true,
+      })
+    } catch (err) {
+      resolve({ sessions: [], ok: false, error: String(err) })
       return
     }
     const sessions: RemoteSessionInfo[] = []
@@ -161,6 +177,11 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
     let listId = ""
     let cursor = ""
     let pages = 0
+    let stderr = ""
+    let answeredList = false
+    proc.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString()
+    })
     // The wire layer can paginate session/list (next_cursor); follow every
     // page so remote history is never truncated to the first page.
     const requestList = (): void => {
@@ -172,14 +193,26 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
       )
     }
     let done = false
-    const finish = (): void => {
+    const finish = (ok: boolean, error: string | null): void => {
       if (done) return
       done = true
       clearTimeout(timer)
-      try { proc.kill() } catch { /* noop */ }
-      resolve(sessions)
+      const code = proc.exitCode
+      try {
+        proc.kill()
+      } catch {
+        /* noop */
+      }
+      const reason =
+        error ??
+        (ok
+          ? null
+          : "ssh exit " +
+            String(code ?? "?") +
+            (stderr.trim() ? ": " + stderr.trim().slice(0, 400) : " (no stderr)"))
+      resolve({ sessions, ok: ok && answeredList, error: ok && answeredList ? null : reason })
     }
-    const timer = setTimeout(finish, 25000)
+    const timer = setTimeout(() => finish(false, "session/list timed out after 25 s"), 25000)
     const rl = readline.createInterface({ input: proc.stdout! })
     rl.on("line", (line: string) => {
       let msg: Record<string, unknown>
@@ -190,10 +223,16 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
       }
       const id = msg.id as string | undefined
       if (!id) return
+      const error = msg.error as { code?: number; message?: string } | undefined
+      if (error) {
+        finish(false, "vibe-acp error " + String(error.code ?? "?") + ": " + String(error.message ?? ""))
+        return
+      }
       const result = (msg.result ?? {}) as Record<string, unknown>
       if (id === initId) {
         requestList()
       } else if (id === listId) {
+        answeredList = true
         const raw = (result.sessions ?? result.items ?? []) as Array<Record<string, unknown>>
         for (const s of raw) {
           const sessionId = (s.sessionId ?? s.id ?? "") as string
@@ -211,29 +250,42 @@ export function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessio
           cursor = nextCursor
           requestList()
         } else {
-          finish()
+          finish(true, null)
         }
       }
     })
-    proc.on("error", finish)
-    proc.on("exit", finish)
+    proc.on("error", (e: Error) => finish(false, "ssh spawn failed: " + String(e)))
+    proc.on("exit", () => {
+      // an exit before the list answer is a real failure, not an empty history
+      if (!answeredList) finish(false, null)
+      else finish(true, null)
+    })
     initId = randomUUID()
     proc.stdin?.write(
       JSON.stringify({
         jsonrpc: "2.0",
         id: initId,
         method: "initialize",
-        params: { protocolVersion: 1, clientInfo: { name: "Halny Vibe Deck", version: "0.14.0" } },
+        params: { protocolVersion: 1, clientInfo: { name: "Halny Vibe Deck", version: "1.0.37" } },
       }) + "\n",
     )
     setTimeout(() => {
       if (!done && listId === "") {
         try {
           requestList()
-        } catch { finish() }
+        } catch {
+          finish(false, "cannot write to the ssh channel")
+        }
       }
     }, 15000)
   })
+}
+
+/** Backwards compatible wrapper (desktop paths that only need the list). */
+export async function listRemoteSessions(conn: RemoteConnection): Promise<RemoteSessionInfo[]> {
+  const res = await listRemoteSessionsDetailed(conn)
+  if (!res.ok && res.error) console.error("[remote] session list failed:", conn.name, res.error)
+  return res.sessions
 }
 
 export interface RemoteStatus { id: string; ok: boolean; checkedAt: number; latencyMs: number | null }

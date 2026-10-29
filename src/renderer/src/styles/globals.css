@@ -5961,6 +5961,37 @@ code {
 /* v1.0.9: spinner while the SSH session list is being fetched */
 .remote-loading { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--text-muted); animation: remote-loading-spin 1s linear infinite; display: inline-block; }
 @keyframes remote-loading-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+/* v1.0.37: an SSH group must never look healthy-but-empty. The registry
+   error (ssh exit code + stderr) is rendered here with a retry action. */
+.remote-error {
+    margin: 4px 8px 8px 22px;
+    padding: 6px 8px;
+    border-left: 2px solid var(--danger, #e5534b);
+    background: rgba(229, 83, 75, 0.08);
+    border-radius: 4px;
+    font-size: 11px;
+}
+.remote-error-row { display: flex; align-items: center; gap: 8px; }
+.remote-error-text { color: var(--danger, #e5534b); flex: 1; }
+.remote-retry {
+    background: transparent;
+    border: 1px solid var(--border, #333);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 11px;
+    padding: 1px 6px;
+    cursor: pointer;
+}
+.remote-retry:hover { border-color: var(--accent); color: var(--accent); }
+.remote-error-detail {
+    margin: 4px 0 0;
+    max-height: 72px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-muted);
+    font-size: 10px;
+}
 .remote-project-group .project-group-header { color: var(--accent); }
 .remote-cwd-header { padding-left: 22px; }
 .remote-cwd-group .session-item { padding-left: 26px; }

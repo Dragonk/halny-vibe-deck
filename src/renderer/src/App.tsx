@@ -914,15 +914,40 @@ export default function App(): React.JSX.Element {
   // away appear here automatically).
   useEffect(() => {
     if (!isWebMode()) return
-    const onVis = (): void => {
-      if (document.visibilityState === 'visible') {
-        const st = useStore.getState()
-        void st.resyncAfterReconnect()
-        void window.api.acp.refreshSessions()
-      }
+    // v1.0.37: every way a browser can come back must trigger the same catch-up.
+    // `pageshow` covers bfcache/PWA restores, `online` a network flip, `focus`
+    // a plain tab switch on desktop browsers - previously only
+    // `visibilitychange` did, so some returns silently kept a stale view.
+    let last = 0
+    const sync = (): void => {
+      const now = Date.now()
+      if (now - last < 500) return
+      last = now
+      const st = useStore.getState()
+      void st.resyncAfterReconnect()
+      void window.api.acp.refreshSessions()
+      // the SPA never issues HTTP requests, so the sliding session cookie is
+      // renewed here (the websocket handshake cannot set cookies)
+      void fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' }).catch(() => {})
     }
+    const onVis = (): void => {
+      if (document.visibilityState === 'visible') sync()
+    }
+    const onPageShow = (): void => sync()
+    const onOnline = (): void => sync()
+    const onFocus = (): void => sync()
     document.addEventListener('visibilitychange', onVis)
-    return () => document.removeEventListener('visibilitychange', onVis)
+    window.addEventListener('pageshow', onPageShow)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('focus', onFocus)
+    const iv = window.setInterval(sync, 12 * 60 * 60 * 1000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('pageshow', onPageShow)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(iv)
+    }
   }, [])
 
   // v0.9.0: auto-close idle live sessions (config.autoCloseIdleMinutes,
@@ -981,7 +1006,16 @@ export default function App(): React.JSX.Element {
     const iv = window.setInterval(() => {
       void useStore.getState().refreshRemoteData()
     }, 60000)
-    return () => window.clearInterval(iv)
+    // v1.0.37: the main-process registry pushes its state (list + status +
+    // error) whenever it changes - the sidebar no longer depends on this
+    // client having fetched successfully.
+    const off = window.api.remote.onUpdated((state) => {
+      useStore.getState().applyRemoteState(state as never)
+    })
+    return () => {
+      window.clearInterval(iv)
+      off()
+    }
   }, [remoteConnIds])
 
   // v0.10.4: mobile gestures — swipes work anywhere on the screen, not just

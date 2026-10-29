@@ -343,6 +343,11 @@ function buildApi(): AppAPI {
       test: (draft: unknown): Promise<unknown> => invoke('remote:test', [draft]),
       installAcp: (id: string): Promise<unknown> => invoke('remote:install-acp', [id]),
       sessions: (id: string): Promise<unknown> => invoke('remote:sessions', [id]),
+      state: (): Promise<unknown> => invoke('remote:state', []),
+      refresh: (ids?: string[] | null, force?: boolean): Promise<unknown> =>
+        invoke('remote:refresh', [ids ?? null, force === true]),
+      onUpdated: (cb: (state: unknown) => void): (() => void) =>
+        subscribeWebEvent('remote:updated', cb as (...args: unknown[]) => void),
       statusNow: (ids?: string[]): Promise<unknown> => invoke('remote:status-now', [ids ?? null]),
       save: (conn: unknown): Promise<unknown> => invoke('remote:save', [conn]),
       delete: (id: string): Promise<unknown> => invoke('remote:delete', [id])

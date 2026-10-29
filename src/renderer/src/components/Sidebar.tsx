@@ -47,6 +47,8 @@ export default function Sidebar(): React.JSX.Element {
     hideProject,
     remoteStatuses,
     remoteLoading,
+    remoteErrors,
+    refreshRemoteData,
     startRemoteSession,
     mobileSidebarOpen,
     setMobileSidebarOpen,
@@ -663,6 +665,23 @@ export default function Sidebar(): React.JSX.Element {
                       )
                     })
                   })()}
+                  {remoteErrors[conn.id] ? (
+                    // v1.0.37: never leave an empty SSH group without a reason.
+                    // The registry reports the ssh exit code / stderr, so the
+                    // user sees why the list is stale and can retry.
+                    <div className="remote-error" role="alert">
+                      <div className="remote-error-row">
+                        <span className="remote-error-text">{tr.remoteListFailed}</span>
+                        <button
+                          className="remote-retry"
+                          onClick={() => void refreshRemoteData()}
+                        >
+                          {tr.retry}
+                        </button>
+                      </div>
+                      <pre className="remote-error-detail">{remoteErrors[conn.id]}</pre>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>

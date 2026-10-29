@@ -79,10 +79,13 @@ import {
 } from "./remoteVibe";
 import { gitStatus, gitLog, gitDiffFile, gitDiffAll, gitStage, gitUnstage, gitCommit, gitPush } from "./git";
 import { randomUUID } from "crypto";
-import { broadcastToWeb } from "./bus";
+import { broadcastToWeb, bus } from "./bus";
 import { installIpcCapture } from "./ipc-registry";
 import {
   startServe,
+  setServeCredentials,
+  closeAllSockets,
+  hasWebClients,
   stopServe,
   serveStatus,
   isServeRunning,
@@ -91,6 +94,13 @@ import {
   hashPassword,
 } from "./serve";
 import { testRemoteConnection, installRemoteAcp, listRemoteSessions, checkRemoteStatus, sshRun, shq } from "./remote";
+import {
+  loadRemoteCache,
+  refreshRemote,
+  remoteState,
+  pruneRemoteState,
+  startRemotePoller,
+} from "./remoteRegistry";
 import {
   checkAppUpdate,
   checkCliUpdate,
@@ -521,6 +531,8 @@ app.whenReady().then(() => {
     // config saves and app restarts.
     config.serve = loadConfig().serve;
     saveConfig(config);
+    // v1.0.37: a removed connection must also disappear from the registry.
+    pruneRemoteState();
     // v0.7.1: a removed remote connection must not leave its worker
     // (and the ssh child) running until the app quits.
     const keepIds = new Set((config.remoteConnections ?? []).map((c) => c.id));
@@ -1396,8 +1408,10 @@ app.whenReady().then(() => {
     const p = String(password || "");
     if (u.length < 3) throw new Error("Username must be at least 3 characters");
     if (p.length < 6) throw new Error("Password must be at least 6 characters");
-    const salt = makeSalt();
-    applyServeSection((serve) => ({ ...serve, username: u, salt, hash: hashPassword(p, salt) }));
+    // v1.0.37: one code path bumps the token version, so every device holding
+    // an old cookie is logged out and open websockets are dropped right away.
+    applyServeSection((serve) => setServeCredentials(serve, u, p));
+    closeAllSockets("credentials-changed");
     return { ok: true };
   });
   ipcMain.handle("serve:regen-cert", async () => {
@@ -1422,15 +1436,30 @@ app.whenReady().then(() => {
     if (!conn) throw new Error("Remote connection not found");
     return listRemoteSessions(conn);
   });
+  // v1.0.37: the server-side registry is the single source of truth for the
+  // sidebar. Clients read it and ask for a refresh - they never run their own
+  // ssh round-trips, so a phone and the desktop share one cached list.
+  ipcMain.handle("remote:state", () => remoteState());
+  ipcMain.handle("remote:refresh", async (_e, ids?: string[] | null, force?: boolean) => {
+    try {
+      return await refreshRemote(ids ?? undefined, force === true);
+    } catch (err) {
+      console.error("[remote] refresh failed:", err);
+      return remoteState();
+    }
+  });
   ipcMain.handle("remote:status-now", async (_e, ids?: string[]) => {
     const conns = loadConfig().remoteConnections.filter(
       (c) => c.enabled && (!ids || ids.includes(c.id)),
     );
-    const out: Record<string, unknown> = {};
-    for (const c of conns) {
-      out[c.id] = await checkRemoteStatus(c);
-    }
-    return out;
+    // v1.0.37: probe every connection CONCURRENTLY. The old sequential loop
+    // cost N x 8 s, so a phone with a websocket blip lost the whole answer
+    // (the bridge rejects in-flight calls on close) and never showed the SSH
+    // groups. Parallel keeps the whole probe under one timeout.
+    const results = await Promise.all(
+      conns.map(async (c) => [c.id, await checkRemoteStatus(c)] as const),
+    );
+    return Object.fromEntries(results);
   });
   ipcMain.handle("remote:save", (_e, conn: RemoteConnection) => {
     const cfg = loadConfig();
@@ -1458,13 +1487,10 @@ app.whenReady().then(() => {
 
   // ---------- v0.6.0: CLI credentials + serve autostart ----------
   if (cliUser && cliPass) {
-    const salt = makeSalt();
-    applyServeSection((serve) => ({
-      ...serve,
-      username: cliUser,
-      salt,
-      hash: hashPassword(cliPass, salt),
-    }));
+    // v1.0.37: the CLI path must bump tokenVersion exactly like the settings
+    // dialog - otherwise a --password change leaves old tokens valid.
+    applyServeSection((serve) => setServeCredentials(serve, cliUser, cliPass));
+    closeAllSockets("credentials-changed");
     console.log("[serve] credentials saved for user:", cliUser);
   }
   if (cliCert && cliKey) {
@@ -1480,6 +1506,21 @@ app.whenReady().then(() => {
     }
   }
   const cfgAtBoot = loadConfig();
+  // v1.0.37: `broadcastToWeb` only reaches websocket clients; the desktop
+  // window needs the same registry pushes (single source of truth everywhere).
+  bus.on("bus-event", (ev: { ch: string; args: unknown[] }) => {
+    if (ev.ch !== "remote:updated") return;
+    if (mainWinRef && !mainWinRef.isDestroyed()) {
+      mainWinRef.webContents.send("remote:updated", ev.args[0]);
+    }
+  });
+
+  // v1.0.37: warm the SSH registry from the persisted cache immediately (a
+  // fresh client sees the sessions before the first ssh answers) and poll only
+  // while somebody is watching (a web client or a visible window).
+  loadRemoteCache();
+  startRemotePoller(() => hasWebClients() || Boolean(mainWinRef && mainWinRef.isVisible()));
+
   if (serveFlag || cfgAtBoot.serve.enabled) {
     void (async () => {
       try {

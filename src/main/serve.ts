@@ -6,7 +6,7 @@ import path from "path"
 import crypto from "crypto"
 import { WebSocketServer, WebSocket } from "ws"
 import selfsigned from "selfsigned"
-import { app } from "electron"
+import { app, safeStorage } from "electron"
 import { bus } from "./bus"
 import { localHandlers } from "./ipc-registry"
 import { loadConfig } from "./config"
@@ -36,28 +36,263 @@ export function credentialsConfigured(serve: ServeConfig): boolean {
   return Boolean(serve.username && serve.salt && serve.hash)
 }
 
-// ---------- tokens / cookies ----------
-
-const TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000
+// ---------- tokens / cookies (v1.0.37: stateless, signed, persistent) ----------
+//
+// The old implementation kept every session in a Map: any process restart
+// (app self-update, watchdog/systemd restart, the EADDRINUSE recovery)
+// logged every device out, and the cookie was only ever written at login,
+// so it also expired 30 days later no matter how active the phone was.
+//
+// Tokens are now stateless HMAC-SHA256 blobs:
+//     v1.<base64url(payload)>.<base64url(hmac)>
+// with payload {u, iat, exp, ver, jti}. Nothing to lose on restart, and the
+// signature key survives in userData (encrypted with safeStorage when the
+// platform offers it - chmod 0600 is a no-op on Windows).
+//
+// Two limits: a SLIDING window renewed while the device stays in use, and
+// an ABSOLUTE cap so a token can never live forever.
 const COOKIE_NAME = "nexus_token"
-const tokens = new Map<string, { user: string; expires: number }>()
+const SLIDING_TTL_MS = 180 * 24 * 60 * 60 * 1000
+const ABSOLUTE_TTL_MS = 365 * 24 * 60 * 60 * 1000
+/** renew the cookie when less than this share of the sliding window is left */
+const REFRESH_THRESHOLD = 0.5
 
-function createToken(user: string): string {
-  const token = crypto.randomBytes(32).toString("hex")
-  tokens.set(token, { user, expires: Date.now() + TOKEN_TTL_MS })
-  return token
+interface TokenPayload {
+  /** username */
+  u: string
+  /** issued at (ms) */
+  iat: number
+  /** absolute expiry (ms) - never extended */
+  exp: number
+  /** credentials version - a password change invalidates every token */
+  ver: number
+  /** token id - the revoke list key */
+  jti: string
 }
 
-function verifyToken(token: string | undefined): { user: string } | null {
-  if (!token) return null
-  const entry = tokens.get(token)
-  if (!entry) return null
-  if (entry.expires < Date.now()) {
-    tokens.delete(token)
+interface SecretStore {
+  kid: string
+  keys: Record<string, string>
+}
+
+function userDataFile(name: string): string {
+  return path.join(app.getPath("userData"), name)
+}
+
+/**
+ * Load (or create) the signing keys. The file is encrypted with Electron
+ * safeStorage where available (DPAPI / Keychain / libsecret); plain JSON is
+ * only the fallback for platforms without a backend.
+ */
+function signSecret(): SecretStore {
+  const file = userDataFile("serve-secret.json")
+  const readPlain = (): SecretStore | null => {
+    try {
+      const raw = fs.readFileSync(file, "utf8")
+      const parsed = JSON.parse(raw) as SecretStore
+      if (parsed && parsed.kid && parsed.keys && parsed.keys[parsed.kid]) return parsed
+    } catch {
+      /* missing or unreadable */
+    }
     return null
   }
-  entry.expires = Date.now() + TOKEN_TTL_MS
-  return { user: entry.user }
+  let store: SecretStore | null = null
+  try {
+    const raw = fs.readFileSync(file, "utf8")
+    if (safeStorage.isEncryptionAvailable() && raw.startsWith("enc:")) {
+      store = JSON.parse(
+        safeStorage.decryptString(Buffer.from(raw.slice(4), "base64")),
+      ) as SecretStore
+    }
+  } catch {
+    /* fall through to the plain reader */
+  }
+  if (!store) store = readPlain()
+  if (store && store.kid && store.keys[store.kid]) return store
+  store = { kid: "k1", keys: { k1: crypto.randomBytes(32).toString("hex") } }
+  try {
+    const json = JSON.stringify(store)
+    if (safeStorage.isEncryptionAvailable()) {
+      const enc = safeStorage.encryptString(json).toString("base64")
+      fs.writeFileSync(file, "enc:" + enc, { mode: 0o600 })
+    } else {
+      fs.writeFileSync(file, json, { mode: 0o600 })
+      console.warn("[serve] safeStorage unavailable - signing key stored as plain JSON")
+    }
+  } catch (err) {
+    console.error("[serve] cannot persist the signing key:", err)
+  }
+  return store
+}
+
+function hmacKey(): { kid: string; key: Buffer } {
+  const store = signSecret()
+  return { kid: store.kid, key: Buffer.from(store.keys[store.kid], "hex") }
+}
+
+function sign(payload: TokenPayload, kid: string, key: Buffer): string {
+  const body = Buffer.from(JSON.stringify({ ...payload, kid })).toString("base64url")
+  const mac = crypto.createHmac("sha256", key).update(body).digest("base64url")
+  return "v1." + body + "." + mac
+}
+
+/** Constant-time signature check, then payload validation. */
+function verifyToken(token: string | undefined): { user: string; jti: string; payload: TokenPayload } | null {
+  if (!token) return null
+  const parts = token.split(".")
+  if (parts.length !== 3 || parts[0] !== "v1") return null
+  const [, body, mac] = parts
+  let payload: TokenPayload & { kid?: string }
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as TokenPayload & { kid?: string }
+  } catch {
+    return null
+  }
+  const store = signSecret()
+  const kid = payload.kid && store.keys[payload.kid] ? payload.kid : store.kid
+  const expected = crypto.createHmac("sha256", Buffer.from(store.keys[kid], "hex")).update(body).digest()
+  let given: Buffer
+  try {
+    given = Buffer.from(mac, "base64url")
+  } catch {
+    return null
+  }
+  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null
+
+  const now = Date.now()
+  if (!payload.u || typeof payload.exp !== "number" || payload.exp < now) return null
+  if (typeof payload.iat !== "number" || now - payload.iat > ABSOLUTE_TTL_MS) return null
+  if (payload.ver !== credentialsVersion()) return null
+  if (isRevoked(payload.jti)) return null
+  return { user: payload.u, jti: payload.jti, payload }
+}
+
+/** Token `ver` check - bumped whenever the password changes. */
+function credentialsVersion(): number {
+  try {
+    return loadConfig().serve.tokenVersion ?? 0
+  } catch {
+    return 0
+  }
+}
+
+// ---------- revoke list (logout / "log out everywhere") ----------
+
+function revokeFile(): string {
+  return userDataFile("serve-revoked.json")
+}
+
+function loadRevoked(): Array<{ jti: string; exp: number }> {
+  try {
+    const raw = JSON.parse(fs.readFileSync(revokeFile(), "utf8")) as Array<{ jti: string; exp: number }>
+    return Array.isArray(raw) ? raw.filter((r) => r && r.jti && r.exp > Date.now()) : []
+  } catch {
+    return []
+  }
+}
+
+function saveRevoked(list: Array<{ jti: string; exp: number }>): void {
+  try {
+    fs.writeFileSync(revokeFile(), JSON.stringify(list.slice(-500)), { mode: 0o600 })
+  } catch {
+    /* best effort */
+  }
+}
+
+function isRevoked(jti: string | undefined): boolean {
+  if (!jti) return false
+  return loadRevoked().some((r) => r.jti === jti)
+}
+
+function revoke(jti: string | undefined, exp: number | undefined): void {
+  if (!jti) return
+  const now = Date.now()
+  const list = loadRevoked().filter((r) => r.exp > now && r.jti !== jti)
+  list.push({ jti, exp: typeof exp === "number" ? exp : now + SLIDING_TTL_MS })
+  saveRevoked(list)
+}
+
+/** Clear the list after a credentials version bump (old tokens are dead anyway). */
+export function clearRevokedTokens(): void {
+  try {
+    fs.rmSync(revokeFile(), { force: true })
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+function createToken(user: string, remember: boolean): { token: string; maxAge: number | null } {
+  const now = Date.now()
+  const payload: TokenPayload = {
+    u: user,
+    iat: now,
+    exp: Math.min(now + SLIDING_TTL_MS, now + ABSOLUTE_TTL_MS),
+    ver: credentialsVersion(),
+    jti: crypto.randomBytes(16).toString("hex"),
+  }
+  const { kid, key } = hmacKey()
+  return { token: sign(payload, kid, key), maxAge: remember ? SLIDING_TTL_MS : null }
+}
+
+function cookieHeader(token: string, maxAge: number | null): string {
+  const base = `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/`
+  return maxAge === null ? base : `${base}; Max-Age=${Math.floor(maxAge / 1000)}`
+}
+
+/**
+ * Re-issue the cookie when the current one is old enough. Called on every
+ * authenticated HTML/API request and by POST /api/auth/refresh - the SPA
+ * itself talks over the websocket, which cannot set cookies.
+ */
+function maybeRefreshCookie(req: IncomingMessage, res: ServerResponse, auth: { jti: string; payload: TokenPayload }): void {
+  const remaining = auth.payload.exp - Date.now()
+  if (remaining > SLIDING_TTL_MS * REFRESH_THRESHOLD) return
+  // keep the ABSOLUTE deadline of the current token chain
+  const now = Date.now()
+  const payload: TokenPayload = {
+    u: auth.payload.u,
+    iat: auth.payload.iat,
+    exp: Math.min(now + SLIDING_TTL_MS, auth.payload.iat + ABSOLUTE_TTL_MS),
+    ver: auth.payload.ver,
+    jti: crypto.randomBytes(16).toString("hex"),
+  }
+  const { kid, key } = hmacKey()
+  res.setHeader("Set-Cookie", cookieHeader(sign(payload, kid, key), SLIDING_TTL_MS))
+}
+
+/** Close every websocket authenticated with a revoked/finished session. */
+export function closeAllSockets(reason = "logout"): void {
+  if (!wss) return
+  for (const client of wss.clients) {
+    try {
+      client.close(4401, reason)
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Single place that changes serve credentials: bumps the token version (every
+ * existing device is logged out) and clears the revoke list. Used by the
+ * local settings IPC and by the --user/--password CLI flags, so a password
+ * change cannot leave an old token valid.
+ */
+export function setServeCredentials(
+  serve: ServeConfig,
+  username: string,
+  password: string,
+): ServeConfig {
+  const salt = makeSalt()
+  clearRevokedTokens()
+  const next: ServeConfig = {
+    ...serve,
+    username,
+    salt,
+    hash: hashPassword(password, salt),
+    tokenVersion: (serve.tokenVersion ?? 0) + 1,
+  }
+  return next
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -70,22 +305,50 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out
 }
 
-function tokenFromRequest(req: IncomingMessage): { user: string } | null {
+interface AuthedRequest {
+  user: string
+  jti: string
+  payload: TokenPayload
+}
+
+function tokenFromRequest(req: IncomingMessage): AuthedRequest | null {
   const cookies = parseCookies(req.headers.cookie)
   return verifyToken(cookies[COOKIE_NAME])
 }
 
-// brute-force guard: 8 attempts / 10 min / IP
+// brute-force guard: 8 FAILED attempts / 10 min / (ip + username).
+// v1.0.37: the old counter incremented BEFORE the password check and never
+// reset, so eight successful logins (several devices, a few tests) hit 429
+// "Too many attempts" - a co-conspirator behind "I have to log in again".
+// Only failures count now, a success clears the entry, and the key is
+// per (ip, username) so one NAT is not shared by the whole household.
+const RATE_LIMIT_MAX = 8
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
 const attempts = new Map<string, { count: number; resetAt: number }>()
-function rateLimited(ip: string): boolean {
+
+function rateLimitKey(ip: string, username: string): string {
+  return ip + "|" + username.trim().toLowerCase()
+}
+
+function rateLimited(key: string): boolean {
   const now = Date.now()
-  const entry = attempts.get(ip)
+  const entry = attempts.get(key)
+  if (!entry || entry.resetAt < now) return false
+  return entry.count >= RATE_LIMIT_MAX
+}
+
+function noteLoginFailure(key: string): void {
+  const now = Date.now()
+  const entry = attempts.get(key)
   if (!entry || entry.resetAt < now) {
-    attempts.set(ip, { count: 1, resetAt: now + 10 * 60 * 1000 })
-    return false
+    attempts.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return
   }
   entry.count += 1
-  return entry.count > 8
+}
+
+function clearLoginFailures(key: string): void {
+  attempts.delete(key)
 }
 
 // ---------- self-signed certificate ----------
@@ -431,6 +694,11 @@ let wss: WebSocketServer | null = null
 let wsHeartbeat: ReturnType<typeof setInterval> | null = null
 let servePort = 0
 
+/** v1.0.37: is anyone connected over the websocket right now? */
+export function hasWebClients(): boolean {
+  return wss !== null && wss.clients.size > 0
+}
+
 export function isServeRunning(): boolean {
   return server !== null && server.listening
 }
@@ -475,14 +743,22 @@ const WEB_BLOCKED = new Set([
 
 /**
  * Guard for config:save arriving from a web client: the serve section
- * (credentials, port, certs, enabled flag) is managed ONLY locally.
+ * (credentials, port, certs, enabled flag) AND the SSH connections are
+ * managed ONLY locally / through their own channels. v1.0.37: a browser
+ * client sent its whole config snapshot back; a stale snapshot (loaded
+ * before an SSH connection was added on the desktop) wiped
+ * remoteConnections server-side, and the phone then showed no SSH groups
+ * at all - permanently, an F5 did not help. Only these two sections are
+ * restored here; every other key still comes from the client.
  */
-function protectServeSection(args: unknown[]): unknown[] {
+function protectServerSections(args: unknown[]): unknown[] {
   const cfg = loadConfig()
   const next = args.slice()
   if (next[0] && typeof next[0] === "object") {
-    const obj = next[0] as Record<string, unknown>
+    const obj = JSON.parse(JSON.stringify(next[0])) as Record<string, unknown>
     obj.serve = cfg.serve
+    obj.remoteConnections = cfg.remoteConnections
+    next[0] = obj
   }
   return next
 }
@@ -495,7 +771,7 @@ async function dispatchForWeb(ch: string, args: unknown[]): Promise<unknown> {
   if (!handler) {
     throw new Error(`Unknown channel: ${ch}`)
   }
-  const callArgs = ch === "config:save" ? protectServeSection(args) : args
+  const callArgs = ch === "config:save" ? protectServerSections(args) : args
   return await Promise.resolve(handler(null as never, ...(callArgs as never[])))
 }
 
@@ -559,20 +835,30 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
     if (req.method === "POST" && url === "/api/auth/login") {
       void (async () => {
         try {
-          if (rateLimited(ip)) {
+          const body = JSON.parse((await readBody(req)).toString("utf8")) as {
+            username?: string
+            password?: string
+            remember?: boolean
+          }
+          const username = String(body.username ?? "")
+          const rlKey = rateLimitKey(ip, username)
+          if (rateLimited(rlKey)) {
             sendJson(res, 429, { ok: false, error: "Too many attempts" })
             return
           }
-          const body = JSON.parse((await readBody(req)).toString("utf8")) as { username?: string; password?: string }
-          const ok = verifyCredentials(String(body.username ?? ""), String(body.password ?? ""), serve)
+          const ok = verifyCredentials(username, String(body.password ?? ""), serve)
           if (!ok) {
+            noteLoginFailure(rlKey)
             sendJson(res, 401, { ok: false, error: "Invalid credentials" })
             return
           }
-          const token = createToken(String(body.username))
+          clearLoginFailures(rlKey)
+          // "remember this device" is the default; a browser that opts out
+          // gets a session cookie instead of a 180-day one.
+          const { token, maxAge } = createToken(username, body.remember !== false)
           res.writeHead(200, {
             "Content-Type": "application/json",
-            "Set-Cookie": `${COOKIE_NAME}=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${TOKEN_TTL_MS / 1000}`,
+            "Set-Cookie": cookieHeader(token, maxAge),
             "Cache-Control": "no-store",
           })
           res.end(JSON.stringify({ ok: true }))
@@ -583,12 +869,33 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
       return
     }
 
+    // v1.0.37: the logged-in SPA never makes an HTTP request (everything is
+    // websocket), so the sliding cookie would never be renewed. The client
+    // calls this endpoint on visibility change / every 12 h and gets a fresh
+    // Set-Cookie; the response itself is empty.
+    if (req.method === "POST" && url === "/api/auth/refresh") {
+      const auth = tokenFromRequest(req)
+      if (!auth) {
+        sendJson(res, 401, { ok: false, error: "Unauthorized" })
+        return
+      }
+      maybeRefreshCookie(req, res, auth)
+      res.writeHead(204, { "Cache-Control": "no-store" })
+      res.end()
+      return
+    }
+
     if (req.method === "POST" && url === "/api/auth/logout") {
-      const cookies = parseCookies(req.headers.cookie)
-      if (cookies[COOKIE_NAME]) tokens.delete(cookies[COOKIE_NAME])
+      // Stateless tokens are killed by a persistent revoke entry, so a logout
+      // also survives a process restart - and the sockets of this session are
+      // closed right away instead of living until the cookie expires.
+      const auth = tokenFromRequest(req)
+      if (auth) revoke(auth.jti, auth.payload.exp)
+      closeAllSockets("logout")
       res.writeHead(200, {
         "Set-Cookie": `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
         "Content-Type": "application/json",
+        "Cache-Control": "no-store",
       })
       res.end(JSON.stringify({ ok: true }))
       return
@@ -665,6 +972,8 @@ export async function startServe(serve: ServeConfig, rendererDir: string): Promi
     }
 
     if (url === "/") {
+      const auth = tokenFromRequest(req)
+      if (auth) maybeRefreshCookie(req, res, auth)
       sendFile(req, res, path.join(rendererDir, "index.html"), false)
       return
     }

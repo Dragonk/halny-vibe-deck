@@ -18,7 +18,14 @@ import type {
   PlanEntry,
 } from "./types";
 import { defaultConfig } from "./types";
-import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, AppUpdateInfo, CliUpdateInfo } from "./types";
+import type {
+  RemoteConnection,
+  RemoteEntryState,
+  RemoteStatus,
+  RemoteSessionInfo,
+  AppUpdateInfo,
+  CliUpdateInfo,
+} from "./types";
 
 /** Minimal shapes used to rebuild chip option lists for historical sessions. */
 interface HistModelHolder {
@@ -299,6 +306,14 @@ interface AppStore {
   popBack: () => void;
   /** v1.0.9: connections whose session list is currently being fetched. */
   remoteLoading: Record<string, boolean>;
+  /**
+   * v1.0.37: why a connection has no list (ssh stderr / exit code). The old
+   * code swallowed these errors, so a phone showed an empty SSH group with no
+   * explanation - indistinguishable from "this host has no sessions".
+   */
+  remoteErrors: Record<string, string | null>;
+  /** v1.0.37: adopt the server-side registry state (list + status + error). */
+  applyRemoteState: (state: Record<string, RemoteEntryState>) => void;
   /**
    * v0.7.0: idempotently make sure the ACP worker for a connection (null =
    * the local agent) is running. Never primes a session - resume paths rely
@@ -2150,6 +2165,7 @@ export const useStore = create<AppStore>((set, get) => ({
   // ---- v0.6.0/v0.7.0: remote SSH connections ----
   remoteStatuses: {},
   remoteLoading: {},
+  remoteErrors: {},
   backStack: [],
   historyLoadedSessions: [],
   pushBack: (run) => {
@@ -2218,39 +2234,112 @@ export const useStore = create<AppStore>((set, get) => ({
     await window.api.acp.ensureWorker(cfg.acpPath || "vibe-acp", cwd || cfg.workingDirectory || ".", rid);
   },
 
+  /**
+   * v1.0.37: the SSH list is owned by the MAIN process now. The client only
+   * asks for a refresh and adopts the returned state:
+   *
+   *  - no status gate any more (the old `if (!statuses[c.id]?.ok) return`
+   *    silently dropped every session as soon as one probe timed out),
+   *  - one ssh per connection for ALL clients (single-flight server-side),
+   *  - the last known list is cached server-side and persisted, so a fresh
+   *    phone shows its SSH sessions immediately after login,
+   *  - a failure is stored as an error string and rendered per group.
+   */
+  applyRemoteState: (state) => {
+    const conns = (get().config.remoteConnections ?? []).filter((c) => c.enabled);
+    const ids = new Set(conns.map((c) => c.id));
+    const remoteStatuses: Record<string, RemoteStatus> = {};
+    const remoteErrors: Record<string, string | null> = {};
+    const remoteLoading: Record<string, boolean> = {};
+    // authoritative session lists (only for connections we actually queried)
+    const authoritative = new Map<string, RemoteSessionInfo[]>();
+    for (const [id, entry] of Object.entries(state ?? {})) {
+      if (!ids.has(id)) continue;
+      if (entry.status) remoteStatuses[id] = entry.status;
+      remoteErrors[id] = entry.error ?? null;
+      remoteLoading[id] = Boolean(entry.loading);
+      if (!entry.error && entry.fetchedAt > 0) authoritative.set(id, entry.sessions ?? []);
+    }
+    set((s) => {
+      const sessions = [...s.sessions];
+      const index = new Map<string, number>();
+      sessions.forEach((sess, i) => {
+        if (sess.remoteId && sess.acpSessionId) {
+          index.set(sess.remoteId + "|" + sess.acpSessionId, i);
+        }
+      });
+      const now = Date.now();
+      // add / refresh, and remember which ones the server still knows about
+      const stillKnown = new Set<string>();
+      for (const [remoteId, list] of authoritative) {
+        for (const info of list) {
+          if (!info.sessionId) continue;
+          const key = remoteId + "|" + info.sessionId;
+          stillKnown.add(key);
+          const ts = info.updatedAt ? new Date(info.updatedAt).getTime() : now;
+          const existing = index.get(key);
+          if (existing === undefined) {
+            sessions.push({
+              id: uuid(),
+              name: info.title || info.sessionId.slice(0, 16) + "\u2026",
+              acpSessionId: info.sessionId,
+              messages: [],
+              createdAt: ts,
+              lastActive: ts,
+              updatedAt: ts,
+              workingDirectory: info.cwd || undefined,
+              remoteId,
+            });
+          } else {
+            const prev = sessions[existing];
+            sessions[existing] = {
+              ...prev,
+              updatedAt: Math.max(prev.updatedAt ?? 0, ts),
+              workingDirectory: prev.workingDirectory || info.cwd || undefined,
+            };
+          }
+        }
+      }
+      // v1.0.37: PRUNE - a connection that answered successfully no longer
+      // lists this session, so the sidebar must not keep a ghost forever (the
+      // old importRemoteSessions only ever added).
+      const kept = sessions.filter((sess) => {
+        if (!sess.remoteId || !sess.acpSessionId) return true;
+        if (!authoritative.has(sess.remoteId)) return true;
+        return stillKnown.has(sess.remoteId + "|" + sess.acpSessionId);
+      });
+      kept.sort((a, b) => (b.updatedAt ?? b.lastActive) - (a.updatedAt ?? a.lastActive));
+      return { sessions: kept, remoteStatuses, remoteErrors, remoteLoading };
+    });
+  },
+
   refreshRemoteData: async () => {
     const conns = (get().config.remoteConnections ?? []).filter((c) => c.enabled);
     if (conns.length === 0) {
-      if (Object.keys(get().remoteStatuses).length > 0) set({ remoteStatuses: {} });
+      if (Object.keys(get().remoteStatuses).length > 0 || Object.keys(get().remoteErrors).length > 0) {
+        set({ remoteStatuses: {}, remoteErrors: {}, remoteLoading: {} });
+      }
       return;
     }
-    // v1.0.9: per-connection loading flag - the sidebar shows a spinner
-    // instead of the "no sessions" look while the list is being fetched.
     set({ remoteLoading: Object.fromEntries(conns.map((c) => [c.id, true])) });
     try {
-      const statuses = (await window.api.remote.statusNow(
-        conns.map((c) => c.id),
-      )) as Record<string, RemoteStatus>;
-      set({ remoteStatuses: statuses });
-      // v1.0.9: fetch every connection's session list CONCURRENTLY - the
-      // old sequential loop stacked whole SSH+ACP handshakes (25 s timeout
-      // each), so the first launch could sit for minutes without a list.
-      await Promise.allSettled(
-        conns.map(async (c) => {
-          if (!statuses[c.id]?.ok) return;
-          try {
-            const infos = (await window.api.remote.sessions(c.id)) as RemoteSessionInfo[];
-            get().importRemoteSessions(c.id, infos);
-          } catch (err) {
-            console.error("[store] remote sessions failed:", c.name, err);
-          }
-        }),
-      );
+      const state = (await window.api.remote.refresh(conns.map((c) => c.id))) as Record<
+        string,
+        RemoteEntryState
+      >;
+      get().applyRemoteState(state);
     } catch (err) {
-      console.error("[store] remote status failed:", err);
-    } finally {
-      set({ remoteLoading: {} });
+      console.error("[store] remote refresh failed:", err);
+      // surface it instead of leaving an empty group that looks healthy
+      set({
+        remoteErrors: Object.fromEntries(
+          conns.map((c) => [c.id, err instanceof Error ? err.message : String(err)]),
+        ),
+        remoteLoading: {},
+      });
+      return;
     }
+    set({ remoteLoading: {} });
   },
 
   startRemoteSession: async (remoteId, cwd) => {

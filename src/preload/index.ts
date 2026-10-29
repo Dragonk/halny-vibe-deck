@@ -103,6 +103,19 @@ export interface RemoteStatus {
   latencyMs: number | null
 }
 
+/**
+ * v1.0.37: server-side view of one SSH connection (see main/remoteRegistry).
+ * `error` carries the real ssh failure so the UI can show it instead of an
+ * empty group; `sessions` is the last known list (persisted across restarts).
+ */
+export interface RemoteEntryState {
+  status: RemoteStatus | null
+  sessions: RemoteSessionInfo[]
+  error: string | null
+  fetchedAt: number
+  loading: boolean
+}
+
 const api = {
   window: {
     minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
@@ -335,6 +348,15 @@ const api = {
     installAcp: (id: string): Promise<{ ok: boolean; error: string | null; log: string }> =>
       ipcRenderer.invoke('remote:install-acp', id),
     sessions: (id: string): Promise<RemoteSessionInfo[]> => ipcRenderer.invoke('remote:sessions', id),
+    state: (): Promise<Record<string, RemoteEntryState>> => ipcRenderer.invoke('remote:state'),
+    refresh: (ids?: string[] | null, force?: boolean): Promise<Record<string, RemoteEntryState>> =>
+      ipcRenderer.invoke('remote:refresh', ids ?? null, force === true),
+    /** v1.0.37: pushed by the main-process registry when a list changes. */
+    onUpdated: (listener: (state: Record<string, RemoteEntryState>) => void): (() => void) => {
+      const l = (_e: unknown, state: Record<string, RemoteEntryState>): void => listener(state)
+      ipcRenderer.on('remote:updated', l)
+      return () => ipcRenderer.removeListener('remote:updated', l)
+    },
     statusNow: (ids?: string[]): Promise<Record<string, RemoteStatus>> =>
       ipcRenderer.invoke('remote:status-now', ids ?? null),
     save: (conn: RemoteConnection): Promise<RemoteConnection> => ipcRenderer.invoke('remote:save', conn),

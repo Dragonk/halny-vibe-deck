@@ -1,6 +1,6 @@
-import type { RemoteConnection, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus } from '../../preload/index'
+import type { RemoteConnection, RemoteEntryState, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus } from '../../preload/index'
 
-export type { RemoteConnection, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus }
+export type { RemoteConnection, RemoteEntryState, RemoteStatus, RemoteSessionInfo, RemoteTestResult, ServeStatus }
 
 export interface FileChange {
   path: string
