@@ -1,7 +1,7 @@
 //! Input bar: textarea + project chip + model/mode/thinking chips with
 //! dropdowns + send/stop, the live usage bar and the status bar.
 //! Also the Nexus `@` file picker, `/` slash picker (commands + skills +
-//! prompts) and the attach menu (file / directory / image / branch diff).
+//! prompts) and the attach menu (＋ → file or image only).
 //! Ported from Nexus InputBar.tsx (same CSS classes).
 
 use dioxus::prelude::*;
@@ -97,6 +97,50 @@ fn loc(lang: &str, pl: &str, en: &str) -> String {
     }
 }
 
+/// Re-fit the chat textarea after a programmatic draft change (the input
+/// event only fires for real typing).
+pub fn fit_input_now() {
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        spawn(async move {
+            let _ = dioxus::document::eval("window.__vdFitInput && window.__vdFitInput();").await;
+        });
+    }
+}
+
+/// Injected once (client only): the chat textarea grows with its content
+/// (one line at a time) up to the CSS max-height (160px), and never offers
+/// a manual resize handle (`resize: none` in main.css). Also installs the
+/// click-outside handler that closes every open picker (model/mode/
+/// thinking chips, the attach menu, the @ and / pickers) — it clicks the
+/// hidden `#vd-close-pickers` bridge button.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const INPUT_JS: &str = r#"
+(function () {
+  if (window.__vdInputInit) return; window.__vdInputInit = 1;
+  var MAXH = 160;
+  window.__vdFitInput = function () {
+    var ta = document.querySelector('.input-card-editor');
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, MAXH) + 'px';
+  };
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.classList && e.target.classList.contains('input-card-editor')) {
+      window.__vdFitInput();
+    }
+  }, true);
+  // Clicking outside any picker closes all of them.
+  document.addEventListener('pointerdown', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest('.ic-chip-wrap, .attach-menu-wrap, .input-card-textarea-wrap, .input-picker-dropdown')) return;
+    var btn = document.getElementById('vd-close-pickers');
+    if (btn) btn.click();
+  }, true);
+})();
+"#;
+
 /// i18n key for the wire status string (Nexus InputBar status bar:
 /// connected / connecting / error / disconnected).
 fn status_label_key(status: &str) -> &'static str {
@@ -112,6 +156,19 @@ pub fn InputBar() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let mut draft = use_signal(String::new);
     let open_chip = use_signal(String::new);
+
+    // one-shot: install the textarea auto-fit + click-outside-to-close JS
+    // (client only; the SSR build never evaluates JS)
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        let mut js_init = use_signal(|| false);
+        if !*js_init.read() {
+            js_init.set(true);
+            spawn(async move {
+                dioxus::document::eval(INPUT_JS);
+            });
+        }
+    }
 
     // Project agents (Nexus extraModeChoices) — loaded per working
     // directory of the current session (`<cwd>/.vibe/agents/`).
@@ -354,6 +411,7 @@ pub fn InputBar() -> Element {
                         let state = state.clone();
                         let text = draft.read().clone();
                         draft.set(String::new());
+                        fit_input_now();
                         async move {
                             if !text.trim().is_empty() {
                                 submit(state, text).await;
@@ -641,6 +699,24 @@ pub fn InputBar() -> Element {
 
     rsx! {
         div { class: "input-card-wrap",
+            // hidden bridge: INPUT_JS clicks it on any pointerdown outside
+            // the pickers, closing all dropdowns (chips / attach / @ / /)
+            button {
+                id: "vd-close-pickers",
+                style: "display:none",
+                onclick: {
+                    let mut open_chip = open_chip.clone();
+                    let mut attach_open = attach_open.clone();
+                    let mut at_open = at_open.clone();
+                    let mut slash_open = slash_open.clone();
+                    move |_| {
+                        open_chip.set(String::new());
+                        attach_open.set(false);
+                        at_open.set(false);
+                        slash_open.set(false);
+                    }
+                },
+            }
             div { class: "input-card",
                 {queue_panel.iter().cloned()}
                 div { class: "input-card-textarea-wrap",
@@ -832,6 +908,7 @@ pub fn InputBar() -> Element {
                                 e.prevent_default();
                                 let text = draft.read().clone();
                                 draft.set(String::new());
+                                fit_input_now();
                                 if !text.trim().is_empty() {
                                     spawn(send_text(text));
                                 }
@@ -853,12 +930,11 @@ pub fn InputBar() -> Element {
                 }
                 div { class: "input-card-toolbar",
                     div { class: "input-card-left",
-                        // --- attach menu (stable: one ＋ button) ---
+                        // --- attach menu: one ＋ button, file or image only ---
                         div { class: "attach-menu-wrap",
                             button {
-                                class: "ic-btn",
+                                class: "ic-btn ic-attach-btn",
                                 title: "{tr(&lang, \"attachments\")}",
-                                style: "display:flex;align-items:center;justify-content:center;",
                                 onclick: {
                                     let mut attach_open = attach_open.clone();
                                     move |_| {
@@ -866,7 +942,7 @@ pub fn InputBar() -> Element {
                                         attach_open.set(!cur);
                                     }
                                 },
-                                "📎"
+                                "＋"
                             }
                             if *attach_open.read() {
                                 div { class: "folder-picker-dropdown attach-dropdown",
@@ -880,6 +956,7 @@ pub fn InputBar() -> Element {
                                                 attach_open.set(false);
                                                 let d = format!("{}@", draft.read().clone());
                                                 draft.set(d);
+                                                crate::components::input::fit_input_now();
                                                 at_open.set(true);
                                             }
                                         },
@@ -893,56 +970,16 @@ pub fn InputBar() -> Element {
                                             let mut at_open = at_open.clone();
                                             move |_| {
                                                 attach_open.set(false);
+                                                // image: same @ picker, the
+                                                // server inlines image files as
+                                                // base64 blocks (image_mime)
                                                 let d = format!("{}@", draft.read().clone());
                                                 draft.set(d);
+                                                crate::components::input::fit_input_now();
                                                 at_open.set(true);
                                             }
                                         },
-                                        "📁 {loc(&lang, \"Katalog\", \"Directory\")}"
-                                    }
-                                    button {
-                                        class: "folder-picker-item",
-                                        onclick: {
-                                            let state = state.clone();
-                                            let lang_c = lang.clone();
-                                            let draft = draft.clone();
-                                            let mut attach_open = attach_open.clone();
-                                            move |_| {
-                                                let state = state.clone();
-                                                let lang = lang_c.clone();
-                                                let mut draft = draft.clone();
-                                                async move {
-                                                    attach_open.set(false);
-                                                    let (g_cwd, g_rid) =
-                                                        crate::state::session_git_ctx(&state);
-                                                    match crate::fsgit::api_git_diff_all(
-                                                        token(&state),
-                                                        g_cwd,
-                                                        g_rid,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(diff) if !diff.trim().is_empty() => {
-                                                            let capped = if diff.len() > 100_000 {
-                                                                format!("{}\n… (truncated)", &diff[..100_000])
-                                                            } else {
-                                                                diff
-                                                            };
-                                                            let block = format!("```diff\n{}\n```\n", capped);
-                                                            let d = format!("{}{}", draft.read().clone(), block);
-                                                            draft.set(d);
-                                                        }
-                                                        Ok(_) => {
-                                                            let hint = loc(&lang, "Brak zmian do wklejenia.", "No changes to paste.");
-                                                            let d = format!("{}{} ", draft.read().clone(), hint);
-                                                            draft.set(d);
-                                                        }
-                                                        Err(_) => {}
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        "🔀 {loc(&lang, \"Diff gałęzi\", \"Branch diff\")}"
+                                        "🖼 {loc(&lang, \"Zdjęcie\", \"Image\")}"
                                     }
                                 }
                             }

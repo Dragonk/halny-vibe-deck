@@ -166,7 +166,9 @@ fn check_app_update_inner(
 /// Run a command capturing output with a hard timeout (Nexus `runAsync`):
 /// returns None only when the process could not be spawned.
 fn run_capture(cmd: &str, args: &[&str], timeout_ms: u64) -> Option<(i32, String, String)> {
-    let mut child = std::process::Command::new(cmd)
+    let mut c = std::process::Command::new(cmd);
+    crate::no_window(&mut c);
+    let mut child = c
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -402,7 +404,9 @@ fn content_length(url: &str) -> Option<u64> {
 /// `downloadTo`: 250ms throttle, curl follows up to the default redirects).
 fn download_to(url: &str, dest: &std::path::Path, total: Option<u64>) -> Result<(), String> {
     let dest_s = dest.to_string_lossy().to_string();
-    let mut child = std::process::Command::new("curl")
+    let mut c = std::process::Command::new("curl");
+    crate::no_window(&mut c);
+    let mut child = c
         .args(["-fsSL", "--max-time", "600", "-o", &dest_s, url])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -774,7 +778,9 @@ fn update_app_linux(
     // Relaunch the (now replaced) executable and exit; the kernel keeps
     // the old inode mapped for the dying process.
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let _ = std::process::Command::new(&exe)
+    let mut c = std::process::Command::new(&exe);
+    crate::no_window(&mut c);
+    let _ = c
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

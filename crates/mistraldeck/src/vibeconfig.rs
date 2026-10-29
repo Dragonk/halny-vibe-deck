@@ -170,11 +170,10 @@ mod imp {
     use mistraldeck_vibe::files::{AgentFile, PromptFile, SkillFile};
     use mistraldeck_vibe::vibe_home;
 
-    pub fn check(token: &str) -> Result<(), ServerFnError> {
-        let engine = Engine::global();
-        if engine.auth_enabled() && !engine.check_token(token) {
-            return Err(ServerFnError::new("unauthorized"));
-        }
+    pub fn check(_token: &str) -> Result<(), ServerFnError> {
+        // Same auth model as api.rs: no token enforcement inside the
+        // server functions — the remote HTTPS listener's middleware has
+        // already gated the request, and the loopback listener is trusted.
         Ok(())
     }
 
@@ -1191,6 +1190,21 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
         with_cfg(&ctx, |cfg| cfg.set_tool_permission(name, perm))
     }
 
+    /// Remove one `[tools.<name>]` entry (Z15 tool list, stable parity).
+    pub fn remove_tool_permission(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&mistraldeck_core::snapshot::RemoteConnection>,
+        tool: &str,
+    ) -> Result<(), ServerFnError> {
+        let name = tool.trim();
+        if name.is_empty() {
+            return Err(ServerFnError::new("empty tool name"));
+        }
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        with_cfg(&ctx, |cfg| cfg.remove_tool_permission(name))
+    }
+
     pub fn set_list(
         scope: &str,
         cwd: &str,
@@ -1495,6 +1509,23 @@ pub async fn api_set_tool_permission(
     imp::check(&token)?;
     tokio::task::spawn_blocking(move || {
         imp::set_tool_permission(&scope, &cwd, conn.as_ref(), &tool, &permission)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Remove one tool permission entry — Z15 tool list, stable parity.
+#[server]
+pub async fn api_remove_tool_permission(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    tool: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::remove_tool_permission(&scope, &cwd, conn.as_ref(), &tool)
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?

@@ -3418,6 +3418,9 @@ code {
     overflow-y: auto;
     white-space: pre-wrap;
     word-wrap: break-word;
+    /* no manual resize handle — the box grows with the text (INPUT_JS)
+       up to max-height, like the production edition */
+    resize: none;
 }
 
 .input-card-editor:focus {
@@ -5329,7 +5332,7 @@ code {
 /* ── Settings scope switch global/project (v0.4.0) ── */
 .settings-title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .settings-title-row .settings-title { margin: 0; }
-.scope-switch { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
+.scope-switch { display: inline-flex; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
 .scope-pill { background: none; border: none; color: var(--text-muted); font-size: 12px; padding: 5px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
 .scope-pill.active { background: var(--accent); color: #fff; }
 .scope-pill:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -6789,21 +6792,31 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
         font-size: 16px;
         padding: 10px 12px 6px;
     }
+    /* One row on phones: ＋ | model | mode | thinking | send. The chips
+       shrink (value ellipsis) so nothing wraps or overflows. */
     .input-card-toolbar {
-        flex-wrap: wrap;
-        gap: 6px;
+        flex-wrap: nowrap;
+        gap: 4px;
         padding: 4px 6px 6px;
     }
-    .input-card-left,
-    .input-card-right { flex-wrap: wrap; }
+    .input-card-left { flex-wrap: nowrap; flex-shrink: 0; }
+    .input-card-right {
+        flex-wrap: nowrap;
+        flex: 1 1 auto;
+        min-width: 0;
+        justify-content: flex-end;
+        gap: 3px;
+    }
     .ic-folder-name { max-width: 96px; }
-    .ic-btn { width: 32px; height: 32px; }
+    .ic-btn { width: 32px; height: 32px; flex-shrink: 0; }
     .ic-send-btn,
-    .ic-stop-btn { width: 36px; height: 36px; }
+    .ic-stop-btn { width: 36px; height: 36px; flex-shrink: 0; }
 
-    /* chips: value only (the label is in the title tooltip) */
-    .ic-chip { max-width: 130px; padding: 3px 8px; font-size: 10px; }
+    /* chips: value only (the label is in the title tooltip), shrinking */
+    .ic-chip-wrap { min-width: 0; flex: 0 1 auto; }
+    .ic-chip { max-width: 21vw; min-width: 0; padding: 3px 8px; font-size: 10px; }
     .ic-chip-label { display: none; }
+    .ic-chip-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .ic-chip-dropdown {
         min-width: min(240px, 86vw);
         max-width: min(360px, 92vw);
@@ -7079,6 +7092,11 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
    on top of a panel, and no reserved gap beside it (v1.0.31). */
 .web-fab-left.panel-open { display: none; }
 .web-fab-right.dock-open { display: none; }
+@media (max-width: 768px) {
+    /* On a phone each FAB also hides when the OTHER panel is open. */
+    .web-fab-left.dock-open { display: none; }
+    .web-fab-right.sidebar-open { display: none; }
+}
 
 /* ---- "New project…" (Z2/D3): header button + folder picker ---- */
 .sidebar-sessions-header {
@@ -7108,7 +7126,7 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     white-space: nowrap;
 }
 .sidebar-np-btn:hover { background: var(--panel-hover); color: var(--text); }
-.sidebar-np-icon { font-size: 11px; line-height: 1; }
+.sidebar-np-plus { font-size: 13px; line-height: 1; font-weight: 600; }
 .np-modal { width: min(560px, 92vw); display: flex; flex-direction: column; gap: 10px; }
 .np-path-row { display: flex; align-items: center; gap: 8px; }
 .np-path {
@@ -7211,11 +7229,29 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
   flex: 1 1 auto;
   min-height: 240px;
 }
-/* Z15: permission rows */
-.tool-item .tool-perm-select {
-  width: 110px;
-  flex-shrink: 0;
+/* Z15: tool permission panel (stable SettingsView layout) */
+.tool-permissions-section .tool-perm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
 }
+.tool-perm-name {
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-perm-select { width: 110px; flex-shrink: 0; }
+.tool-perm-config-row .field-btn.danger { color: #e5534b; }
+.add-tool-row { display: flex; align-items: center; gap: 8px; }
+.default-tools-note { margin: 4px 0 8px; font-size: 11px; color: var(--text-muted); }
+.empty-text { font-size: 12px; color: var(--text-dim); padding: 8px 0; }
 /* Z16/Z17/Z18: keep the detail pane scrollable */
 .master-detail-panel {
   flex: 1 1 auto;
@@ -7224,4 +7260,42 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* ---- 1.99.7 round: mobile stats + settings ---- */
+@media (max-width: 768px) {
+    /* Statistics: one chart per row, full width, so they stay readable. */
+    .cards-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    .stat-card {
+        width: 100%;
+        box-sizing: border-box;
+    }
+    .stats-scroll { padding: 10px; }
+    .stats-toolbar { flex-wrap: wrap; row-gap: 6px; padding: 8px 10px; }
+
+    /* Settings on a phone: scrollable tab bar, compact content, the
+       master-detail panels stack vertically. */
+    .settings-header { padding: 12px 12px 0; }
+    .settings-tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        scrollbar-width: none;
+    }
+    .settings-tab { white-space: nowrap; flex-shrink: 0; }
+    .settings-content { padding: 12px; }
+    .settings-title-row { gap: 8px; }
+    .scope-switch { max-width: 100%; }
+    .scope-select { max-width: 38vw; }
+    .scope-path { max-width: 100%; }
+    .master-detail { flex-direction: column; min-height: 0; height: auto; }
+    .master-detail .master-list,
+    .master-detail .master-detail-panel { width: 100%; max-height: 40vh; flex-shrink: 1; }
+    .raw-config-section { height: auto; min-height: 0; }
+    .raw-config-section .dirtree-col { max-height: 30vh; }
+    .tool-perm-config-row { flex-wrap: wrap; }
+    .add-tool-row { flex-wrap: wrap; }
+    .field-input, .field-select { font-size: 16px; }
 }

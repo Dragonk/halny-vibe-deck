@@ -2,3 +2,8 @@
 Cargo.lock.bak
 *.log
 .DS_Store
+.e2e-run/
+.e2e-config/
+scripts/e2e/node_modules/
+scripts/e2e/test-results/
+scripts/e2e/package-lock.json

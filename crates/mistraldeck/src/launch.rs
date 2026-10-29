@@ -76,18 +76,82 @@ pub fn main_dispatch(force_headless: bool) {
             );
         }
         let start_remote = remote_on && remote_port != port;
+        if remote_on {
+            let ips = crate::serve::local_lan_ips().join(", ");
+            println!(
+                "mistraldeck: remote access on https://0.0.0.0:{remote_port} (device: {ips}) — login required"
+            );
+        }
 
-        if gui {
-            #[cfg(feature = "gui")]
+        // Manual serving (instead of dioxus::serve). Every app surface is
+        // HTTPS-only (stable parity — plain HTTP is never served on the
+        // app port):
+        // - the main port: HTTPS on 127.0.0.1, no login (loopback is
+        //   trusted; a browser accepts the self-signed certificate once);
+        // - the remote listener (serve.rs): HTTPS on 0.0.0.0 with the
+        //   login page, reachable via the device's IP;
+        // - the desktop webview gets its OWN private loopback listener on
+        //   an ephemeral port, because webview engines reject self-signed
+        //   certificates. That listener never leaves 127.0.0.1 and is not
+        //   the app's server surface.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("mistraldeck: failed to start the async runtime");
+        rt.block_on(async move {
+            crate::serve::set_local_port(port);
+            let cfg_local = mistraldeck_engine::EngineConfig::load();
+            let engine = mistraldeck_engine::Engine::init(cfg_local.clone());
+            // Index the session history from disk. No agent process and no
+            // handshake at boot (Z5): the agent is contacted on the first
+            // prompt or when a session is resumed.
+            engine.prime();
+            let router = dioxus::server::router(crate::app::App);
+            // PWA static routes (sw.js / manifest / icon) served from the
+            // binary itself, and the v0.13.4 gzip layer over both listeners.
+            let router = crate::pwa::install_pwa_routes(router);
+            // Main app listener: HTTPS-only on the loopback interface.
             {
+                let local_router = router
+                    .clone()
+                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        crate::serve::run_local_https(local_router, "127.0.0.1", port, false).await
+                    {
+                        eprintln!("mistraldeck: local HTTPS server error: {e}");
+                    }
+                });
+            }
+            // Desktop webview: private loopback HTTP listener on an
+            // ephemeral port (webviews cannot accept the self-signed cert).
+            #[cfg(feature = "gui")]
+            if gui {
+                let wv = tokio::net::TcpListener::bind(("127.0.0.1", 0u16))
+                    .await
+                    .unwrap_or_else(|e| panic!("mistraldeck: cannot bind webview listener: {e}"));
+                let wv_port = wv
+                    .local_addr()
+                    .map(|a| a.port())
+                    .unwrap_or(port);
+                println!("mistraldeck: desktop webview UI at http://127.0.0.1:{wv_port} (loopback only, webview transport)");
+                let wv_router = router
+                    .clone()
+                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))
+                    .layer(axum::middleware::from_fn(crate::pwa::gzip_mw));
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(wv, wv_router).await {
+                        eprintln!("mistraldeck: webview server error: {e}");
+                    }
+                });
                 // `desktop=1`: the webview keeps the frameless title bar, a browser never does.
-                let url = format!("http://127.0.0.1:{port}/?desktop=1");
+                let url = format!("http://127.0.0.1:{wv_port}/?desktop=1");
                 std::thread::Builder::new()
                     .name("mistraldeck-gui".into())
                     .spawn(move || {
-                        // Wait until the HTTP server is actually listening.
+                        // Wait until the webview server is actually listening.
                         for _ in 0..150 {
-                            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                            if std::net::TcpStream::connect(("127.0.0.1", wv_port)).is_ok() {
                                 break;
                             }
                             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -101,7 +165,7 @@ pub fn main_dispatch(force_headless: bool) {
                             }
                             Err(e) => {
                                 eprintln!(
-                                    "mistraldeck: GUI unavailable ({e}); the server keeps running at {url}"
+                                    "mistraldeck: GUI unavailable ({e}); the server keeps running at https://127.0.0.1:{port}"
                                 );
                             }
                         }
@@ -109,62 +173,10 @@ pub fn main_dispatch(force_headless: bool) {
                     .ok();
             }
             #[cfg(not(feature = "gui"))]
-            eprintln!(
-                "mistraldeck: GUI requested, but this build has no gui support (build with --features server,gui); staying headless."
-            );
-        }
-
-        // Manual serving (instead of dioxus::serve): two listeners — the
-        // local one on 127.0.0.1 without auth, the remote HTTPS one from
-        // serve.rs. Both share the same axum router + engine.
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("mistraldeck: failed to start the async runtime");
-        rt.block_on(async move {
-            let cfg_local = mistraldeck_engine::EngineConfig::load();
-            let engine = mistraldeck_engine::Engine::init(cfg_local.clone());
-            // Index the session history from disk. No agent process and no
-            // handshake at boot (Z5): the agent is contacted on the first
-            // prompt or when a session is resumed.
-            engine.prime();
-            let router = dioxus::server::router(crate::app::App);
-            // PWA static routes (sw.js / manifest / icon) served from the
-            // binary itself, and the v0.13.4 gzip layer over both listeners.
-            let router = crate::pwa::install_pwa_routes(router);
-            // Local listener (Z14):
-            // - headless/server build -> **HTTPS** on 127.0.0.1 (a browser is
-            //   the client; the self-signed warning is accepted once);
-            // - desktop build -> plain loopback HTTP for the embedded webview,
-            //   which rejects self-signed certificates and never leaves the
-            //   loopback interface. Network-exposed surfaces are HTTPS-only.
             if gui {
-                let local = tokio::net::TcpListener::bind(("127.0.0.1", port))
-                    .await
-                    .unwrap_or_else(|e| panic!("mistraldeck: cannot bind 127.0.0.1:{port}: {e}"));
-                println!("mistraldeck: local webview UI at http://127.0.0.1:{port} (loopback only)");
-                let local_router = router
-                    .clone()
-                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))
-                    .layer(axum::middleware::from_fn(crate::pwa::gzip_mw));
-                tokio::spawn(async move {
-                    if let Err(e) = axum::serve(local, local_router).await {
-                        eprintln!("mistraldeck: local server error: {e}");
-                    }
-                });
-            } else {
-                let local_router = router
-                    .clone()
-                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
-                // Loopback is trusted: no login here (the remote listener keeps
-                // its credentials). Only the transport moves to TLS.
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        crate::serve::run_local_https(local_router, port, false).await
-                    {
-                        eprintln!("mistraldeck: local HTTPS server error: {e}");
-                    }
-                });
+                eprintln!(
+                    "mistraldeck: GUI requested, but this build has no gui support (build with --features server,gui); staying headless."
+                );
             }
             // systemd: Type=notify gets READY now that the UI listener is
             // up; WatchdogSec keeps being fed in the background (v1.0.30/31

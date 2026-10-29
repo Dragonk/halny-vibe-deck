@@ -101,3 +101,32 @@ Legend: **P** = priority (C critical, H high, M medium, L low).
 Known flake (pre-existing, unrelated): `session_token::tests::round_trip_and_tamper`
 fails occasionally in a full `cargo test --workspace` run because `cred_version()`
 reads the on-disk config; it passes in isolation and on re-run.
+
+## Round 3 — user-reported defects (2026-10-29, released as 1.99.7)
+
+| Area | Fix |
+|---|---|
+| New-project button | text + `＋` only (no 🆕 icon), SSH groups too |
+| Session-list resize | handle direction fixed (drag right = wider) |
+| Update check console window | `CREATE_NO_WINDOW` on every spawned helper (updates/curl/ssh/systemctl) on Windows |
+| SSH sessions in the sidebar | remote pane loads on mount, not only on re-expand |
+| Tools tab | stable layout: per-tool rows (name + ask/allow/deny + remove), add-tool row, default-tools note |
+| "unauthorized" in settings/files/stats | server fns no longer re-check the vestigial token (remote listener cookie middleware already gates; loopback trusted) |
+| Scope path alignment | `scope-path` beside the switch, switch is `align-items: center` |
+| Settings tab bar | stable underline tabs, stable order (general, serve, remote, agents, mcp, tools, prompts, skills, providers, models, TOML) |
+| Chat input | `resize: none` + auto-grow to 160 px; attach = single `＋` with file/image only; click-outside closes every dropdown |
+| New session in a project | chips built at creation; empty chat (resume guard compares session IDs now) |
+| First prompt WARNING config/model/write | empty values never sent; rejected config write is non-fatal (debug log) |
+| Model/mode/thinking confirmation | system notice in the chat, localized incl. thinking |
+| History "Loading…" | local rows first, remote SSH rows in the background |
+| Statistics unauthorized | same auth fix as above |
+| Historical tool calls | tool name + status carried from the store (`toolName`, done/error/running) |
+| Session names | live sessions pick up CLI titles from `session/list` |
+| Click session → scroll | chat auto-scrolls to the bottom on any DOM change |
+| Todo list | plan card renders even with an empty message list |
+| HTTP server | app port is HTTPS-only in every mode (webview gets a private ephemeral loopback listener); remote listener defaults to 8443 on 0.0.0.0 with login; custom `cert_path`/`key_path` supported, generated self-signed cert includes LAN IPs; Settings → Server lists all access URLs incl. device IPs |
+| FABs | preview FAB works from any view; on phones each FAB hides when the other panel is open |
+| Mobile toolbar | one row (＋, model, mode, thinking, send), chips ellipsize |
+| Mobile nav | settings/history/stats close the session drawer |
+| Mobile stats/settings | stats one full-width chart per row; settings compact + scrollable tabs |
+| Hidden-tab backfill | `SessionHistory` also applies to live (New*) slots, not only lazy wakes — e2e green again |

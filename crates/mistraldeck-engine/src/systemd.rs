@@ -81,8 +81,9 @@ pub fn active_unit() -> Option<String> {
         candidates.push(name.to_string());
     }
     candidates.into_iter().find(|unit| {
-        std::process::Command::new("systemctl")
-            .args(["--user", "is-active", "--quiet", unit])
+        let mut c = std::process::Command::new("systemctl");
+        crate::no_window(&mut c);
+        c.args(["--user", "is-active", "--quiet", unit])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -95,8 +96,9 @@ pub fn active_unit() -> Option<String> {
 /// Ask systemd to restart the unit so the freshly installed binary runs
 /// inside the unit. Detached: the caller exits right after.
 pub fn restart_unit(unit: &str) -> bool {
-    std::process::Command::new("systemctl")
-        .args(["--user", "restart", unit])
+    let mut c = std::process::Command::new("systemctl");
+    crate::no_window(&mut c);
+    c.args(["--user", "restart", unit])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

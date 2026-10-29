@@ -612,6 +612,10 @@ pub struct PreviewThinking {
 pub struct PreviewToolCall {
     pub title: String,
     pub status: String,
+    /// Raw tool name from the effect detail (`toolName`) — lets the UI say
+    /// WHICH tool ran when the display summary is a bare action word.
+    #[serde(default)]
+    pub tool_name: String,
 }
 
 /// One message of a session preview (Nexus `SubagentWorkData.messages`).
@@ -795,18 +799,21 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                     .and_then(|s| s.as_bool())
                     != Some(false)
                     && matches!(decision, None | Some("execute"));
+                let tool_name = det
+                    .and_then(|d| d.get("toolName"))
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let title = display
                     .and_then(|d| d.get("summary"))
                     .and_then(|s| s.as_str())
-                    .or_else(|| {
-                        det.and_then(|d| d.get("toolName"))
-                            .and_then(|s| s.as_str())
-                    })
-                    .unwrap_or("tool");
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(if tool_name.is_empty() { "tool" } else { &tool_name });
                 if let Some(ai) = &mut cur_ai {
                     ai.tool_calls.push(PreviewToolCall {
                         title: title.to_string(),
                         status: if success { "done" } else { "error" }.to_string(),
+                        tool_name,
                     });
                 }
             }

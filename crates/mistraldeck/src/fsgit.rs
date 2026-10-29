@@ -250,11 +250,14 @@ mod imp {
     const TEXT_CAP: u64 = 512 * 1024;
     const IMAGE_CAP: u64 = 4 * 1024 * 1024;
 
-    pub fn check(token: &str) -> Result<(), ServerFnError> {
-        let engine = Engine::global();
-        if engine.auth_enabled() && !engine.check_token(token) {
-            return Err(ServerFnError::new("unauthorized"));
-        }
+    pub fn check(_token: &str) -> Result<(), ServerFnError> {
+        // Same auth model as api.rs: no token enforcement inside the
+        // server functions. Requests arrive either from a loopback
+        // listener (trusted) or through the remote HTTPS listener, whose
+        // middleware already validated the session cookie before the
+        // request can reach this function. Enforcing the (vestigial)
+        // token here broke every file-tree call from the local desktop app
+        // whenever remote-access credentials were configured.
         Ok(())
     }
 

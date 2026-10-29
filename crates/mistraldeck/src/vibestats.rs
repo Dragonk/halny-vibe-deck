@@ -67,6 +67,8 @@ pub struct PreviewThinkingView {
 pub struct PreviewToolCallView {
     pub title: String,
     pub status: String,
+    #[serde(default)]
+    pub tool_name: String,
 }
 
 /// One message of a session preview (Nexus `SubagentWorkData.messages`) —
@@ -91,13 +93,11 @@ pub struct UsageModelInfoView {
 mod imp {
     use super::SessionStatsRow;
     use super::*;
-    use mistraldeck_engine::Engine;
 
-    pub fn check(token: &str) -> Result<(), ServerFnError> {
-        let engine = Engine::global();
-        if engine.auth_enabled() && !engine.check_token(token) {
-            return Err(ServerFnError::new("unauthorized"));
-        }
+    pub fn check(_token: &str) -> Result<(), ServerFnError> {
+        // Same auth model as api.rs: no token enforcement inside the
+        // server functions — the remote HTTPS listener's middleware has
+        // already gated the request, and the loopback listener is trusted.
         Ok(())
     }
 
@@ -174,6 +174,7 @@ mod imp {
                         .map(|t| PreviewToolCallView {
                             title: t.title,
                             status: t.status,
+                            tool_name: t.tool_name,
                         })
                         .collect(),
                 })

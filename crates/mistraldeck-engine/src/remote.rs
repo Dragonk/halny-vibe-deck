@@ -567,7 +567,9 @@ pub(crate) const PYPI_PACKAGE: &str = "mistral-vibe";
 /// HTTP GET returning the response body via `curl` (the engine has no HTTP
 /// client; curl ships on all supported targets).
 pub(crate) fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
-    let out = std::process::Command::new("curl")
+    let mut c = std::process::Command::new("curl");
+    crate::no_window(&mut c);
+    let out = c
         .args(["-fsSL", "--max-time", &timeout_s.to_string(), url])
         .output()
         .map_err(|e| e.to_string())?;

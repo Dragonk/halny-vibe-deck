@@ -396,6 +396,14 @@ pub fn SettingsView() -> Element {
     let mut r_pass = use_signal(String::new);
     let mut r_port = use_signal(move || remote_port.to_string());
     let mut r_enable = use_signal(move || remote_enabled || auth_configured);
+    // Serve-tab extras: access URLs (device IPs) + custom certificate paths.
+    let serve_info = use_signal(|| Option::<crate::api::ServeInfoView>::None);
+    let mut r_cert = use_signal(String::new);
+    let mut r_key = use_signal(String::new);
+    let cert_saved = use_signal(String::new);
+    // Tools-tab "add tool" row state.
+    let mut add_tool_name = use_signal(String::new);
+    let mut add_tool_perm = use_signal(|| "ask".to_string());
 
     // SSH remote-connections editor state (remote tab, second section).
     let ssh_draft = use_signal(|| Option::<SshDraft>::None);
@@ -671,9 +679,9 @@ pub fn SettingsView() -> Element {
 
     let tab_cls = |name: &str| {
         if *tab.read() == name {
-            "scope-pill active".to_string()
+            "settings-tab active".to_string()
         } else {
-            "scope-pill".to_string()
+            "settings-tab".to_string()
         }
     };
 
@@ -741,6 +749,40 @@ pub fn SettingsView() -> Element {
         "agents" | "mcp" | "tools" | "prompts" | "skills" | "providers" | "models" | "raw"
     );
 
+    // Serve-tab hint strings (precomputed: the rsx format parser dislikes
+    // some inline loc() literals).
+    let hint_remote = loc(&lang, "Dostęp zdalny aktywny (HTTPS + login) —", "Remote access active (HTTPS + login) —");
+    let hint_local = loc(&lang, "Interfejs lokalny (HTTPS, bez logowania):", "Local interface (HTTPS, no login):");
+    let hint_enable = loc(&lang, "Włącz dostęp zdalny, aby otworzyć serwer na adresy IP urządzenia (powyżej).", "Enable remote access to expose the server on the device's IP addresses (above).");
+    let hint_cert_custom = loc(&lang, "Używany jest własny certyfikat TLS.", "A custom TLS certificate is in use.");
+    let hint_cert_gen = loc(&lang, "Używany jest certyfikat self-signed generowany automatycznie; przeglądarka zapyta o zaufanie przy pierwszym połączeniu.", "A generated self-signed certificate is in use; the browser asks to trust it on first connect.");
+    let hint_local_only = loc(&lang, "Dane logowania, port i certyfikat można edytować wyłącznie z lokalnego interfejsu.", "Credentials, the port and the certificate can only be edited from the local interface.");
+    // Serve-tab access URLs (device IPs) as prebuilt rows.
+    let serve_url_rows: Vec<Element> = serve_info
+        .read()
+        .as_ref()
+        .map(|info| {
+            info.urls
+                .iter()
+                .map(|u| rsx! { span { style: "display:block;margin-bottom:2px;font-family:monospace;", "{u}" } })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Load the serve-tab extras (URLs incl. device IPs, cert paths) once.
+    if tab.read().as_str() == "serve" && serve_info.read().is_none() {
+        let st = state.clone();
+        let mut serve_info_c = serve_info.clone();
+        let mut r_cert = r_cert.clone();
+        let mut r_key = r_key.clone();
+        spawn(async move {
+            if let Ok(info) = crate::api::api_serve_info(token(&st)).await {
+                r_cert.set(info.cert_path.clone());
+                r_key.set(info.key_path.clone());
+                serve_info_c.set(Some(info));
+            }
+        });
+    }
+
     let body_el = match tab.read().as_str() {
         "serve" => rsx! {
             div { class: "settings-section",
@@ -793,6 +835,58 @@ pub fn SettingsView() -> Element {
                     }
                 }
                 div { class: "field",
+                    div { class: "field-label", "{loc(&lang, \"Własny certyfikat TLS (opcjonalnie)\", \"Custom TLS certificate (optional)\")}" }
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        placeholder: "/path/to/cert.pem",
+                        value: "{*r_cert.read()}",
+                        oninput: move |e| r_cert.set(e.value()),
+                    }
+                    input {
+                        class: "field-input",
+                        style: "margin-top:6px;",
+                        r#type: "text",
+                        placeholder: "/path/to/key.pem",
+                        value: "{*r_key.read()}",
+                        oninput: move |e| r_key.set(e.value()),
+                    }
+                    div { class: "field-hint",
+                        "{loc(&lang, \"Gdy oba pola są puste, serwer używa certyfikatu self-signed generowanego automatycznie. Własny certyfikat (np. z Let's Encrypt) jest używany do hostowania HTTPS.\", \"When both fields are empty, the server uses an automatically generated self-signed certificate. A custom certificate (e.g. Let's Encrypt) is used for HTTPS hosting.\")}"
+                    }
+                    button {
+                        class: "save-btn",
+                        onclick: {
+                            let state = state.clone();
+                            let cert_saved = cert_saved.clone();
+                            let mut serve_info = serve_info.clone();
+                            let lang_c = lang.clone();
+                            move |_| {
+                                let state = state.clone();
+                                let mut cert_saved = cert_saved.clone();
+                                let lang = lang_c.clone();
+                                let cert = r_cert.read().clone();
+                                let key = r_key.read().clone();
+                                spawn(async move {
+                                    match crate::api::api_set_remote_certs(token(&state), cert, key).await {
+                                        Ok(()) => {
+                                            cert_saved.set(loc(&lang, "Zapisano.", "Saved."));
+                                            if let Ok(info) = crate::api::api_serve_info(token(&state)).await {
+                                                serve_info.set(Some(info));
+                                            }
+                                        }
+                                        Err(e) => cert_saved.set(format!("{}: {e}", loc(&lang, "Nie udało się zapisać", "Failed to save"))),
+                                    }
+                                });
+                            }
+                        },
+                        "{tr(&lang, \"saveLabel\")}"
+                    }
+                    if !cert_saved.read().is_empty() {
+                        span { class: "field-hint", style: "margin-left:10px;", "{*cert_saved.read()}" }
+                    }
+                }
+                div { class: "field",
                     button {
                         class: "save-btn",
                         onclick: {
@@ -837,18 +931,32 @@ pub fn SettingsView() -> Element {
                 }
                 div { class: "field",
                     div { class: "field-hint",
-                        if remote_enabled || auth_configured {
-                            span { style: "display:block;margin-bottom:4px;",
-                                "{loc(&lang, \"Dostęp zdalny aktywny —\", \"Remote access active —\")} {serve_url}"
+                        if let Some(info) = serve_info.read().clone() {
+                            if info.remote_enabled {
+                                span { style: "display:block;margin-bottom:4px;",
+                                    "{hint_remote}"
+                                }
+                            } else {
+                                span { style: "display:block;margin-bottom:4px;",
+                                    "{hint_local}"
+                                }
+                                span { style: "display:block;",
+                                    "{hint_enable}"
+                                }
                             }
-                            span { style: "display:block;margin-bottom:4px;",
-                                "{loc(&lang, \"Dostęp zdalny jest szyfrowany (HTTPS z certyfikatem self-signed); przeglądarka zapyta o zaufanie certyfikatu przy pierwszym połączeniu.\", \"Remote access is encrypted (HTTPS with a self-signed certificate); the browser asks to trust the certificate on first connect.\")}"
+                            {serve_url_rows.iter().cloned()}
+                            span { style: "display:block;margin-top:4px;",
+                                if info.custom_cert {
+                                    "{hint_cert_custom}"
+                                } else {
+                                    "{hint_cert_gen}"
+                                }
                             }
-                            span { style: "display:block;",
-                                "{loc(&lang, \"Dane logowania oraz port można edytować wyłącznie z lokalnego interfejsu.\", \"Credentials and the port can only be edited from the local interface.\")}"
+                            span { style: "display:block;margin-top:4px;",
+                                "{hint_local_only}"
                             }
                         } else {
-                            "{loc(&lang, \"Dostęp zdalny wyłączony — interfejs lokalny działa bez hasła na 127.0.0.1.\", \"Remote access disabled — the local interface runs without a login on 127.0.0.1.\")}"
+                            span { style: "display:block;", "{serve_url}" }
                         }
                     }
                 }
@@ -1946,9 +2054,10 @@ pub fn SettingsView() -> Element {
         }
 
         "tools" => {
-            // Z15: per-tool permissions (`[tools.<name>] permission`), the
-            // stable edition's "Global Tool Permissions" panel, instead of
-            // free-text enabled/disabled lists.
+            // Z15: per-tool permissions (`[tools.<name>] permission`) in the
+            // stable edition's layout: one row per tool (name + permission +
+            // remove), an "add tool" row, and the built-in defaults below
+            // when nothing is configured yet.
             const DEFAULT_TOOLS: [&str; 11] = [
                 "bash",
                 "edit",
@@ -1962,91 +2071,166 @@ pub fn SettingsView() -> Element {
                 "skill",
                 "ask_user_question",
             ];
-            let mut rows: Vec<(String, String)> = cfgd
+            let perm_label = |v: &str| -> String {
+                match v {
+                    "allow" => tr(&lang, "always").to_string(),
+                    "deny" => tr(&lang, "never").to_string(),
+                    _ => tr(&lang, "ask").to_string(),
+                }
+            };
+            let configured: Vec<(String, String)> = cfgd
                 .tools
                 .iter()
                 .map(|t| (t.name.clone(), t.permission.clone()))
                 .collect();
-            let known: Vec<String> = rows.iter().map(|(n, _)| n.clone()).collect();
-            for t in DEFAULT_TOOLS {
-                if !known.iter().any(|k| k == t) {
-                    rows.push((t.to_string(), "ask".to_string()));
-                }
-            }
-            let hint_text = loc(
-                &lang,
-                "ask = pyta przed użyciem, allow = zawsze pozwól, deny = blokuj.",
-                "ask = confirm before use, allow = always run, deny = block.",
-            );
-            let row_els: Vec<Element> = rows
-                .iter()
-                .map(|(name, perm)| {
-                    let tool = name.clone();
-                    let current = perm.clone();
-                    let options: Vec<Element> = ["ask", "allow", "deny"]
-                        .iter()
-                        .map(|p| {
-                            rsx! {
-                                option { value: "{p}", selected: p == &current.as_str(), "{p}" }
-                            }
-                        })
-                        .collect();
-                    let state = state.clone();
-                    let cfg = cfg.clone();
-                    let cfg_err = cfg_err.clone();
-                    let sc = sc.clone();
-                    rsx! {
-                        div { key: "{tool}", class: "tool-item",
-                            span { class: "tool-name", "{tool}" }
-                            select {
-                                class: "field-input tool-perm-select",
-                                value: "{perm}",
-                                onchange: {
+            let make_row = |tool: String, current: String, removable: bool| -> Element {
+                let options: Vec<Element> = ["ask", "allow", "deny"]
+                    .iter()
+                    .map(|p| rsx! { option { value: "{p}", selected: *p == current, "{perm_label(p)}" } })
+                    .collect();
+                let state = state.clone();
+                let cfg = cfg.clone();
+                let cfg_err = cfg_err.clone();
+                let sc = sc.clone();
+                rsx! {
+                    div { key: "{tool}", class: "tool-perm-config-row",
+                        span { class: "tool-perm-name", "{tool}" }
+                        select {
+                            class: "field-select tool-perm-select",
+                            value: "{current}",
+                            onchange: {
+                                let state = state.clone();
+                                let cfg = cfg.clone();
+                                let cfg_err = cfg_err.clone();
+                                let sc = sc.clone();
+                                let tool = tool.clone();
+                                move |e| {
+                                    let value = e.value();
                                     let state = state.clone();
                                     let cfg = cfg.clone();
                                     let cfg_err = cfg_err.clone();
                                     let sc = sc.clone();
                                     let tool = tool.clone();
-                                    move |e| {
-                                        let value = e.value();
+                                    spawn(async move {
+                                        let _ = crate::vibeconfig::api_set_tool_permission(
+                                            token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                            tool, value,
+                                        ).await;
+                                        reload_cfg(state, cfg, cfg_err, sc).await;
+                                    });
+                                }
+                            },
+                            {options.iter().cloned()}
+                        }
+                        if removable {
+                            button {
+                                class: "field-btn danger",
+                                title: "{tr(&lang, \"remove\")}",
+                                onclick: {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
+                                    let tool = tool.clone();
+                                    move |_| {
                                         let state = state.clone();
                                         let cfg = cfg.clone();
                                         let cfg_err = cfg_err.clone();
                                         let sc = sc.clone();
                                         let tool = tool.clone();
                                         spawn(async move {
-                                            let _ = crate::vibeconfig::api_set_tool_permission(
-                                                token(&state),
-                                                sc.scope.clone(),
-                                                sc.cwd.clone(),
-                                                sc.conn.clone(),
-                                                tool,
-                                                value,
-                                            )
-                                            .await;
+                                            let _ = crate::vibeconfig::api_remove_tool_permission(
+                                                token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), tool,
+                                            ).await;
                                             reload_cfg(state, cfg, cfg_err, sc).await;
                                         });
                                     }
                                 },
-                                {options.iter().cloned()}
+                                "✕"
                             }
                         }
                     }
-                })
+                }
+            };
+            let configured_rows: Vec<Element> = configured
+                .iter()
+                .map(|(n, p)| make_row(n.clone(), p.clone(), true))
+                .collect();
+            let default_rows: Vec<Element> = if configured.is_empty() {
+                DEFAULT_TOOLS
+                    .iter()
+                    .map(|t| make_row(t.to_string(), "ask".to_string(), false))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let add_perm_opts: Vec<Element> = ["ask", "allow", "deny"]
+                .iter()
+                .map(|p| rsx! { option { value: "{p}", "{perm_label(p)}" } })
                 .collect();
             rsx! {
-                div { class: "settings-section tools-section",
-                    div { class: "settings-section-header",
-                        div { class: "settings-section-title",
-                            "{loc(&lang, \"Uprawnienia narzędzi\", \"Global tool permissions\")}"
+                div { class: "settings-section tool-permissions-section",
+                    div { class: "field",
+                        label { class: "field-label", "{tr(&lang, \"toolPermissions\")}" }
+                        if configured.is_empty() {
+                            p { class: "empty-text", "{tr(&lang, \"noToolsConfigured\")}" }
+                            p { class: "default-tools-note", "{tr(&lang, \"defaultToolsHint\")}" }
+                        }
+                        div { class: "tool-perm-list",
+                            {configured_rows.iter().cloned()}
+                            {default_rows.iter().cloned()}
                         }
                     }
-                    div { class: "field-hint",
-                        "{hint_text}"
+                    div { class: "field",
+                        label { class: "field-label", "{tr(&lang, \"addTool\")}" }
+                        div { class: "add-tool-row",
+                            input {
+                                class: "field-input",
+                                r#type: "text",
+                                placeholder: "{tr(&lang, \"toolNamePlaceholder\")}",
+                                style: "flex:1;",
+                                value: "{*add_tool_name.read()}",
+                                oninput: move |e| add_tool_name.set(e.value()),
+                            }
+                            select {
+                                class: "field-select",
+                                style: "width:auto;",
+                                value: "{*add_tool_perm.read()}",
+                                onchange: move |e| add_tool_perm.set(e.value()),
+                                {add_perm_opts.iter().cloned()}
+                            }
+                            button {
+                                class: "field-btn",
+                                onclick: {
+                                    let state = state.clone();
+                                    let cfg = cfg.clone();
+                                    let cfg_err = cfg_err.clone();
+                                    let sc = sc.clone();
+                                    let mut add_name = add_tool_name.clone();
+                                    let add_perm = add_tool_perm.clone();
+                                    move |_| {
+                                        let tool = add_name.read().trim().to_string();
+                                        if tool.is_empty() { return; }
+                                        let value = add_perm.read().clone();
+                                        add_name.set(String::new());
+                                        let state = state.clone();
+                                        let cfg = cfg.clone();
+                                        let cfg_err = cfg_err.clone();
+                                        let sc = sc.clone();
+                                        spawn(async move {
+                                            let _ = crate::vibeconfig::api_set_tool_permission(
+                                                token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                                tool, value,
+                                            ).await;
+                                            reload_cfg(state, cfg, cfg_err, sc).await;
+                                        });
+                                    }
+                                },
+                                "{tr(&lang, \"add\")}"
+                            }
+                        }
                     }
-                    div { class: "tools-list",
-                        {row_els.iter().cloned()}
-                    }
+                    div { class: "field-hint", "{loc(&lang, \"ask = pyta przed użyciem, allow = zawsze pozwól, deny = blokuj.\", \"ask = confirm before use, allow = always run, deny = block.\")}" }
                     {err_el}
                 }
             }
@@ -2780,22 +2964,27 @@ pub fn SettingsView() -> Element {
                                 },
                                 {target_opts.iter().cloned()}
                             }
-                            span { class: "scope-path", "{scope_path}" }
                         }
+                        // The path preview sits next to the switch (not
+                        // inside the pill), vertically centered like stable.
+                        span { class: "scope-path", "{scope_path}" }
                     }
                 }
             }
-            div { class: "settings-tabs scope-switch",
+            // Same tab bar as the stable edition (SettingsView): underline
+            // tabs in the order general, serve, remote, agents, mcp, tools,
+            // prompts, skills, providers, models, raw.
+            div { class: "settings-tabs",
                 button { class: "{tab_cls(\"general\")}", onclick: move |_| tab.set("general".into()), "{tr(&lang, \"general\")}" }
                 button { class: "{tab_cls(\"serve\")}", onclick: move |_| tab.set("serve".into()), "{loc(&lang, \"Serwer\", \"Server\")}" }
                 button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne (SSH)\", \"Remote (SSH)\")}" }
-                button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
-                button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }
+                button { class: "{tab_cls(\"agents\")}", onclick: move |_| tab.set("agents".into()), "{tr(&lang, \"agents\")}" }
                 button { class: "{tab_cls(\"mcp\")}", onclick: move |_| tab.set("mcp".into()), "{tr(&lang, \"mcp\")}" }
                 button { class: "{tab_cls(\"tools\")}", onclick: move |_| tab.set("tools".into()), "{tr(&lang, \"tools\")}" }
-                button { class: "{tab_cls(\"skills\")}", onclick: move |_| tab.set("skills".into()), "{tr(&lang, \"skills\")}" }
-                button { class: "{tab_cls(\"agents\")}", onclick: move |_| tab.set("agents".into()), "{tr(&lang, \"agents\")}" }
                 button { class: "{tab_cls(\"prompts\")}", onclick: move |_| tab.set("prompts".into()), "{tr(&lang, \"prompts\")}" }
+                button { class: "{tab_cls(\"skills\")}", onclick: move |_| tab.set("skills".into()), "{tr(&lang, \"skills\")}" }
+                button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
+                button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }
                 button { class: "{tab_cls(\"raw\")}", onclick: move |_| tab.set("raw".into()), "TOML" }
             }
             div { class: "settings-content", {body_el} }

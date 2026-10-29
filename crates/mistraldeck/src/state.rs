@@ -94,13 +94,26 @@ pub async fn refresh(mut state: Signal<ClientState>) {
             let mut s = state.write();
             // v1.0.34 parity: a resume that returns an empty history for
             // the session already on screen keeps the visible messages
-            // instead of wiping the chat (a genuine session switch has a
-            // different `current`, so it still swaps correctly).
+            // instead of wiping the chat. The comparison is by session ID,
+            // not by index: creating a new session inserts it at index 0,
+            // so `current` can stay `Some(0)` while pointing at a different
+            // session — comparing indices would wrongly keep the previous
+            // session's messages on the fresh (empty) one.
             let prev_messages = s.snapshot.current_messages.clone();
-            let prev_current = s.snapshot.current;
+            let prev_current_id = s
+                .snapshot
+                .current
+                .and_then(|i| s.snapshot.sessions.get(i))
+                .map(|m| m.id.clone());
             s.snapshot = snap;
-            if prev_current.is_some()
-                && s.snapshot.current == prev_current
+            let new_current_id = s
+                .snapshot
+                .current
+                .and_then(|i| s.snapshot.sessions.get(i))
+                .map(|m| m.id.clone());
+            if prev_current_id.is_some()
+                && new_current_id.is_some()
+                && prev_current_id == new_current_id
                 && !prev_messages.is_empty()
                 && s.snapshot.current_messages.is_empty()
             {

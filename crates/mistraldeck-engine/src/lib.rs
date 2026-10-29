@@ -39,6 +39,23 @@ use mistraldeck_core::types::{
 
 use crate::types::{spawn_slot, SlotPurpose};
 
+/// Hide the console window of a spawned helper on Windows
+/// (CREATE_NO_WINDOW). The GUI build has `windows_subsystem = "windows"`,
+/// so every child console process otherwise flashes a black terminal
+/// window (update checks, curl, ssh, systemctl…). No-op elsewhere.
+pub fn no_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// Sliding expiry of remote HTTPS session tokens (30 days, like Nexus).
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
@@ -145,8 +162,24 @@ impl Engine {
                                     true
                                 }
                                 AgentEvent::SessionsList(sessions) => {
-                                    self.state.lock().unwrap().backend_sessions =
-                                        sessions.clone();
+                                    let mut st = self.state.lock().unwrap();
+                                    // Live sessions pick up the CLI-generated
+                                    // title here (session/list carries it) —
+                                    // otherwise a fresh session keeps the
+                                    // placeholder name until it is reopened.
+                                    for info in sessions.iter() {
+                                        if info.session_id.is_empty() || info.name.is_empty() {
+                                            continue;
+                                        }
+                                        if let Some(s) = st.sessions.iter_mut().find(|s| {
+                                            s.agent_session_id.as_deref()
+                                                == Some(info.session_id.as_str())
+                                        }) {
+                                            s.name = info.name.clone();
+                                            s.last_active_ms = now_ms();
+                                        }
+                                    }
+                                    st.backend_sessions = sessions.clone();
                                     true
                                 }
                                 AgentEvent::SessionError { context, message } => {
@@ -495,6 +528,11 @@ impl Engine {
             session.working_directory = cwd;
             st.sessions.insert(0, session);
             st.current = Some(0);
+            // A fresh session must offer the model/mode/thinking pickers
+            // immediately (no agent process yet): build the display-only
+            // chip lists from the project's vibe config, like the lazy
+            // previews do (Nexus restoreSessionChips on a new session).
+            restore_session_chips(&mut st);
         }
         self.publish(BusEvent::StructureChanged);
     }
@@ -949,6 +987,7 @@ impl Engine {
                             ]
                             .into_iter()
                             .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+                            .filter(|(_, v)| !v.trim().is_empty())
                             .collect()
                         })
                         .unwrap_or_default();
@@ -1109,6 +1148,16 @@ impl Engine {
                 session.last_mode = mode;
                 session.last_thinking = thinking;
             }
+            // The user gets a visible confirmation in the chat (Nexus shows
+            // the same CLI notice); translate_cli_notice localizes it.
+            let notice = match id {
+                "model" => format!("Model changed to {}", value),
+                "mode" => format!("Agent changed to {}", value),
+                "thinking" => format!("Thinking changed to {}", value),
+                _ => format!("{id} changed to {value}"),
+            };
+            session.messages.push(Message::new_system(&notice));
+            session.last_active_ms = now_ms();
         }
         match st.slot_of_session(&key) {
             Some(slot_id) => {
@@ -1487,6 +1536,16 @@ impl Engine {
         self.publish_structure();
     }
 
+    /// Custom TLS certificate for the HTTPS listeners (empty = generated
+    /// self-signed). Takes effect on the next server restart.
+    pub fn set_remote_certs(&self, cert_path: &str, key_path: &str) {
+        self.update_config(|c| {
+            c.cert_path = cert_path.trim().to_string();
+            c.key_path = key_path.trim().to_string();
+        });
+        self.publish_structure();
+    }
+
     pub fn hide_session(&self, key: &str) {
         self.update_config(|c| {
             if !c.hidden_sessions.iter().any(|s| s == key) {
@@ -1766,6 +1825,13 @@ impl Engine {
                             let key = session.id.clone();
                             if let Some(pending) = st.pending_options.remove(&key) {
                                 for (opt_id, opt_value) in pending {
+                                    // An empty value is never sent — the
+                                    // server rejects it (INVALID_PARAMS) and
+                                    // the old code turned that into a fatal
+                                    // turn error.
+                                    if opt_value.trim().is_empty() {
+                                        continue;
+                                    }
                                     if let Some(opt) =
                                         slot.config_options.iter_mut().find(|o| o.id == opt_id)
                                     {
@@ -1822,6 +1888,10 @@ impl Engine {
                     messages,
                     plan,
                 } => {
+                    // Apply for a lazy wake (Load*) AND for a resync of a
+                    // live session (New*): the authoritative history from
+                    // session/resume must repaint the open chat in both
+                    // cases (the hidden-tab backfill resyncs a live slot).
                     let matches_purpose = matches!(
                         &slot.purpose,
                         SlotPurpose::LoadBackend { session_id: sid, .. } if *sid == session_id
@@ -1829,7 +1899,12 @@ impl Engine {
                         &slot.purpose,
                         SlotPurpose::LoadRemote { session_id: sid, .. } if *sid == session_id
                     );
-                    if matches_purpose {
+                    let slot_agent_id = slot_session
+                        .and_then(|i| st.sessions.get(i))
+                        .and_then(|s| s.agent_session_id.clone());
+                    let matches = matches_purpose
+                        || slot_agent_id.as_deref() == Some(session_id.as_str());
+                    if matches {
                         if let Some(i) = slot_session {
                             if let Some(session) = st.sessions.get_mut(i) {
                                 session.messages = messages;
@@ -2309,18 +2384,22 @@ fn preview_to_messages(messages: &[mistraldeck_vibe::PreviewMessage]) -> Vec<Mes
                 .iter()
                 .map(|tc| ToolCall {
                     id: new_id(),
-                    title: tc.title.clone(),
-                    kind: "tool".to_string(),
-                    status: if tc.status == "error" {
-                        ToolStatus::Error
+                    title: if tc.title.trim().is_empty() {
+                        tc.tool_name.clone()
                     } else {
-                        ToolStatus::Done
+                        tc.title.clone()
+                    },
+                    kind: "tool".to_string(),
+                    status: match tc.status.as_str() {
+                        "error" => ToolStatus::Error,
+                        "running" | "in_progress" => ToolStatus::Running,
+                        _ => ToolStatus::Done,
                     },
                     input_json: None,
                     output: None,
                     file_changes: Vec::new(),
                     diffs: Vec::new(),
-                    tool_name: String::new(),
+                    tool_name: tc.tool_name.clone(),
                     previous_content: None,
                     raw_output_json: None,
                     subagent: None,

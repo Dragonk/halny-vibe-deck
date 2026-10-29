@@ -349,7 +349,7 @@ const RESIZE_JS: &str = r#"
     });
   }
   function drag(startX, startW, apply, done) {
-    function move(e) { apply(startX - e.clientX); }
+    function move(e) { apply(e.clientX - startX); }
     function up() {
       document.removeEventListener('pointermove', move);
       document.removeEventListener('pointerup', up);
@@ -360,7 +360,8 @@ const RESIZE_JS: &str = r#"
     document.addEventListener('pointerup', up);
     document.addEventListener('pointercancel', up);
   }
-  // sidebar: drag right edge -> wider
+  // sidebar: the handle sits on the sidebar's RIGHT edge — dragging right
+  // (positive dx) widens the panel.
   arm('.sidebar-resize-handle', function (e) {
     var x0 = e.clientX, w0 = parseFloat(load('vdSidebarW', '220'));
     drag(x0, w0, function (dx) {
@@ -368,11 +369,12 @@ const RESIZE_JS: &str = r#"
       root.style.setProperty('--vd-sidebar-w', w + 'px');
     }, function () { save('vdSidebarW', root.style.getPropertyValue('--vd-sidebar-w')); });
   });
-  // dock: drag left edge -> wider
+  // dock: the handle sits on the dock's LEFT edge — dragging left
+  // (negative dx) widens the panel.
   arm('.dock-resize-handle', function (e) {
     var x0 = e.clientX, w0 = parseFloat(load('vdDockW', '400'));
     drag(x0, w0, function (dx) {
-      var w = clamp(w0 + dx, 260, 720);
+      var w = clamp(w0 - dx, 260, 720);
       root.style.setProperty('--vd-dock-w', w + 'px');
     }, function () { save('vdDockW', root.style.getPropertyValue('--vd-dock-w')); });
   });
@@ -422,7 +424,11 @@ pub fn WebFabs() -> Element {
             title: "{tr(&lang_w, \"menuLabel\")}",
             onclick: {
                 let mut state = state.clone();
-                move |_| { state.write().mobile_sidebar_open = true; }
+                move |_| {
+                    // Opening the session list hides the preview panel (the
+                    // two FABs are mutually exclusive on every width).
+                    state.write().mobile_sidebar_open = true;
+                }
             },
             svg {
                 width: "18", height: "18", view_box: "0 0 24 24",
@@ -438,15 +444,29 @@ pub fn WebFabs() -> Element {
             class: "{right_cls}",
             title: "{tr(&lang_w, \"dockToggle\")}",
             onclick: {
-                let mut state = state.clone();
+                let state = state.clone();
                 move |_| {
-                    let open = {
-                        let s = state.read();
-                        s.snapshot.config.dock_open
-                    };
-                    let mut s = state.write();
-                    s.mobile_sidebar_open = false;
-                    s.snapshot.config.dock_open = !open;
+                    let mut state = state.clone();
+                    spawn(async move {
+                        let open = {
+                            let s = state.read();
+                            s.snapshot.config.dock_open && s.view == View::Chat
+                        };
+                        if open {
+                            // Close the preview panel (persisted).
+                            crate::components::mobile::set_dock_open(state, false).await;
+                        } else {
+                            // Open the preview panel: close the session list
+                            // and make sure the chat view is active (the dock
+                            // only renders in the chat view).
+                            {
+                                let mut s = state.write();
+                                s.mobile_sidebar_open = false;
+                            }
+                            crate::app::set_view(state, View::Chat);
+                            crate::components::mobile::set_dock_open(state, true).await;
+                        }
+                    });
                 }
             },
             svg {

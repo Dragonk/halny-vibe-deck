@@ -116,9 +116,9 @@ pub fn ChatView() -> Element {
         None => VNode::empty(),
     };
 
-    // one-shot: install the mermaid MutationObserver renderer and the
-    // markdown path-link click bridge (client only; the server SSR build
-    // never evaluates JS)
+    // one-shot: install the mermaid MutationObserver renderer, the
+    // markdown path-link click bridge and the chat auto-scroll (client
+    // only; the server SSR build never evaluates JS)
     #[cfg(any(feature = "web", feature = "desktop"))]
     {
         let mut js_init = use_signal(|| false);
@@ -127,6 +127,7 @@ pub fn ChatView() -> Element {
             spawn(async move {
                 dioxus::document::eval(MERMAID_JS);
                 dioxus::document::eval(PATH_CLICK_JS);
+                dioxus::document::eval(SCROLL_JS);
             });
         }
     }
@@ -177,9 +178,6 @@ pub fn ChatView() -> Element {
                             for (idx, msg) in messages.iter().enumerate() {
                                 MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1, lang: lang.clone(), model_names: model_names.clone() }
                             }
-                            if !plan.is_empty() {
-                                PlanCard { entries: plan.clone() }
-                            }
                             if busy && !is_resuming {
                                 div { class: "agent-busy-row",
                                     span { class: "agent-busy-dots", span {}, span {}, span {} }
@@ -187,6 +185,11 @@ pub fn ChatView() -> Element {
                                 }
                             }
                         }
+                    }
+                    // The todo/plan card renders even when the message list is
+                    // still empty (a plan can arrive before the first chunk).
+                    if !plan.is_empty() {
+                        PlanCard { entries: plan.clone() }
                     }
                     // v0.13.1: the error banner renders also when the chat
                     // already has messages (Nexus ChatView), not only in the
@@ -572,12 +575,27 @@ fn step_label(step: &TimelineStep, lang: &str) -> String {
         TimelineStep::Tool(tc) => {
             // Nexus stepLabel: translate action prefixes ("Applied …",
             // "bash: …"), then build a title from the raw function name +
-            // input (file names, commands, patterns).
-            let translated = translate_tool_title(&tc.title, lang);
-            if translated != tc.title {
-                return translated;
+            // input (file names, commands, patterns). Historical sessions
+            // carry the tool name separately — when the title is a bare
+            // action word ("Uruchomienie"/"Running"), name the tool too.
+            let base = if tc.title.trim().is_empty() {
+                tc.tool_name.clone()
+            } else {
+                tc.title.clone()
+            };
+            let translated = translate_tool_title(&base, lang);
+            let out = if translated != base {
+                translated
+            } else {
+                raw_function_name_to_title(&base, &tool_input(tc), lang)
+            };
+            if !tc.tool_name.is_empty()
+                && base.to_lowercase() != tc.tool_name.to_lowercase()
+                && !out.contains(&tc.tool_name)
+            {
+                return format!("{out} [{}]", tc.tool_name);
             }
-            raw_function_name_to_title(&tc.title, &tool_input(tc), lang)
+            out
         }
     }
 }
@@ -2860,6 +2878,39 @@ const PATH_CLICK_JS: &str = r#"
 })();
 "#;
 
+/// Auto-scroll: whenever the chat DOM changes (a session was opened, a
+/// chunk streamed in, the plan card appeared) the message list jumps to
+/// the very bottom — opening a historical session must land on the last
+/// message, not on the top.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const SCROLL_JS: &str = r#"
+(function(){
+  if (window.__vdScrollInit) return; window.__vdScrollInit = true;
+  window.__vdScrollChat = function(){
+    var el = document.querySelector('.chat-messages');
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+  var mo = new MutationObserver(function(){
+    // coalesce bursts (streaming chunks arrive one by one)
+    if (window.__vdScrollRaf) return;
+    window.__vdScrollRaf = requestAnimationFrame(function(){
+      window.__vdScrollRaf = 0;
+      window.__vdScrollChat();
+    });
+  });
+  var start = function(){
+    var inner = document.querySelector('.chat-messages .chat-inner');
+    if (inner) {
+      mo.observe(inner, { childList: true, subtree: true, characterData: true });
+      window.__vdScrollChat();
+    } else {
+      setTimeout(start, 150);
+    }
+  };
+  start();
+})();
+"#;
+
 /// Nexus v0.11.1: agent plan / todo checklist card, rendered after the
 /// messages (cumulative state — the last `plan` update wins). Collapses
 /// to the current entry; auto-collapses once everything is done.
@@ -2968,6 +3019,9 @@ fn translate_cli_notice(
     }
     if let Some(agent) = t.strip_prefix("Agent changed to ") {
         return tf(lang, "agentChangedTo", &[("agent", agent.trim())]);
+    }
+    if let Some(level) = t.strip_prefix("Thinking changed to ") {
+        return tf(lang, "thinkingChangedTo", &[("level", level.trim())]);
     }
     match t {
         "Compacting context" => tr(lang, "compactingContext").to_string(),

@@ -22,7 +22,7 @@ pub fn HistoryView() -> Element {
     let mut loaded = use_signal(|| false);
     let mut fetched = use_signal(|| false);
     let mut rows = use_signal(|| Vec::<SessionStatsRow>::new());
-    let mut remote_rows = use_signal(|| Vec::<RemoteHist>::new());
+    let remote_rows = use_signal(|| Vec::<RemoteHist>::new());
     let mut query = use_signal(String::new);
     // 0 = title only, 1 = title + message content.
     let mut search_mode = use_signal(|| 0u8);
@@ -44,11 +44,16 @@ pub fn HistoryView() -> Element {
         loaded.set(true);
         let st = state.clone();
         spawn(async move {
+            // Local rows first: the list must render (and stop showing
+            // "Loading…") even when a remote SSH listing is slow.
             if let Ok(r) = crate::vibestats::api_vibe_stats(token(&st)).await {
                 rows.set(r);
             }
+            fetched.set(true);
             // Remote rows (Nexus HistoryView remoteRows): CLI sessions of
             // every enabled connection - remote work shows in History too.
+            // Loaded in the background so a slow SSH host never blocks the
+            // local history.
             let conns: Vec<(String, String)> = {
                 let s = st.read();
                 s.snapshot
@@ -59,35 +64,41 @@ pub fn HistoryView() -> Element {
                     .map(|c| (c.id.clone(), c.name.clone()))
                     .collect()
             };
-            let mut remote: Vec<RemoteHist> = Vec::new();
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for (cid, cname) in conns {
-                if let Ok(list) = crate::api::api_remote_sessions(token(&st), cid.clone()).await {
-                    for s in list {
-                        if s.session_id.is_empty() {
-                            continue;
+            if conns.is_empty() {
+                return;
+            }
+            let st2 = st.clone();
+            let mut remote_rows2 = remote_rows.clone();
+            spawn(async move {
+                let mut remote: Vec<RemoteHist> = Vec::new();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for (cid, cname) in conns {
+                    if let Ok(list) = crate::api::api_remote_sessions(token(&st2), cid.clone()).await {
+                        for s in list {
+                            if s.session_id.is_empty() {
+                                continue;
+                            }
+                            if !seen.insert(format!("{cid}:{}", s.session_id)) {
+                                continue;
+                            }
+                            remote.push(RemoteHist {
+                                conn_id: cid.clone(),
+                                conn_name: cname.clone(),
+                                session_id: s.session_id,
+                                title: s.title,
+                                cwd: s.cwd,
+                                updated_at: s.updated_at.clone(),
+                                updated_ms: s
+                                    .updated_at
+                                    .parse::<i64>()
+                                    .ok()
+                                    .or_else(|| iso_to_ms(&s.updated_at)),
+                            });
                         }
-                        if !seen.insert(format!("{cid}:{}", s.session_id)) {
-                            continue;
-                        }
-                        remote.push(RemoteHist {
-                            conn_id: cid.clone(),
-                            conn_name: cname.clone(),
-                            session_id: s.session_id,
-                            title: s.title,
-                            cwd: s.cwd,
-                            updated_at: s.updated_at.clone(),
-                            updated_ms: s
-                                .updated_at
-                                .parse::<i64>()
-                                .ok()
-                                .or_else(|| iso_to_ms(&s.updated_at)),
-                        });
                     }
                 }
-            }
-            remote_rows.set(remote);
-            fetched.set(true);
+                remote_rows2.set(remote);
+            });
         });
     }
 

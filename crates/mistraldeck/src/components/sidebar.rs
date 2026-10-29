@@ -279,6 +279,42 @@ pub fn Sidebar() -> Element {
         .filter(|c| c.enabled)
         .cloned()
         .collect();
+    // SSH groups start expanded, so the session list must be fetched on
+    // mount — the old code only loaded the pane when the group was
+    // re-expanded by a click, leaving remote sessions invisible.
+    {
+        let state = state.clone();
+        let remote_panes = remote_panes.clone();
+        let conns = remotes.clone();
+        use_effect(move || {
+            for conn in &conns {
+                let loaded = remote_panes
+                    .read()
+                    .get(&conn.id)
+                    .map(|p| p.loaded)
+                    .unwrap_or(false);
+                if loaded {
+                    continue;
+                }
+                let state = state.clone();
+                let mut remote_panes = remote_panes.clone();
+                let cid = conn.id.clone();
+                spawn(async move {
+                    let tok = token(&state);
+                    let status = crate::api::api_check_remote_status(tok.clone(), cid.clone())
+                        .await
+                        .unwrap_or_default();
+                    let sessions = crate::api::api_remote_sessions(tok, cid.clone())
+                        .await
+                        .unwrap_or_default();
+                    remote_panes.write().insert(
+                        cid,
+                        RemotePane { status: Some(status), sessions, loaded: true },
+                    );
+                });
+            }
+        });
+    }
     let remote_els: Vec<Element> = remotes
         .iter()
         .map(|conn| {
@@ -339,8 +375,8 @@ pub fn Sidebar() -> Element {
                 class: "mobile-panel-close",
                 title: "{tr(&lang, \"closePanelLabel\")}",
                 onclick: {
-                    let mut state = state.clone();
-                    move |_| { state.write().mobile_sidebar_open = false; }
+                    let state = state.clone();
+                    move |_| { { let mut st = state.clone(); st.write().mobile_sidebar_open = false; } }
                 },
                 "✕"
             }
@@ -364,8 +400,8 @@ pub fn Sidebar() -> Element {
                         let mut np_open = np_open;
                         move |_| np_open.set(true)
                     },
-                    span { class: "sidebar-np-icon", "🆕" }
                     span { class: "sidebar-np-text", "{new_project_lbl}" }
+                    span { class: "sidebar-np-plus", "＋" }
                 }
             }
             nav { class: "session-list session-list-projects",
@@ -383,17 +419,37 @@ pub fn Sidebar() -> Element {
             nav { class: "sidebar-nav",
                 button {
                     class: "{nav_cls(View::Stats)}",
-                    onclick: { let state = state.clone(); move |_| { crate::app::set_view(state, View::Stats); } },
+                    onclick: {
+                        let state = state.clone();
+                        move |_| {
+                            // On a phone the drawer must close when navigating
+                            // to a full-screen view (settings/history/stats).
+                            { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                            crate::app::set_view(state, View::Stats);
+                        }
+                    },
                     "{tr(&lang, \"statistics\")}"
                 }
                 button {
                     class: "{nav_cls(View::History)}",
-                    onclick: { let state = state.clone(); move |_| { crate::app::set_view(state, View::History); } },
+                    onclick: {
+                        let state = state.clone();
+                        move |_| {
+                            { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                            crate::app::set_view(state, View::History);
+                        }
+                    },
                     "{tr(&lang, \"historyLabel\")}"
                 }
                 button {
                     class: "{nav_cls(View::Settings)}",
-                    onclick: { let state = state.clone(); move |_| { crate::app::set_view(state, View::Settings); } },
+                    onclick: {
+                        let state = state.clone();
+                        move |_| {
+                            { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                            crate::app::set_view(state, View::Settings);
+                        }
+                    },
                     "{tr(&lang, \"settings\")}"
                 }
                 // v1.0.32/33 parity: in the browser the brand row is gone
@@ -657,6 +713,7 @@ fn group_el(
                             spawn(async move {
                                 let _ = crate::api::api_create_session(token(&state), wd).await;
                                 crate::state::refresh(state.clone()).await;
+                                { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);
                             });
                         }
@@ -716,7 +773,8 @@ fn session_row(
                             let _ = crate::api::api_switch_session(tok, idx).await;
                         }
                         crate::state::refresh(state).await;
-                        crate::app::set_view(state, View::Chat);
+                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                                crate::app::set_view(state, View::Chat);
                     }
                 }
             },
@@ -821,7 +879,8 @@ fn backend_el(
                     async move {
                         let _ = crate::api::api_open_backend_session(token(&state), sid).await;
                         crate::state::refresh(state).await;
-                        crate::app::set_view(state, View::Chat);
+                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                                crate::app::set_view(state, View::Chat);
                     }
                 }
             },
@@ -1046,7 +1105,7 @@ fn remote_conn_el(
                             np_open.set(true);
                         }
                     },
-                    "🆕"
+                    "＋"
                 }
             }
             if !is_collapsed {
@@ -1139,6 +1198,7 @@ fn remote_folder_el(
                             spawn(async move {
                                 let _ = crate::api::api_start_remote_session(token(&state), cid, wd).await;
                                 crate::state::refresh(state.clone()).await;
+                                { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);
                             });
                         }
@@ -1176,7 +1236,8 @@ fn remote_loc_item_el(state: Signal<ClientState>, conn_id: &str, loc: &str) -> E
                     spawn(async move {
                         let _ = crate::api::api_start_remote_session(token(&state), conn_id, loc).await;
                         crate::state::refresh(state.clone()).await;
-                        crate::app::set_view(state, View::Chat);
+                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                                crate::app::set_view(state, View::Chat);
                     });
                 }
             },
@@ -1259,7 +1320,8 @@ fn remote_cli_el(
                     async move {
                         let _ = crate::api::api_open_remote_session(token(&state), cid, sid, title, cwd).await;
                         crate::state::refresh(state.clone()).await;
-                        crate::app::set_view(state, View::Chat);
+                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                                crate::app::set_view(state, View::Chat);
                     }
                 }
             },
@@ -1404,7 +1466,8 @@ fn NewProjectModal(
                 match res {
                     Ok(()) => {
                         crate::state::refresh(state.clone()).await;
-                        crate::app::set_view(state, View::Chat);
+                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                                crate::app::set_view(state, View::Chat);
                         open.set(false);
                     }
                     Err(e) => err.set(e.to_string()),

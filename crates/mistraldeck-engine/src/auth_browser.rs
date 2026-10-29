@@ -220,7 +220,9 @@ fn base64url_no_pad(bytes: &[u8]) -> String {
 
 /// HTTP GET via curl (same pattern as `remote.rs::http_get_json`).
 fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
-    let out = std::process::Command::new("curl")
+    let mut c = std::process::Command::new("curl");
+    crate::no_window(&mut c);
+    let out = c
         .args(["-fsSL", "--max-time", &timeout_s.to_string(), url])
         .output()
         .map_err(|e| e.to_string())?;
@@ -233,7 +235,9 @@ fn http_get_json(url: &str, timeout_s: u64) -> Result<String, String> {
 /// HTTP POST with a JSON body via curl (`-X POST -H Content-Type -d`).
 fn http_post_json(url: &str, body: &Value, timeout_s: u64) -> Result<String, String> {
     let payload = body.to_string();
-    let out = std::process::Command::new("curl")
+    let mut c = std::process::Command::new("curl");
+    crate::no_window(&mut c);
+    let out = c
         .args([
             "-fsSL",
             "--max-time",

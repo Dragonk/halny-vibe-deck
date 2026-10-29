@@ -546,7 +546,17 @@ impl Worker {
     /// F4: model/agent/thinking per session. `session/agent/update`
     /// for agent/mode, `config/model/write` for model + thinking —
     /// always sessionOnly so the user default is untouched (W5).
+    ///
+    /// A rejected write (the server validates model/reasoningEffort per
+    /// session model) is NOT a session error: the turn must not die with
+    /// "WARNING config/model/write …". It is logged as a debug line and
+    /// the session view is refreshed instead.
     fn set_config_option(&mut self, session_id: &str, key: &str, value: &str) {
+        if value.trim().is_empty() {
+            // An empty value is invalid on the wire (INVALID_PARAMS) —
+            // skip the call entirely.
+            return;
+        }
         let (method, params) = match key {
             "agent" | "mode" => (
                 "session/agent/update",
@@ -570,7 +580,12 @@ impl Worker {
             ),
         };
         if let Err(e) = self.call(method, params, method) {
-            self.error(method, format!("{e:#}"));
+            // Non-fatal: a config write the server rejects must not kill
+            // the running turn (it used to surface as a WARNING system
+            // message and clear the pending prompt).
+            self.emit(AgentEvent::DebugLog(format!(
+                "config write {method} rejected: {e:#}"
+            )));
             return;
         }
         // refresh the session view (new model/agent in the snapshot)

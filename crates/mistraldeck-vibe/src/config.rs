@@ -685,6 +685,14 @@ impl VibeConfigFile {
         self.dirty = true;
     }
 
+    /// Remove one `[tools.<name>]` entry entirely.
+    pub fn remove_tool_permission(&mut self, tool: &str) {
+        if let Some(Value::Table(tools)) = self.table.get_mut("tools") {
+            tools.remove(tool);
+        }
+        self.dirty = true;
+    }
+
     // -- skills ------------------------------------------------------------------
 
     pub fn skill_paths(&self) -> Vec<String> {

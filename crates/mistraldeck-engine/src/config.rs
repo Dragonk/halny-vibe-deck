@@ -75,7 +75,7 @@ pub fn random_hex(n_bytes: usize) -> String {
 /// The subset of ~/.config/halny-vibe-deck/config.json the engine cares about.
 /// Unknown fields (egui-era settings) are preserved on save via a raw
 /// JSON round-trip.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineConfig {
     /// Explicit agent binary override (`vibe-app-server`). Empty =
     /// auto-detect (PATH, then the standard uv tool locations).
@@ -95,6 +95,13 @@ pub struct EngineConfig {
     pub remote_enabled: bool,
     #[serde(default = "default_remote_port")]
     pub remote_port: u16,
+    /// Custom TLS certificate for the HTTPS listeners (stable parity:
+    /// `serve.certPath`/`serve.keyPath`). Empty = a self-signed
+    /// certificate is generated once and cached in the config directory.
+    #[serde(default)]
+    pub cert_path: String,
+    #[serde(default)]
+    pub key_path: String,
     #[serde(default)]
     pub dock_open: bool,
     #[serde(default)]
@@ -113,7 +120,37 @@ pub struct EngineConfig {
 }
 
 fn default_remote_port() -> u16 {
-    8080
+    // Must differ from the local app port (8080): when the two collide the
+    // remote listener was silently disabled and the server was reachable
+    // only via 127.0.0.1 — never via the machine's IP.
+    8443
+}
+
+// Manual Default so the derived-default pitfall cannot bite: a missing
+// config file must still yield remote_port = 8443 (the serde default),
+// not 0 (which would make the remote listener bind port 0).
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            agent_path: String::new(),
+            working_directory: String::new(),
+            preferred_model: None,
+            language: String::new(),
+            theme: String::new(),
+            auth: None,
+            remote_enabled: false,
+            remote_port: default_remote_port(),
+            cert_path: String::new(),
+            key_path: String::new(),
+            dock_open: false,
+            sidebar_sessions_limit: None,
+            auto_close_idle_minutes: None,
+            recent_folders: Vec::new(),
+            hidden_sessions: Vec::new(),
+            hidden_projects: Vec::new(),
+            remote_connections: Vec::new(),
+        }
+    }
 }
 
 impl EngineConfig {

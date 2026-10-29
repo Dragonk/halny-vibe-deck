@@ -70,7 +70,9 @@ test('web shell renders the brand and the web-only controls', async ({ page }) =
   // (`/_dioxus`) only exists under `dx serve`, and the PWA icon/manifest
   // fetches are allowed to 404 in dev — everything else must be clean.
   const fatal = errors.filter(
-    (e) => !/favicon|manifest|_dioxus|WebSocket/i.test(e),
+    // self-signed cert: chromium still logs SSL errors for subresource
+    // fetches even with ignoreHTTPSErrors — expected, not fatal
+    (e) => !/favicon|manifest|_dioxus|WebSocket|SSL|certificate/i.test(e),
   )
   expect(fatal).toEqual([])
 })

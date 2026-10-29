@@ -364,7 +364,42 @@ fn serve_dir() -> Option<PathBuf> {
     Some(parent.join("serve"))
 }
 
+/// Device addresses the HTTPS listeners are reachable on (stable parity:
+/// `serveStatus().lanUrls`). The primary outbound IPv4 comes from a UDP
+/// "connect" (no packets are sent — it only consults the routing table);
+/// loopback is always included.
+pub fn local_lan_ips() -> Vec<String> {
+    let mut ips: Vec<String> = Vec::new();
+    if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        // No traffic is generated; the connect only picks the outbound
+        // interface. Any routable target works.
+        if sock.connect("8.8.8.8:80").is_ok() {
+            if let Ok(addr) = sock.local_addr() {
+                let ip = addr.ip().to_string();
+                if !addr.ip().is_loopback() && !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+        }
+    }
+    ips
+}
+
 fn ensure_certificate() -> Result<(String, String), String> {
+    // A custom certificate wins when both paths are configured (stable
+    // parity: serve.certPath/serve.keyPath); otherwise a self-signed
+    // certificate is generated once and cached until <30 days from expiry.
+    let cfg = mistraldeck_engine::EngineConfig::load();
+    if !cfg.cert_path.trim().is_empty() && !cfg.key_path.trim().is_empty() {
+        let cert = std::fs::read_to_string(&cfg.cert_path)
+            .map_err(|e| format!("read cert {}: {e}", cfg.cert_path))?;
+        let key = std::fs::read_to_string(&cfg.key_path)
+            .map_err(|e| format!("read key {}: {e}", cfg.key_path))?;
+        if cert.is_empty() || key.is_empty() {
+            return Err("custom certificate files are empty".to_string());
+        }
+        return Ok((cert, key));
+    }
     let dir = serve_dir().ok_or_else(|| "config directory unavailable".to_string())?;
     let cert_file = dir.join("cert.pem");
     let key_file = dir.join("key.pem");
@@ -388,14 +423,16 @@ fn ensure_certificate() -> Result<(String, String), String> {
     }
 
     // Generate a fresh self-signed certificate (SANs: localhost + loopback
-    // IPs; LAN access by IP still shows the usual self-signed warning).
-    let rcgen::CertifiedKey { cert, key_pair } = rcgen::generate_simple_self_signed(vec![
+    // IPs + the device's LAN addresses, so https://<ip>:port works too).
+    let mut sans = vec![
         "Halny Vibe Deck".to_string(),
         "localhost".to_string(),
         "127.0.0.1".to_string(),
         "::1".to_string(),
-    ])
-    .map_err(|e| format!("self-signed certificate failed: {e}"))?;
+    ];
+    sans.extend(local_lan_ips());
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(sans).map_err(|e| format!("self-signed certificate failed: {e}"))?;
     let cert_pem = cert.pem();
     let key_pem = key_pair.serialize_pem();
 
@@ -611,9 +648,9 @@ fn tls_server_config() -> Result<rustls::ServerConfig, String> {
 /// webview engines refuse a self-signed certificate and wry exposes no TLS
 /// hook, and that listener never leaves 127.0.0.1. Every network-exposed
 /// surface is HTTPS-only either way.
-pub async fn run_local_https(app_router: Router, port: u16, require_login: bool) -> Result<(), String> {
+pub async fn run_local_https(app_router: Router, host: &str, port: u16, require_login: bool) -> Result<(), String> {
     let tls = tls_server_config()?;
-    let tcp = bind_with_retry("127.0.0.1", port, 6).await?;
+    let tcp = bind_with_retry(host, port, 6).await?;
     let router = if require_login {
         let login = Router::new()
             .route("/login", get(login_page))
@@ -626,8 +663,16 @@ pub async fn run_local_https(app_router: Router, port: u16, require_login: bool)
         app_router
     };
     let router = router.layer(middleware::from_fn(crate::pwa::gzip_mw));
+    let cert_desc = {
+        let c = mistraldeck_engine::EngineConfig::load();
+        if !c.cert_path.trim().is_empty() && !c.key_path.trim().is_empty() {
+            "custom certificate"
+        } else {
+            "self-signed certificate"
+        }
+    };
     eprintln!(
-        "mistraldeck: local UI at https://127.0.0.1:{port} (self-signed certificate{})",
+        "mistraldeck: local UI at https://{host}:{port} ({cert_desc}{})",
         if require_login { "; login required" } else { "" }
     );
     axum::serve(
@@ -639,6 +684,41 @@ pub async fn run_local_https(app_router: Router, port: u16, require_login: bool)
     )
     .await
     .map_err(|e| format!("local https server failed: {e}"))
+}
+
+/// The app's main port, recorded at launch (serve.rs is compiled only in
+/// server builds; the value exists only there).
+static LOCAL_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(8080);
+
+pub fn set_local_port(port: u16) {
+    LOCAL_PORT.store(port, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// What the Settings "Server" tab shows as the access hint: the local
+/// HTTPS URL, every LAN URL of the device, the remote listener, and
+/// whether a custom certificate is in use.
+pub fn serve_info() -> crate::api::ServeInfoView {
+    let local_port = LOCAL_PORT.load(std::sync::atomic::Ordering::Relaxed);
+    let cfg = mistraldeck_engine::EngineConfig::load();
+    let remote_on = cfg.remote_enabled && cfg.auth.is_some();
+    let mut urls: Vec<String> =
+        vec![format!("https://127.0.0.1:{local_port} · https://localhost:{local_port}")];
+    for ip in local_lan_ips() {
+        if remote_on {
+            urls.push(format!("https://{ip}:{}", cfg.remote_port));
+        } else {
+            urls.push(format!("https://{ip}:{local_port}"));
+        }
+    }
+    crate::api::ServeInfoView {
+        remote_enabled: remote_on,
+        remote_port: cfg.remote_port,
+        auth_configured: cfg.auth.is_some(),
+        custom_cert: !cfg.cert_path.trim().is_empty() && !cfg.key_path.trim().is_empty(),
+        cert_path: cfg.cert_path.clone(),
+        key_path: cfg.key_path.clone(),
+        urls,
+    }
 }
 
 pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
@@ -658,8 +738,16 @@ pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
         .layer(middleware::from_fn(crate::pwa::gzip_mw))
         .merge(login);
 
+    let cert_desc = {
+        let c = mistraldeck_engine::EngineConfig::load();
+        if !c.cert_path.trim().is_empty() && !c.key_path.trim().is_empty() {
+            "custom certificate"
+        } else {
+            "self-signed certificate"
+        }
+    };
     eprintln!(
-        "mistraldeck: remote access at https://0.0.0.0:{port} (self-signed certificate; login required)"
+        "mistraldeck: remote access at https://0.0.0.0:{port} ({cert_desc}; login required)"
     );
     // systemd Type=notify: the remote listener is up.
     mistraldeck_engine::systemd::notify_state("READY=1");

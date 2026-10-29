@@ -267,6 +267,39 @@ pub async fn api_set_remote(
     Ok(())
 }
 
+/// Access hint for the Settings "Server" tab: local + LAN HTTPS URLs,
+/// remote listener state and the certificate in use (device IPs included).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ServeInfoView {
+    pub remote_enabled: bool,
+    pub remote_port: u16,
+    pub auth_configured: bool,
+    pub custom_cert: bool,
+    pub cert_path: String,
+    pub key_path: String,
+    pub urls: Vec<String>,
+}
+
+#[server]
+pub async fn api_serve_info(token: String) -> Result<ServeInfoView, ServerFnError> {
+    check(&token)?;
+    Ok(crate::serve::serve_info())
+}
+
+/// Set the custom TLS certificate paths (empty = generated self-signed).
+/// LOCAL-ONLY, like credential editing.
+#[server]
+pub async fn api_set_remote_certs(
+    token: String,
+    cert_path: String,
+    key_path: String,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    require_local()?;
+    mistraldeck_engine::Engine::global().set_remote_certs(&cert_path, &key_path);
+    Ok(())
+}
+
 /// Hide a session from the sidebar (nothing is deleted from disk).
 #[server]
 pub async fn api_hide_session(token: String, key: String) -> Result<(), ServerFnError> {

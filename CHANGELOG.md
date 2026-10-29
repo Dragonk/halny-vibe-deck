@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.99.7 — user-reported defects round 3 (2026-10-29)
+
+**Server / browser**
+- **HTTPS-only app surface.** The main port is never plain HTTP anymore: every mode serves TLS (the desktop webview gets its own private loopback listener on an ephemeral port, because webview engines reject self-signed certificates — that listener never leaves 127.0.0.1 and is not the app's server surface).
+- **Remote access actually starts and is reachable by IP.** `remote_port` now defaults to 8443 (it used to default to 8080, colliding with the app port, so the 0.0.0.0 listener was silently disabled). The generated self-signed certificate includes the device's LAN IPs in its SANs, and the startup log prints `https://<ip>:<port>`.
+- **Custom TLS certificate** (`cert_path`/`key_path` in the config, editable in Settings → Server): when both are set they are used for the HTTPS listeners; otherwise the cached self-signed certificate is generated as before.
+- **Settings → Server** lists every access URL including the device's IP addresses (`https://192.168.x.x:8443` etc.) and shows which certificate is in use.
+- **Floating buttons**: the preview-panel FAB now works from any view (switches to chat, persists the dock state) and on phones each FAB hides when the *other* panel is open.
+- **Mobile**: the chat toolbar (＋, model, mode, thinking, send) stays in a single row — chips shrink with ellipsis instead of wrapping; tapping Settings/History/Statistics closes the session list; statistics render one chart per full-width row; settings get a scrollable tab bar and stacked master-detail panels.
+
+**Native app**
+- **"New project…"** button is text + `＋` again (no 🆕 icon), same for the SSH groups.
+- **Sidebar resize handle** no longer inverted (dragging the session-list edge right widens it).
+- **Update checks / curl / ssh / systemctl** spawn with `CREATE_NO_WINDOW` on Windows — no more flashing terminal windows.
+- **SSH sessions** in the sidebar load on mount (the pane was only fetched when re-expanding a group, so remote sessions looked absent).
+- **"unauthorized" errors** in Settings, the file tree and Statistics are gone: the server functions no longer re-check the vestigial token (the remote HTTPS listener's cookie middleware already gates every request; loopback is trusted) — previously every settings/file/stats call failed in the local app whenever remote credentials were configured.
+- **Settings tabs** match the stable edition again (underline tabs, order: general, server, remote, agents, mcp, tools, prompts, skills, providers, models, TOML); the scope path preview sits beside the switch, vertically centered.
+- **Tools tab** rebuilt like stable: one row per tool (name + ask/allow/deny + remove), an "add tool" row, and the built-in defaults with an explanatory note when nothing is configured.
+- **Chat input**: no manual resize handle (`resize: none`); the box auto-grows with content up to 160 px; the attach button is a single `＋` offering **file or image** only (directory and branch-diff entries removed); clicking outside any dropdown (model/mode/thinking, attach, `@`, `/`) closes it.
+- **New session in a project** offers the model/mode/thinking pickers immediately (chip lists are built from the project's vibe config at creation) and shows an empty chat instead of the previous session's messages (the resume guard now compares session IDs, not list indices).
+- **First prompt in a new session** no longer dies with `WARNING config/model/write: Invalid request parameters`: empty values are never sent, and a rejected config write is a debug log instead of a fatal session error that killed the turn.
+- **Model/mode/thinking changes** leave a visible notice in the chat ("Model changed to …", localized, incl. thinking).
+- **Session names** update from `session/list` (CLI-generated titles) without reopening the session.
+- **Opening a session scrolls the chat to the bottom**; the todo/plan card renders even before the first message; historical tool calls show the tool name and status instead of a bare "Running".
+- **History** renders the local rows immediately; remote SSH listings load in the background so a slow host no longer leaves "Loading…" forever.
+
 ## 1.99.6 — the remaining reported defects (2026-10-29)
 
 - **Tools** are the stable edition's permission panel again: one row per tool
