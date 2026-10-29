@@ -171,12 +171,15 @@ fn hex_prefix(bytes: &[u8], n: usize) -> String {
 /// Issue a fresh token for `username`.
 pub fn issue(username: &str) -> String {
     let iat = now_secs();
+    // A per-token nonce keeps two tokens issued in the same second distinct
+    // (otherwise a revoke in one place would invalidate the other).
     let payload = format!(
-        r#"{{"u":"{}","iat":{},"exp":{},"v":"{}"}}"#,
+        r#"{{"u":"{}","iat":{},"exp":{},"v":"{}","j":"{}"}}"#,
         username.replace('"', ""),
         iat,
         iat + WINDOW_SECS,
-        cred_version()
+        cred_version(),
+        crate::config::random_hex(8)
     );
     let body = format!("{VERSION_TAG}.{}", b64url(payload.as_bytes()));
     let mac = b64url(&hmac_sha256(&signing_key(), body.as_bytes()));
