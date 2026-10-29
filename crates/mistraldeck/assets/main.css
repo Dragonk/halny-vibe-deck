@@ -3409,6 +3409,8 @@ code {
     width: 100%;
     padding: 12px 14px 8px;
     background: transparent;
+    border: none;
+    outline: none;
     border-radius: 12px 12px 0 0;
     font-size: 14px;
     color: var(--text);
@@ -4161,6 +4163,9 @@ code {
 }
 /* ===== Dock (right panel) ===== */
 .dock {
+    display: none;
+}
+.dock.open {
     display: flex;
     flex-direction: column;
     background: var(--surface);
@@ -5101,9 +5106,18 @@ code {
 
 /* ===== Sidebar project groups ===== */
 .session-list-projects {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    padding-bottom: 4px;
+}
+.sidebar .session-list:not(.session-list-projects) {
+    flex-shrink: 0;
+    max-height: 30vh;
+    overflow-y: auto;
 }
 .project-group {
     display: flex;
@@ -6745,6 +6759,7 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     .sidebar.mobile-open { transform: translateX(0); }
     .sidebar-resize-handle { display: none; }
     .dock {
+        display: flex;
         position: fixed;
         top: 0;
         right: 0;
@@ -6752,7 +6767,10 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
         z-index: 39;
         width: 100vw !important;
         box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+        transform: translateX(105%);
+        transition: transform 0.22s ease;
     }
+    .dock.open { transform: translateX(0); }
     .mobile-scrim { top: 0; }
     .mobile-panel-close {
         display: flex;
@@ -7089,11 +7107,12 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     .web-fab-left { display: flex; }
 }
 /* Mutually exclusive with the open panels (v1.0.30): no control stacked
-   on top of a panel, and no reserved gap beside it (v1.0.31). */
+   on top of a panel, and no reserved gap beside it (v1.0.31). On phones
+   each FAB hides when the other panel is open; on desktop widths the
+   preview FAB stays visible and acts as a toggle (show/hide the panel). */
 .web-fab-left.panel-open { display: none; }
-.web-fab-right.dock-open { display: none; }
 @media (max-width: 768px) {
-    /* On a phone each FAB also hides when the OTHER panel is open. */
+    .web-fab-right.dock-open { display: none; }
     .web-fab-left.dock-open { display: none; }
     .web-fab-right.sidebar-open { display: none; }
 }
@@ -7298,4 +7317,11 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
     .tool-perm-config-row { flex-wrap: wrap; }
     .add-tool-row { flex-wrap: wrap; }
     .field-input, .field-select { font-size: 16px; }
+}
+
+/* dock file-tree context menu backdrop (click anywhere to close) */
+.ctx-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
 }

@@ -130,3 +130,25 @@ reads the on-disk config; it passes in isolation and on re-run.
 | Mobile nav | settings/history/stats close the session drawer |
 | Mobile stats/settings | stats one full-width chart per row; settings compact + scrollable tabs |
 | Hidden-tab backfill | `SessionHistory` also applies to live (New*) slots, not only lazy wakes — e2e green again |
+
+## Round 4 — settings/dock/sidebar round (2026-10-29, released as 1.99.8)
+
+| Area | Fix |
+|---|---|
+| Server access by IP + login | with remote access on, the app port binds 0.0.0.0 HTTPS + login (collision no longer disables it); unauthenticated app requests get 401/redirect |
+| Serve-tab URL hint | all device IPs via getifaddrs (NIC + VPN); loopback hidden |
+| Skills tab | stable header buttons, file counts, open-externally/delete in detail header |
+| TOML tab | folder tree (agents/prompts/skills expand+collapse on click) + per-folder add-file row |
+| Prompts tab | shared file panel restyled to stable master-detail |
+| Tools tab | right-hand available-tools panel (stable two-panel layout) |
+| Agents tab | full configurator (type/display/description/safety/model/system-prompt/tool lists/per-agent permissions) via `api_save_agent`, local+SSH; right collapsible tools panel |
+| General tab | "Detected agent" row removed; CLI version shown; Install button when CLI missing |
+| Preview save | icon button (label as tooltip) |
+| File tree | children keyed by path (nested folders expand); root = session project (local confine uses session root); SSH supported |
+| File tree right-click | ctx menu: preview/download/open-externally/rename/delete (new `api_rename_path`/`api_delete_path`/`api_write_binary`) |
+| Drag & drop | files dropped on chat upload to `<root>/.halny-attachments/` (local+SSH) and insert `@path` |
+| Desktop browser FAB | preview FAB visible at all widths, toggles the dock |
+| Mobile dock | same slide-in animation as the sessions list |
+| Chat autoscroll | body-level MutationObserver + effect on session/message change (streaming + historical open land at bottom) |
+| Input card | textarea `border:none` (no double bar) |
+| Sidebar | max 10 rows per project + "show all" row; projects list fills height and scrolls; nav pinned; "CLI session" names fall back to index title / first user prompt |

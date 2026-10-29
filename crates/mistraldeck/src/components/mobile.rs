@@ -111,7 +111,7 @@ pub async fn set_dock_open(state: Signal<ClientState>, open: bool) {
 pub const BACK_JS: &str = r#"(function(){
   if (window.__vdBackInit) return; window.__vdBackInit = 1;
   function sidebarOpen() { return !!document.querySelector('.sidebar.mobile-open'); }
-  function dockOpen() { return !!document.querySelector('.dock'); }
+  function dockOpen() { return !!document.querySelector('.dock.open'); }
   function anyOpen() { return sidebarOpen() || dockOpen(); }
   function click(id) { var b = document.getElementById(id); if (b) b.click(); }
   function sync() {

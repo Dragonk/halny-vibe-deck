@@ -11,6 +11,21 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const LOCAL = process.env.VD_LOCAL_URL || 'https://127.0.0.1:8080'
+const USER = process.env.VD_USER || 'e2e'
+const PASS = process.env.VD_PASS || 'e2e-secret'
+
+// With remote access enabled the main port is the 0.0.0.0 + login surface,
+// so the app itself requires a session cookie — sign in once per test.
+async function login(page: Page) {
+  const resp = await page.request.post(`${LOCAL}/api/auth/login`, {
+    data: { username: USER, password: PASS },
+  })
+  expect(resp.status(), 'login POST on the local surface').toBe(200)
+}
+
+test.beforeEach(async ({ page }) => {
+  await login(page)
+})
 
 // A session always belongs to a project (D1/D2): the e2e starts one from a
 // project group's ＋ when history exists, otherwise through the

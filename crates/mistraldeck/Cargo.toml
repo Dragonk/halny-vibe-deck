@@ -44,6 +44,9 @@ rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"]
 # gzip middleware (serve mode, Nexus v0.13.4 parity) — flate2 is already in
 # the graph via the `zip` crate, no new downloads.
 flate2 = { version = "1", optional = true }
+# interface enumeration for the LAN-IP hint (getifaddrs; already in the graph)
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
 
 # client-side (wasm) browser/OS integration: navigator.language, window.ipc
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -59,5 +62,5 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:mistraldeck-engine", "dep:mistraldeck-setup", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:dirs", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2"]
+server = ["dioxus/server", "dep:mistraldeck-engine", "dep:mistraldeck-setup", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:dirs", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2", "dep:libc"]
 gui = ["dep:wry", "dep:tao"]

@@ -130,6 +130,27 @@ pub fn ChatView() -> Element {
                 dioxus::document::eval(SCROLL_JS);
             });
         }
+        // Scroll to the bottom whenever the open session changes or the
+        // message count grows (covers session clicks even if no DOM
+        // mutation reaches the observer).
+        {
+            let state = state.clone();
+            use_effect(move || {
+                let s = state.read();
+                let cur_id = s
+                    .snapshot
+                    .current
+                    .and_then(|i| s.snapshot.sessions.get(i))
+                    .map(|m| m.id.clone())
+                    .unwrap_or_default();
+                let n = s.snapshot.current_messages.len();
+                drop(s);
+                spawn(async move {
+                    let _ = dioxus::document::eval("window.__vdScrollChat && window.__vdScrollChat();").await;
+                });
+                let _ = (cur_id, n);
+            });
+        }
     }
 
     let subtitle = match status.as_str() {
@@ -2890,24 +2911,23 @@ const SCROLL_JS: &str = r#"
     var el = document.querySelector('.chat-messages');
     if (el) el.scrollTop = el.scrollHeight;
   };
-  var mo = new MutationObserver(function(){
-    // coalesce bursts (streaming chunks arrive one by one)
-    if (window.__vdScrollRaf) return;
-    window.__vdScrollRaf = requestAnimationFrame(function(){
-      window.__vdScrollRaf = 0;
-      window.__vdScrollChat();
-    });
-  });
-  var start = function(){
-    var inner = document.querySelector('.chat-messages .chat-inner');
-    if (inner) {
-      mo.observe(inner, { childList: true, subtree: true, characterData: true });
-      window.__vdScrollChat();
-    } else {
-      setTimeout(start, 150);
+  // Observe <body> (never replaced by hydration/re-render, unlike the
+  // SSR'd chat nodes) and scroll whenever the chat DOM changes.
+  var mo = new MutationObserver(function(muts){
+    for (var i = 0; i < muts.length; i++) {
+      var t = muts[i].target;
+      if (t && t.closest && t.closest('.chat-messages')) {
+        if (window.__vdScrollRaf) return;
+        window.__vdScrollRaf = requestAnimationFrame(function(){
+          window.__vdScrollRaf = 0;
+          window.__vdScrollChat();
+        });
+        return;
+      }
     }
-  };
-  start();
+  });
+  mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+  window.__vdScrollChat();
 })();
 "#;
 

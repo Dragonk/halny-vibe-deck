@@ -341,6 +341,8 @@ pub struct RemoteAgentFile {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub safety: Option<String>,
+    #[serde(default)]
     pub enabled_tools: Vec<String>,
     #[serde(default)]
     pub disabled_tools: Vec<String>,

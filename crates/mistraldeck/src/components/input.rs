@@ -108,6 +108,51 @@ pub fn fit_input_now() {
     }
 }
 
+/// Window-level drag & drop (stable v1.0.8 parity): files dropped over the
+/// chat are read as base64, parked on `window.__vdDrop`, and the hidden
+/// `#vd-drop-bridge` button is clicked — the Rust handler uploads them into
+/// the session root (`.halny-attachments/`, local or over SSH) and inserts
+/// `@path` markers into the draft. Drops over the sidebar/dock/modals are
+/// ignored.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const DROP_JS: &str = r#"
+(function () {
+  if (window.__vdDropInit) return; window.__vdDropInit = 1;
+  function hasFiles(e) {
+    try { return Array.from(e.dataTransfer.types || []).includes('Files'); } catch (err) { return false; }
+  }
+  function excluded(e) {
+    var t = e.target;
+    return !!(t && t.closest && t.closest('.sidebar, .dock, .modal-overlay'));
+  }
+  document.addEventListener('dragover', function (e) {
+    if (!hasFiles(e) || excluded(e)) return;
+    e.preventDefault();
+  });
+  document.addEventListener('drop', function (e) {
+    if (!hasFiles(e) || excluded(e)) return;
+    e.preventDefault();
+    var files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    window.__vdDrop = [];
+    var pending = files.length;
+    files.forEach(function (f) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var url = String(reader.result || '');
+        window.__vdDrop.push({ name: f.name, b64: url.split(',')[1] || '' });
+        if (--pending === 0) {
+          var btn = document.getElementById('vd-drop-bridge');
+          if (btn) btn.click();
+        }
+      };
+      reader.onerror = function () { if (--pending === 0) { var b = document.getElementById('vd-drop-bridge'); if (b) b.click(); } };
+      reader.readAsDataURL(f);
+    });
+  });
+})();
+"#;
+
 /// Injected once (client only): the chat textarea grows with its content
 /// (one line at a time) up to the CSS max-height (160px), and never offers
 /// a manual resize handle (`resize: none` in main.css). Also installs the
@@ -166,6 +211,7 @@ pub fn InputBar() -> Element {
             js_init.set(true);
             spawn(async move {
                 dioxus::document::eval(INPUT_JS);
+                dioxus::document::eval(DROP_JS);
             });
         }
     }
@@ -701,6 +747,46 @@ pub fn InputBar() -> Element {
         div { class: "input-card-wrap",
             // hidden bridge: INPUT_JS clicks it on any pointerdown outside
             // the pickers, closing all dropdowns (chips / attach / @ / /)
+            // hidden bridge: DROP_JS parks dropped files on window.__vdDrop
+            // and clicks this — the handler uploads them and inserts @path
+            button {
+                id: "vd-drop-bridge",
+                style: "display:none",
+                onclick: {
+                    let state = state.clone();
+                    let mut draft = draft.clone();
+                    move |_| {
+                        let state = state.clone();
+                        let mut draft = draft.clone();
+                        spawn(async move {
+                            #[cfg(any(feature = "web", feature = "desktop"))]
+                            {
+                                let files: Vec<serde_json::Value> = dioxus::document::eval("return window.__vdDrop || [];")
+                                    .join::<serde_json::Value>()
+                                    .await
+                                    .ok()
+                                    .and_then(|v| v.as_array().cloned())
+                                    .unwrap_or_default();
+                                let _ = dioxus::document::eval("window.__vdDrop = [];").await;
+                                let (root, rid) = crate::state::session_git_ctx(&state);
+                                let tok = token(&state);
+                                for f in files {
+                                    let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("file").to_string();
+                                    let b64 = f.get("b64").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    if b64.is_empty() { continue; }
+                                    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect();
+                                    let target = format!(".halny-attachments/{}-{}", mistraldeck_core::types::now_ms(), safe);
+                                    if crate::fsgit::api_write_binary(tok.clone(), target.clone(), b64, rid.clone(), root.clone()).await.is_ok() {
+                                        let d = format!("{}@{}", draft.read(), target);
+                                        draft.set(d);
+                                        fit_input_now();
+                                    }
+                                }
+                            }
+                        });
+                    }
+                },
+            }
             button {
                 id: "vd-close-pickers",
                 style: "display:none",

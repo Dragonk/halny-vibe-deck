@@ -217,6 +217,40 @@ pub fn remote_abs(root: &str, rel: &str) -> Result<String, String> {
     }
 }
 
+/// Resolve `path` inside an already-canonicalized `root`. Rejects escapes.
+#[cfg(feature = "server")]
+fn confine_abs(root: &std::path::Path, path: &str) -> Result<std::path::PathBuf, ServerFnError> {
+    use std::path::{Path, PathBuf};
+    let rel = path.trim();
+    let target = if rel.is_empty() {
+        root.to_path_buf()
+    } else {
+        let p = Path::new(rel);
+        let joined = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            root.join(p)
+        };
+        let mut norm = PathBuf::new();
+        for comp in joined.components() {
+            match comp {
+                std::path::Component::ParentDir => {
+                    if !norm.pop() {
+                        return Err(ServerFnError::new("path escapes working directory"));
+                    }
+                }
+                std::path::Component::CurDir => {}
+                other => norm.push(other.as_os_str()),
+            }
+        }
+        norm
+    };
+    if target != root && !target.starts_with(root) {
+        return Err(ServerFnError::new("path escapes working directory"));
+    }
+    Ok(target)
+}
+
 /// Parse `find -printf '%y|%s|%T@|%f'` lines into (type, size, mtime_s, name).
 pub fn parse_find_ls(out: &str) -> Vec<(char, u64, u64, String)> {
     let mut v = Vec::new();
@@ -261,6 +295,14 @@ mod imp {
         Ok(())
     }
 
+    /// Resolve `path` inside `root_raw` (any project directory — the dock's
+    /// file tree roots at the *session* cwd, not the engine workdir).
+    pub fn confine_in(root_raw: &str, path: &str) -> Result<PathBuf, ServerFnError> {
+        let root = fs::canonicalize(root_raw.trim())
+            .map_err(|_| ServerFnError::new("root directory does not exist"))?;
+        confine_abs(&root, path)
+    }
+
     /// Resolve `path` inside the engine working directory. Rejects escapes.
     pub fn confine(path: &str) -> Result<PathBuf, ServerFnError> {
         let root_raw = Engine::global().workdir();
@@ -269,35 +311,7 @@ mod imp {
         }
         let root = fs::canonicalize(&root_raw)
             .map_err(|_| ServerFnError::new("working directory does not exist"))?;
-        let rel = path.trim();
-        let target = if rel.is_empty() {
-            root.clone()
-        } else {
-            let p = Path::new(rel);
-            let joined = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                root.join(p)
-            };
-            // lexical normalisation without requiring existence
-            let mut norm = PathBuf::new();
-            for comp in joined.components() {
-                match comp {
-                    std::path::Component::ParentDir => {
-                        if !norm.pop() {
-                            return Err(ServerFnError::new("path escapes working directory"));
-                        }
-                    }
-                    std::path::Component::CurDir => {}
-                    other => norm.push(other.as_os_str()),
-                }
-            }
-            norm
-        };
-        if target != root && !target.starts_with(&root) {
-            return Err(ServerFnError::new("path escapes working directory"));
-        }
-        Ok(target)
+        confine_abs(&root, path)
     }
 
     /// Base64 of a whole file (download button; capped so a huge binary
@@ -345,9 +359,13 @@ mod imp {
                 .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
             return Ok(remote_list_dir(&conn, remote_root, path));
         }
-        let dir = confine(path)?;
+        let display_root = if remote_root.trim().is_empty() {
+            Engine::global().workdir()
+        } else {
+            remote_root.to_string()
+        };
+        let dir = confine_in(&display_root, path)?;
         let mut out: Vec<FileEntry> = Vec::new();
-        let display_root = Engine::global().workdir();
         for entry in fs::read_dir(&dir).map_err(|e| ServerFnError::new(e.to_string()))? {
             let Ok(entry) = entry else { continue };
             let meta = entry.metadata().ok();
@@ -626,6 +644,13 @@ mod imp {
         )
     }
 
+    pub fn b64_decode(data: &str) -> Result<Vec<u8>, String> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(data.trim())
+            .map_err(|e| e.to_string())
+    }
+
     pub fn b64_encode(data: &[u8]) -> String {
         const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
@@ -793,6 +818,134 @@ mod imp {
             };
             return Err(ServerFnError::new(msg));
         }
+        Ok(())
+    }
+
+    pub fn rename_path(
+        path: &str,
+        new_name: &str,
+        remote_id: Option<&str>,
+        remote_root: &str,
+    ) -> Result<(), ServerFnError> {
+        let new_name = new_name.trim();
+        if new_name.is_empty() || new_name.contains('/') || new_name.contains("\\") {
+            return Err(ServerFnError::new("invalid name"));
+        }
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            let abs = remote_abs(remote_root, path).map_err(ServerFnError::new)?;
+            let parent = {
+                let p = std::path::Path::new(&abs);
+                p.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+            };
+            let dst = format!("{}/{}", parent, new_name);
+            let cmd = format!(
+                "mv {} {}",
+                mistraldeck_engine::remote::shq(&abs),
+                mistraldeck_engine::remote::shq(&dst)
+            );
+            let res = mistraldeck_engine::remote::ssh_run(&conn, &cmd, 30_000, None);
+            if res.code != 0 {
+                return Err(ServerFnError::new(res.stderr.trim().to_string()));
+            }
+            return Ok(());
+        }
+        let root = if remote_root.trim().is_empty() {
+            Engine::global().workdir()
+        } else {
+            remote_root.to_string()
+        };
+        let src = confine_in(&root, path)?;
+        let dst = src
+            .parent()
+            .map(|p| p.join(new_name))
+            .ok_or_else(|| ServerFnError::new("invalid path"))?;
+        fs::rename(&src, &dst).map_err(|e| ServerFnError::new(format!("rename failed: {e}")))?;
+        Ok(())
+    }
+
+    pub fn delete_path(
+        path: &str,
+        remote_id: Option<&str>,
+        remote_root: &str,
+    ) -> Result<(), ServerFnError> {
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            let abs = remote_abs(remote_root, path).map_err(ServerFnError::new)?;
+            let is_dir = {
+                let cmd = format!("test -d {}", mistraldeck_engine::remote::shq(&abs));
+                mistraldeck_engine::remote::ssh_run(&conn, &cmd, 10_000, None).code == 0
+            };
+            let cmd = if is_dir {
+                format!("rm -rf -- {}", mistraldeck_engine::remote::shq(&abs))
+            } else {
+                format!("rm -f -- {}", mistraldeck_engine::remote::shq(&abs))
+            };
+            let res = mistraldeck_engine::remote::ssh_run(&conn, &cmd, 60_000, None);
+            if res.code != 0 {
+                return Err(ServerFnError::new(res.stderr.trim().to_string()));
+            }
+            return Ok(());
+        }
+        let root = if remote_root.trim().is_empty() {
+            Engine::global().workdir()
+        } else {
+            remote_root.to_string()
+        };
+        let target = confine_in(&root, path)?;
+        if target.is_dir() {
+            fs::remove_dir_all(&target)
+                .map_err(|e| ServerFnError::new(format!("delete failed: {e}")))?;
+        } else {
+            fs::remove_file(&target)
+                .map_err(|e| ServerFnError::new(format!("delete failed: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Write raw bytes (base64) to `path` — drag&drop attachment upload.
+    /// Confined to the session root; remote goes over SSH.
+    pub fn write_binary(
+        path: &str,
+        b64: &str,
+        remote_id: Option<&str>,
+        remote_root: &str,
+    ) -> Result<(), ServerFnError> {
+        if b64.len() > 24 * 1024 * 1024 {
+            return Err(ServerFnError::new("file too large (limit 16 MB)"));
+        }
+        if let Some(rid) = remote_id.filter(|s| !s.is_empty()) {
+            let conn = Engine::global()
+                .remote_connection(rid)
+                .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
+            let abs = remote_abs(remote_root, path).map_err(ServerFnError::new)?;
+            if let Some(parent) = std::path::Path::new(&abs).parent() {
+                let cmd = format!("mkdir -p {}", mistraldeck_engine::remote::shq(&parent.to_string_lossy()));
+                mistraldeck_engine::remote::ssh_run(&conn, &cmd, 15_000, None);
+            }
+            let cmd = format!("base64 -d > {}", mistraldeck_engine::remote::shq(&abs));
+            let res = mistraldeck_engine::remote::ssh_run(&conn, &cmd, 120_000, Some(b64));
+            if res.code != 0 {
+                return Err(ServerFnError::new(res.stderr.trim().to_string()));
+            }
+            return Ok(());
+        }
+        let root = if remote_root.trim().is_empty() {
+            Engine::global().workdir()
+        } else {
+            remote_root.to_string()
+        };
+        let target = confine_in(&root, path)?;
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| ServerFnError::new(format!("mkdir failed: {e}")))?;
+        }
+        let bytes = b64_decode(b64).map_err(|e| ServerFnError::new(format!("bad base64: {e}")))?;
+        fs::write(&target, bytes).map_err(|e| ServerFnError::new(format!("write failed: {e}")))?;
         Ok(())
     }
 
@@ -1281,6 +1434,56 @@ pub async fn api_save_file(
 ) -> Result<(), ServerFnError> {
     imp::check(&token)?;
     imp::save_file(&path, &content, remote_id.as_deref(), &remote_root)
+}
+
+/// Rename a file/folder inside the session root (file-tree context menu).
+#[server]
+pub async fn api_rename_path(
+    token: String,
+    path: String,
+    new_name: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::rename_path(&path, &new_name, remote_id.as_deref(), &remote_root)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Delete a file/folder inside the session root (context menu, confirmed).
+#[server]
+pub async fn api_delete_path(
+    token: String,
+    path: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::delete_path(&path, remote_id.as_deref(), &remote_root)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Upload dropped bytes to `path` (drag&drop attachments), local or SSH.
+#[server]
+pub async fn api_write_binary(
+    token: String,
+    path: String,
+    b64: String,
+    remote_id: Option<String>,
+    remote_root: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::write_binary(&path, &b64, remote_id.as_deref(), &remote_root)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
 }
 
 #[server]

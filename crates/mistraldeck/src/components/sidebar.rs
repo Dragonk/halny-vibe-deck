@@ -123,6 +123,8 @@ pub fn Sidebar() -> Element {
     let state = use_context::<Signal<ClientState>>();
     let confirm = use_signal(|| None::<ConfirmTarget>);
     let collapsed = use_signal(Vec::<String>::new);
+    // per-project "show all" expansion (default: max 10 rows per project)
+    let more_expanded = use_signal(Vec::<String>::new);
     let ctx = use_signal(|| None::<CtxMenu>);
     // "New project…" picker (Z2): `np_remote` switches it to an SSH host.
     let np_open = use_signal(|| false);
@@ -270,7 +272,7 @@ pub fn Sidebar() -> Element {
     // ---- Prebuilt element lists (avoids nested closure captures) ----
     let group_els: Vec<Element> = groups
         .iter()
-        .map(|g| group_el(state, lang.clone(), g, current, confirm, collapsed, ctx))
+        .map(|g| group_el(state, lang.clone(), g, current, confirm, collapsed, more_expanded, ctx))
         .collect();
     let remote_panes = use_signal(std::collections::HashMap::<String, RemotePane>::new);
     let remotes: Vec<RemoteConnection> = cfg
@@ -633,19 +635,46 @@ fn group_el(
     current: Option<usize>,
     confirm: Signal<Option<ConfirmTarget>>,
     collapsed: Signal<Vec<String>>,
+    more_expanded: Signal<Vec<String>>,
     ctx: Signal<Option<CtxMenu>>,
 ) -> Element {
-    let rows: Vec<Element> = g
+    // Default: at most 10 rows per project group; a "show all" row expands.
+    const GROUP_LIMIT: usize = 10;
+    let all_expanded = more_expanded.read().contains(&g.wd);
+    let mut rows: Vec<Element> = g
         .sessions
         .iter()
         .map(|(idx, m)| session_row(state.clone(), lang.clone(), *idx, m, current, confirm.clone(), ctx.clone()))
         .collect();
     // Z6: past sessions of this project, opened as a lazy preview.
-    let hist_rows: Vec<Element> = g
+    let mut hist_rows: Vec<Element> = g
         .history
         .iter()
         .map(|info| backend_el(state.clone(), info, confirm.clone(), false))
         .collect();
+    let total = rows.len() + hist_rows.len();
+    let more_el: Element = if total > GROUP_LIMIT && !all_expanded {
+        let remaining = total - GROUP_LIMIT;
+        let wd = g.wd.clone();
+        let mut more_expanded = more_expanded.clone();
+        let lbl = loc(&lang, &format!("Pokaż wszystkie ({remaining} więcej)"), &format!("Show all ({remaining} more)"));
+        rsx! {
+            button {
+                class: "session-item session-more-row",
+                onclick: move |_| {
+                    let mut e = more_expanded.write();
+                    if e.contains(&wd) { e.retain(|k| *k != wd); } else { e.push(wd.clone()); }
+                },
+                span { class: "session-name", "{lbl}" }
+            }
+        }
+    } else {
+        VNode::empty()
+    };
+    if !all_expanded && total > GROUP_LIMIT {
+        rows.truncate(GROUP_LIMIT.min(rows.len()));
+        hist_rows.truncate(GROUP_LIMIT.saturating_sub(rows.len()));
+    }
     let title = if g.wd.is_empty() {
         tr(&lang, "noProject").to_string()
     } else {
@@ -724,6 +753,7 @@ fn group_el(
             if !is_collapsed {
                 {rows.iter().cloned()}
                 {hist_rows.iter().cloned()}
+                {more_el}
             }
         }
     }

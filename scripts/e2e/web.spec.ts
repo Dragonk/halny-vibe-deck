@@ -5,7 +5,7 @@
 // surface, the rendered app shell in web mode (brand, sidebar bottom
 // controls) and the remote login flow.
 
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const LOCAL = process.env.VD_LOCAL_URL || 'https://127.0.0.1:8080'
 const REMOTE = process.env.VD_REMOTE_URL || 'https://127.0.0.1:8443'
@@ -45,11 +45,19 @@ test('PWA surface: manifest, service worker, both icon sizes', async ({ request 
   }
 })
 
+async function login(page: Page) {
+  const resp = await page.request.post(`${LOCAL}/api/auth/login`, {
+    data: { username: USER, password: PASS },
+  })
+  expect(resp.status(), 'login POST on the local surface').toBe(200)
+}
+
 test('web shell renders the brand and the web-only controls', async ({ page }) => {
   const errors: string[] = []
   page.on('console', (msg) => {
     if (msg.type() === 'error') errors.push(msg.text())
   })
+  await login(page)
   await page.goto(LOCAL, { waitUntil: 'domcontentloaded' })
 
   // Stable v1.0.27 layout: the browser has no header — the sessions panel
@@ -78,6 +86,9 @@ test('web shell renders the brand and the web-only controls', async ({ page }) =
 })
 
 test('remote login flow: reject, accept, logout', async ({ page }) => {
+  // Cookies are host-scoped (not port-scoped): drop any session inherited
+  // from the local-surface login so this flow starts unauthenticated.
+  await page.context().clearCookies()
   await page.goto(`${REMOTE}/login`, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('#u')).toBeVisible()
   await expect(page.locator('#p')).toBeVisible()

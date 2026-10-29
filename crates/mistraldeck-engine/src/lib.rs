@@ -635,6 +635,23 @@ impl Engine {
                     .collect();
                 if let Some(title) = preview.title.filter(|t| !t.is_empty()) {
                     session.name = title;
+                } else if session.name == "CLI session" {
+                    // No stored title: derive one from the first user prompt
+                    // (stable shows real names, never a placeholder).
+                    let first_user = preview
+                        .messages
+                        .iter()
+                        .find(|m| m.role == "user")
+                        .and_then(|m| m.content.trim().lines().next().map(|l| l.trim().to_string()))
+                        .filter(|l| !l.is_empty());
+                    if let Some(l) = first_user {
+                        let snippet: String = l.chars().take(48).collect();
+                        session.name = if l.chars().count() > 48 {
+                            format!("{snippet}…")
+                        } else {
+                            snippet
+                        };
+                    }
                 }
                 if let Some(cfg) = preview.config {
                     session.last_model = cfg.model;

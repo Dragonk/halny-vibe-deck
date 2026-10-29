@@ -107,6 +107,73 @@ pub struct FileCard {
     pub path: String,
     pub content: String,
     pub meta: String,
+    /// Structured agent profile (agents tab configurator), when available.
+    #[serde(default)]
+    pub agent: Option<AgentView>,
+}
+
+/// One agent profile as the Settings "Agents" configurator sees it
+/// (stable SettingsView agent editor parity).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct AgentView {
+    pub name: String,
+    pub agent_type: String,
+    pub display_name: String,
+    pub description: String,
+    pub active_model: String,
+    pub system_prompt_id: String,
+    pub safety: String,
+    pub enabled_tools: String,
+    pub disabled_tools: String,
+    /// `(tool, permission)` pairs of the agent's `[tools.*]` table.
+    #[serde(default)]
+    pub tool_permissions: Vec<(String, String)>,
+}
+
+#[cfg(feature = "server")]
+impl AgentView {
+    pub fn from_agent(a: &mistraldeck_vibe::files::AgentFile) -> Self {
+        Self {
+            name: a.name.clone(),
+            agent_type: a
+                .agent_type
+                .clone()
+                .unwrap_or_else(|| "agent".to_string()),
+            display_name: a.display_name.clone().unwrap_or_default(),
+            description: a.description.clone().unwrap_or_default(),
+            active_model: a.active_model.clone().unwrap_or_default(),
+            system_prompt_id: a.system_prompt_id.clone().unwrap_or_default(),
+            safety: a.safety.clone().unwrap_or_else(|| "neutral".to_string()),
+            enabled_tools: a.enabled_tools.join(", "),
+            disabled_tools: a.disabled_tools.join(", "),
+            tool_permissions: a.tool_permissions.clone(),
+        }
+    }
+}
+
+/// One patch field set for `api_save_agent` (all optional; empty string
+/// clears the value, matching the CLI "never write empty" rule).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct AgentPatch {
+    #[serde(default)]
+    pub agent_type: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub active_model: Option<String>,
+    #[serde(default)]
+    pub system_prompt_id: Option<String>,
+    #[serde(default)]
+    pub safety: Option<String>,
+    #[serde(default)]
+    pub enabled_tools: Option<String>,
+    #[serde(default)]
+    pub disabled_tools: Option<String>,
+    /// Replace the agent's whole `[tools.*]` table (`None` = keep).
+    #[serde(default)]
+    pub tool_permissions: Option<Vec<(String, String)>>,
 }
 
 #[cfg(feature = "server")]
@@ -478,6 +545,7 @@ fn collect_skill_files(
             path: format!("skills/{skill}/{rel}"),
             content,
             meta: format!("{} B", meta.len()),
+            agent: None,
         });
     }
 }
@@ -522,12 +590,19 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                 } else {
                     String::new()
                 };
+                let agent = if kind == "agents" {
+                    mistraldeck_vibe::files::parse_agent_content(&name, &content)
+                        .map(|a| AgentView::from_agent(&a))
+                } else {
+                    None
+                };
                 out.push(FileCard {
                     kind: kind.to_string(),
                     display_name: name.clone(),
                     path: format!("{kind}/{name}.{ext}"),
                     content,
                     meta,
+                    agent,
                 });
             }
         }
@@ -559,6 +634,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     path: format!("skills/{name}/SKILL.md"),
                     content: fs::read_to_string(&skill_md).unwrap_or_default(),
                     meta: String::new(),
+                    agent: None,
                 });
             }
         }
@@ -612,10 +688,11 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     );
                     FileCard {
                         kind: "agents".into(),
-                        display_name: a.name,
+                        display_name: a.name.clone(),
                         path,
                         content,
                         meta,
+                        agent: Some(AgentView::from_agent(&a)),
                     }
                 })
                 .collect(),
@@ -627,6 +704,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     path: format!("prompts/{}.md", p.name),
                     content: p.content,
                     meta: String::new(),
+                    agent: None,
                 })
                 .collect(),
             "skills" => SkillFile::load_all()
@@ -637,6 +715,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     path: format!("skills/{}/SKILL.md", s.name),
                     content: s.content,
                     meta: String::new(),
+                    agent: None,
                 })
                 .collect(),
             _ => Vec::new(),
@@ -658,12 +737,15 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                         a.active_model.clone().unwrap_or_else(|| "—".to_string()),
                         a.agent_type.clone().unwrap_or_else(|| "agent".to_string())
                     );
+                    let agent = mistraldeck_vibe::files::parse_agent_content(&a.name, &a.content)
+                        .map(|x| AgentView::from_agent(&x));
                     FileCard {
                         kind: "agents".to_string(),
                         display_name: a.name.clone(),
                         path: format!("agents/{}.toml", a.name),
                         content: a.content,
                         meta,
+                        agent,
                     }
                 })
                 .collect(),
@@ -675,6 +757,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     path: format!("prompts/{}.md", p.name),
                     content: p.content,
                     meta: String::new(),
+                    agent: None,
                 })
                 .collect(),
             "skills" => remote_vibe::get_remote_skills(conn, dir)
@@ -685,6 +768,7 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                     path: format!("skills/{}/SKILL.md", s.name),
                     content: s.content,
                     meta: format!("{} files", s.files.len()),
+                    agent: None,
                 })
                 .collect(),
             _ => Vec::new(),
@@ -1205,6 +1289,98 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
         with_cfg(&ctx, |cfg| cfg.remove_tool_permission(name))
     }
 
+    /// Apply a structured patch to one agent profile and persist the TOML
+    /// (Settings "Agents" configurator, stable parity). Local and SSH.
+    pub fn save_agent(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&mistraldeck_core::snapshot::RemoteConnection>,
+        name: &str,
+        patch: &AgentPatch,
+    ) -> Result<(), ServerFnError> {
+        use mistraldeck_vibe::files::{agent_file_toml, parse_agent_content, AgentFile};
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ServerFnError::new("empty agent name"));
+        }
+        let apply = |a: &mut AgentFile| {
+            if let Some(v) = &patch.agent_type {
+                a.agent_type = if v.is_empty() { None } else { Some(v.clone()) };
+            }
+            if let Some(v) = &patch.display_name {
+                a.display_name = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
+            if let Some(v) = &patch.description {
+                a.description = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
+            if let Some(v) = &patch.active_model {
+                a.active_model = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
+            if let Some(v) = &patch.system_prompt_id {
+                a.system_prompt_id = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
+            if let Some(v) = &patch.safety {
+                a.safety = if v.trim().is_empty() { None } else { Some(v.trim().to_string()) };
+            }
+            if let Some(v) = &patch.enabled_tools {
+                a.enabled_tools = v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+            }
+            if let Some(v) = &patch.disabled_tools {
+                a.disabled_tools = v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+            }
+            if let Some(list) = &patch.tool_permissions {
+                a.tool_permissions = list.clone();
+            }
+        };
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        match &ctx {
+            Ctx::Local(base) => {
+                let agents = base.join("agents");
+                let path = agents.join(format!("{name}.toml"));
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                let mut a = parse_agent_content(name, &content).unwrap_or_else(|| AgentFile {
+                    name: name.to_string(),
+                    agent_type: None,
+                    active_model: None,
+                    system_prompt_id: None,
+                    display_name: None,
+                    description: None,
+                    enabled_tools: Vec::new(),
+                    disabled_tools: Vec::new(),
+                    tool_permissions: Vec::new(),
+                    safety: None,
+                });
+                apply(&mut a);
+                fs::create_dir_all(&agents)
+                    .map_err(|e| ServerFnError::new(format!("mkdir failed: {e}")))?;
+                fs::write(&path, agent_file_toml(&a))
+                    .map_err(|e| ServerFnError::new(format!("write failed: {e}")))?;
+                Ok(())
+            }
+            Ctx::Remote { conn, dir } => {
+                let existing = remote_vibe::get_remote_agents(conn, dir)
+                    .into_iter()
+                    .find(|a| a.name == name);
+                let content = existing.map(|a| a.content).unwrap_or_default();
+                let mut a = parse_agent_content(name, &content).unwrap_or_else(|| AgentFile {
+                    name: name.to_string(),
+                    agent_type: None,
+                    active_model: None,
+                    system_prompt_id: None,
+                    display_name: None,
+                    description: None,
+                    enabled_tools: Vec::new(),
+                    disabled_tools: Vec::new(),
+                    tool_permissions: Vec::new(),
+                    safety: None,
+                });
+                apply(&mut a);
+                remote_vibe::save_remote_agent_raw(conn, dir, name, &agent_file_toml(&a))
+                    .map_err(ServerFnError::new)
+            }
+        }
+    }
+
     pub fn set_list(
         scope: &str,
         cwd: &str,
@@ -1526,6 +1702,24 @@ pub async fn api_remove_tool_permission(
     imp::check(&token)?;
     tokio::task::spawn_blocking(move || {
         imp::remove_tool_permission(&scope, &cwd, conn.as_ref(), &tool)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Apply a structured patch to one agent profile (Agents configurator).
+#[server]
+pub async fn api_save_agent(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    name: String,
+    patch: AgentPatch,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::save_agent(&scope, &cwd, conn.as_ref(), &name, &patch)
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?

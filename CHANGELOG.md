@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.99.8 — settings/dock/sidebar round (2026-10-29)
+
+**Server**
+- With remote access enabled the **app port itself** is now the public surface: `0.0.0.0` + HTTPS + login (no more unauthenticated `https://localhost:8080` when the server is on, and no more silently-disabled listener when the configured port equals the app port). Remote off = loopback-only HTTPS without login, as before.
+- The access hint in Settings → Server lists **every** device IP (NIC *and* VPN — getifaddrs on Unix); loopback is no longer shown.
+
+**Settings**
+- **Server tab**: LAN-only URLs, custom certificate paths (`cert.pem`/`key.pem`), cert-in-use indicator.
+- **Agents tab** is the stable edition's real configurator: master list (display name + type), detail form with type select, display name, description, safety, model select (project+global models), system-prompt select (builtins + prompts), enabled/disabled tools, per-agent `[tools.*]` permissions — saved through a new structured `api_save_agent` (local + SSH). Right-hand collapsible available-tools panel like stable.
+- **Tools tab**: two-panel stable layout — permissions configurator on the left, the **available tools** list on the right.
+- **Skills tab**: stable header (name + Create / Import folder / Import .zip / Open folder), file counts in the master list, open-externally + delete in the detail header.
+- **Prompts tab** and the shared file panel restyled to the stable master-detail look (header add-row, `master-item` rows, field-textarea editor, rename-on-change, remove).
+- **TOML tab**: the file list is now a **tree** — `config.toml` plus expandable `agents/` `prompts/` `skills/` folders (click to expand, click again to collapse) with a per-folder ＋ add-file row.
+- **General tab**: the bare "Detected agent" row is gone; the CLI (mistral-vibe) row shows its version, and when the CLI is missing it offers **Install** instead of an update button.
+
+**Preview (dock)**
+- Save button is an icon (floppy) with the label as tooltip.
+- Folder rows expand on click (children were keyed by name instead of path — nested folders never opened).
+- The file tree roots at the **current session's project** (local `confine` now uses the session root, not the engine workdir) and works over SSH the same way.
+- Right-click context menu on file rows: Preview / Download / Open externally (desktop) / Rename / Delete (local + SSH via new `api_rename_path`, `api_delete_path`, `api_write_binary`).
+- Drag & drop files over the chat uploads them into `<project>/.halny-attachments/` (local or SSH) and inserts `@path` markers.
+
+**Browser/mobile**
+- On desktop-width browsers the preview **FAB stays visible and toggles** the dock (it used to vanish when the panel was open, leaving no way to close it).
+- On phones the preview panel now slides in with the same animation as the sessions list (dock stays mounted, `.open` class animates `translateX`).
+
+**Chat / sidebar**
+- Chat auto-scroll is robust now: a body-level MutationObserver plus a Rust-side effect on session/message change — streaming and opening a historical session both land at the bottom (verified in e2e).
+- The input textarea has no native border (`border: none`) — no more "two bars" at the bottom of the input card.
+- Sidebar: each project group shows **max 10 sessions** with a "show all (N more)" row; the projects list fills the whole sidebar height and scrolls on its own, so SSH groups and the Stats/History/Settings nav are always visible.
+- History rows no longer show "CLI session": titles fall back to the unified-store index entry and then to the first user prompt.
+
 ## 1.99.7 — user-reported defects round 3 (2026-10-29)
 
 **Server / browser**

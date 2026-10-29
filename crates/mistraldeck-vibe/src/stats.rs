@@ -151,6 +151,11 @@ pub fn load_sessions() -> Vec<VibeSession> {
                         s.stats.session_completion_tokens,
                     );
                 }
+                if s.title.as_deref().map(|t| t.is_empty()).unwrap_or(true) {
+                    if let Some(t) = index_title(&s.session_id) {
+                        s.title = Some(t);
+                    }
+                }
                 sessions.push(s);
             }
         }
@@ -158,6 +163,10 @@ pub fn load_sessions() -> Vec<VibeSession> {
     // unified layout (newer CLI): token/cost stats live in
     // generations/<gen>/projection-state.json, not meta.json
     let unified = dir.join("unified");
+    let index_raw = std::fs::read_to_string(unified.join(".session-index.json")).ok();
+    let index_idx: Option<serde_json::Value> = index_raw
+        .as_deref()
+        .and_then(|r| serde_json::from_str(r).ok());
     if let Ok(entries) = std::fs::read_dir(&unified) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -188,6 +197,15 @@ pub fn load_sessions() -> Vec<VibeSession> {
                     &path,
                     s.config.as_ref().and_then(|c| c.active_model.as_deref()),
                 );
+                if s.title.as_deref().map(|t| t.is_empty()).unwrap_or(true) {
+                    if let (Some(idx), Some(t)) = (
+                        index_idx.as_ref().and_then(|i| find_index_entry(i, &s.session_id)),
+                        index_title(&s.session_id),
+                    ) {
+                        let _ = idx;
+                        s.title = Some(t);
+                    }
+                }
                 sessions.push(s);
             }
         }
@@ -951,6 +969,15 @@ fn read_session_index_entry_at(
     let idx: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let entry = find_index_entry(&idx, session_id)?;
     Some(index_entry_fields(&entry))
+}
+
+/// Title of a session from `unified/.session-index.json` (None when absent).
+pub fn index_title(session_id: &str) -> Option<String> {
+    let dir = sessions_log_dir().join("unified");
+    let raw = std::fs::read_to_string(dir.join(".session-index.json")).ok()?;
+    let idx: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let entry = find_index_entry(&idx, session_id)?;
+    index_entry_fields(&entry).0
 }
 
 /// Find one entry of `.session-index.json` by session id (identity block

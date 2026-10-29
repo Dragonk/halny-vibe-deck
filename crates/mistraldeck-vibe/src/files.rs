@@ -34,6 +34,8 @@ pub struct AgentFile {
     pub disabled_tools: Vec<String>,
     /// `(tool_name, permission)` pairs from `[tools.<name>]` blocks.
     pub tool_permissions: Vec<(String, String)>,
+    /// Approval safety profile (`safety = "…"`), stable parity.
+    pub safety: Option<String>,
 }
 
 impl AgentFile {
@@ -145,6 +147,11 @@ pub fn agent_file_data(a: &AgentFile) -> Table {
     if a.agent_type.as_deref() == Some("subagent") {
         table.insert("agent_type".into(), Value::from("subagent"));
     }
+    if let Some(safety) = &a.safety {
+        if !safety.is_empty() {
+            table.insert("safety".into(), Value::from(safety.as_str()));
+        }
+    }
     table
 }
 
@@ -165,6 +172,10 @@ fn parse_agent(name: &str, table: &Table) -> AgentFile {
         .get("agent_type")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let safety = table
+        .get("safety")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let mut tool_permissions = Vec::new();
     if let Some(Value::Table(tools)) = table.get("tools") {
         for (tool, entry) in tools {
@@ -180,6 +191,7 @@ fn parse_agent(name: &str, table: &Table) -> AgentFile {
     AgentFile {
         name: name.to_string(),
         agent_type,
+        safety,
         active_model: table
             .get("active_model")
             .and_then(Value::as_str)

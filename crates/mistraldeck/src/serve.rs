@@ -308,6 +308,7 @@ async fn remote_auth(req: Request, next: Next) -> Response {
         || path == "/sw.js"
         || path == "/manifest.webmanifest"
         || path == "/icon-256.png"
+        || path == "/icon-512.png"
     {
         return next.run(req).await;
     }
@@ -364,15 +365,40 @@ fn serve_dir() -> Option<PathBuf> {
     Some(parent.join("serve"))
 }
 
-/// Device addresses the HTTPS listeners are reachable on (stable parity:
-/// `serveStatus().lanUrls`). The primary outbound IPv4 comes from a UDP
-/// "connect" (no packets are sent — it only consults the routing table);
-/// loopback is always included.
+/// Every non-loopback IPv4 address of the device — the physical NIC *and*
+/// VPN interfaces (stable parity: `os.networkInterfaces()` in
+/// `serveStatus().lanUrls`). Unix enumerates the interfaces via getifaddrs;
+/// other platforms fall back to the outbound-interface trick (a UDP
+/// "connect" sends no packets — it only consults the routing table).
 pub fn local_lan_ips() -> Vec<String> {
+    #[cfg(unix)]
+    {
+        let mut ips: Vec<String> = Vec::new();
+        unsafe {
+            let mut ifap: *mut libc::ifaddrs = std::ptr::null_mut();
+            if libc::getifaddrs(&mut ifap) == 0 {
+                let mut cur = ifap;
+                while !cur.is_null() {
+                    let ifa = &*cur;
+                    if !ifa.ifa_addr.is_null() && (ifa.ifa_addr as u16) as i32 == libc::AF_INET {
+                        let sa: &libc::sockaddr_in = &*(ifa.ifa_addr as *const libc::sockaddr_in);
+                        let octets = sa.sin_addr.s_addr.to_ne_bytes();
+                        let ip = format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3]);
+                        if !ip.starts_with("127.") && !ips.contains(&ip) {
+                            ips.push(ip);
+                        }
+                    }
+                    cur = ifa.ifa_next;
+                }
+                libc::freeifaddrs(ifap);
+            }
+        }
+        if !ips.is_empty() {
+            return ips;
+        }
+    }
     let mut ips: Vec<String> = Vec::new();
     if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
-        // No traffic is generated; the connect only picks the outbound
-        // interface. Any routable target works.
         if sock.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = sock.local_addr() {
                 let ip = addr.ip().to_string();
@@ -701,14 +727,21 @@ pub fn serve_info() -> crate::api::ServeInfoView {
     let local_port = LOCAL_PORT.load(std::sync::atomic::Ordering::Relaxed);
     let cfg = mistraldeck_engine::EngineConfig::load();
     let remote_on = cfg.remote_enabled && cfg.auth.is_some();
-    let mut urls: Vec<String> =
-        vec![format!("https://127.0.0.1:{local_port} · https://localhost:{local_port}")];
-    for ip in local_lan_ips() {
-        if remote_on {
-            urls.push(format!("https://{ip}:{}", cfg.remote_port));
-        } else {
-            urls.push(format!("https://{ip}:{local_port}"));
-        }
+    // LAN URLs only (the loopback address is implied and was reported as
+    // noise): every interface IP — NIC and VPN alike. With remote access on,
+    // the app port itself is the 0.0.0.0+login surface when the configured
+    // remote port equals it, otherwise the remote port is the public one.
+    let port = if remote_on && cfg.remote_port != local_port {
+        cfg.remote_port
+    } else {
+        local_port
+    };
+    let mut urls: Vec<String> = local_lan_ips()
+        .iter()
+        .map(|ip| format!("https://{ip}:{port}"))
+        .collect();
+    if urls.is_empty() {
+        urls.push(format!("https://127.0.0.1:{local_port}"));
     }
     crate::api::ServeInfoView {
         remote_enabled: remote_on,

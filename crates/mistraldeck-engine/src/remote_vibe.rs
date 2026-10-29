@@ -170,6 +170,7 @@ fn to_remote_agent(a: AgentFile) -> RemoteAgentFile {
             .into_iter()
             .map(|(tool, permission)| ToolPermissionEntry { tool, permission })
             .collect(),
+        safety: a.safety,
         content: String::new(),
     }
 }
@@ -189,6 +190,7 @@ fn from_remote_agent(name: &str, a: &RemoteAgentFile) -> AgentFile {
             .iter()
             .map(|t| (t.tool.clone(), t.permission.clone()))
             .collect(),
+        safety: a.safety.clone(),
     }
 }
 

@@ -288,6 +288,15 @@ async fn git_push_action(
     git_busy.set(false);
 }
 
+fn loc2(lang: &str, pl: &str, en: &str) -> String {
+    if lang == "pl" { pl.to_string() } else { en.to_string() }
+}
+
+/// JSON-string-escape for JS eval snippets.
+fn js_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 pub fn Dock() -> Element {
     let state = use_context::<Signal<ClientState>>();
 
@@ -316,9 +325,12 @@ pub fn Dock() -> Element {
     }
     let wd = fs_root.clone();
 
-    if !open || view != View::Chat {
+    if view != View::Chat {
         return VNode::empty();
     }
+    // Rendered (hidden) even when closed so the mobile slide-in animation
+    // has a mounted element to animate.
+    let dock_cls = if open { "dock open" } else { "dock" };
 
     // local state that survives tab switches but resets with the component
     let cwd = use_signal(String::new);
@@ -521,7 +533,7 @@ pub fn Dock() -> Element {
     let mut active_g = active.clone();
 
     rsx! {
-        aside { class: "dock",
+        aside { class: "{dock_cls}",
             div { class: "dock-resize-handle" }
             button {
                 class: "mobile-panel-close",
@@ -596,6 +608,7 @@ fn files_panel(
     active: Signal<Option<u64>>,
     next_id: Signal<u64>,
 ) -> Element {
+    let file_ctx = use_signal(|| None::<FileCtx>);
     let list = entries.read().clone();
     let msg = files_msg.read().clone();
 
@@ -705,6 +718,7 @@ fn files_panel(
                 tabs.clone(),
                 active.clone(),
                 next_id.clone(),
+                file_ctx.clone(),
             )
         })
         .collect();
@@ -720,6 +734,199 @@ fn files_panel(
         rsx! { div { class: "git-error", "{msg}" } }
     };
 
+    // right-click menu (stable FileTree parity: preview / download / open
+    // externally / rename / delete)
+    let ctx_el: Element = if let Some(c) = file_ctx.read().clone() {
+        let lang2 = lang.clone();
+        let state2 = state.clone();
+        let rid2 = remote_id.clone();
+        let root2 = root.clone();
+        let mut file_ctx2 = file_ctx.clone();
+        let c2 = c.clone();
+        let rename_prompt = loc2(&lang2, "Nowa nazwa", "New name");
+        rsx! {
+            div {
+                class: "ctx-backdrop",
+                onclick: {
+                    let mut file_ctx = file_ctx2.clone();
+                    move |_| file_ctx.set(None)
+                },
+            }
+            div {
+                class: "ctx-menu",
+                style: "left:{c.x}px;top:{c.y}px;",
+                onclick: move |e| e.stop_propagation(),
+                button {
+                    class: "ctx-menu-item",
+                    onclick: {
+                        let mut file_ctx = file_ctx2.clone();
+                        let c = c2.clone();
+                        let state = state2.clone();
+                        let mut tabs = tabs.clone();
+                        let mut active = active.clone();
+                        let mut next_id = next_id.clone();
+                        let rid = rid2.clone();
+                        let root = root2.clone();
+                        move |_| {
+                            file_ctx.set(None);
+                            let c = c.clone();
+                            let state = state.clone();
+                            let rid = rid.clone();
+                            let root = root.clone();
+                            let mut tabs = tabs.clone();
+                            let mut active = active.clone();
+                            let mut next_id = next_id.clone();
+                            let mut expanded = expanded.clone();
+                            let mut children = children.clone();
+                            let mut files_msg = files_msg.clone();
+                            if c.is_dir {
+                                // expand/collapse like a click
+                                let mut expanded = expanded.clone();
+                                let mut ch = children.clone();
+                                let mut fm = files_msg.clone();
+                                let dir = c.path.clone();
+                                let state = state.clone();
+                                let rid = rid.clone();
+                                let root = root.clone();
+                                spawn(async move {
+                                    {
+                                        let mut e = expanded.write();
+                                        if e.iter().any(|p| *p == dir) { e.retain(|p| *p != dir); return; }
+                                        e.push(dir.clone());
+                                    }
+                                    if !ch.read().contains_key(&dir) {
+                                        match api_list_dir(token(&state), dir.clone(), rid, root).await {
+                                            Ok(v) => { ch.write().insert(dir, v); }
+                                            Err(e) => fm.set(e.to_string()),
+                                        }
+                                    }
+                                });
+                            } else {
+                                open_file_tab(state, tabs, active, next_id, c.path.clone(), c.name.clone(), rid, root);
+                            }
+                        }
+                    },
+                    "👁 {loc2(&lang2, \"Podgląd\", \"Preview\")}"
+                }
+                if !c.is_dir {
+                    button {
+                        class: "ctx-menu-item",
+                        onclick: {
+                            let mut file_ctx = file_ctx2.clone();
+                            let c = c2.clone();
+                            let state = state2.clone();
+                            let rid = rid2.clone();
+                            let root = root2.clone();
+                            move |_| {
+                                file_ctx.set(None);
+                                let state = state.clone();
+                                let c = c.clone();
+                                let rid = rid.clone();
+                                let root = root.clone();
+                                spawn(async move {
+                                    match crate::fsgit::api_download_base64(token(&state), c.path.clone(), rid, root).await {
+                                        Ok(b64) => {
+                                            let _ = dioxus::document::eval(&format!(
+                                                "var a=document.createElement('a');a.href='data:application/octet-stream;base64,'+{};a.download={};document.body.appendChild(a);a.click();a.remove();",
+                                                js_str(&b64), js_str(&c.name)
+                                            )).await;
+                                        }
+                                        Err(_) => {}
+                                    }
+                                });
+                            }
+                        },
+                        "⬇ {loc2(&lang2, \"Pobierz\", \"Download\")}"
+                    }
+                }
+                if crate::state::is_desktop() && remote_id.is_none() {
+                    button {
+                        class: "ctx-menu-item",
+                        onclick: {
+                            let mut file_ctx = file_ctx2.clone();
+                            let c = c2.clone();
+                            let state = state2.clone();
+                            move |_| {
+                                file_ctx.set(None);
+                                let state = state.clone();
+                                let c = c.clone();
+                                spawn(async move {
+                                    let _ = crate::fsgit::api_open_externally(token(&state), c.path.clone()).await;
+                                });
+                            }
+                        },
+                        "↗ {loc2(&lang2, \"Otwórz zewnętrznie\", \"Open externally\")}"
+                    }
+                }
+                button {
+                    class: "ctx-menu-item",
+                    onclick: {
+                        let mut file_ctx = file_ctx2.clone();
+                        let c = c2.clone();
+                        let state = state2.clone();
+                        let rid = rid2.clone();
+                        let root = root2.clone();
+                        move |_| {
+                            file_ctx.set(None);
+                            let state = state.clone();
+                            let c = c.clone();
+                            let rid = rid.clone();
+                            let root = root.clone();
+                            let rename_prompt = rename_prompt.clone();
+                            spawn(async move {
+                                let new_name = {
+                                    #[cfg(any(feature = "web", feature = "desktop"))]
+                                    {
+                                        match dioxus::document::eval(&format!(
+                                            "return window.prompt({}, {});",
+                                            js_str(&rename_prompt),
+                                            js_str(&c.name)
+                                        ))
+                                        .join::<String>()
+                                        .await
+                                        {
+                                            Ok(v) => v,
+                                            Err(_) => String::new(),
+                                        }
+                                    }
+                                    #[cfg(not(any(feature = "web", feature = "desktop")))]
+                                    { String::new() }
+                                };
+                                let new_name = new_name.trim().to_string();
+                                if new_name.is_empty() || new_name == c.name { return; }
+                                let _ = crate::fsgit::api_rename_path(token(&state), c.path.clone(), new_name, rid, root).await;
+                            });
+                        }
+                    },
+                    "📝 {loc2(&lang2, \"Zmień nazwę\", \"Rename\")}"
+                }
+                button {
+                    class: "ctx-menu-item danger",
+                    onclick: {
+                        let mut file_ctx = file_ctx2.clone();
+                        let c = c2.clone();
+                        let state = state2.clone();
+                        let rid = rid2.clone();
+                        let root = root2.clone();
+                        move |_| {
+                            file_ctx.set(None);
+                            let state = state.clone();
+                            let c = c.clone();
+                            let rid = rid.clone();
+                            let root = root.clone();
+                            spawn(async move {
+                                let _ = crate::fsgit::api_delete_path(token(&state), c.path.clone(), rid, root).await;
+                            });
+                        }
+                    },
+                    "🗑 {loc2(&lang2, \"Usuń\", \"Delete\")}"
+                }
+            }
+        }
+    } else {
+        VNode::empty()
+    };
+
     rsx! {
         div { class: "filetree",
             div { class: "filetree-root", style: "display:flex;gap:2px;flex-wrap:wrap;",
@@ -730,11 +937,22 @@ fn files_panel(
                 {row_els.iter().cloned()}
                 {empty_el}
             }
+            {ctx_el}
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Right-click target in the dock file tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileCtx {
+    pub x: f64,
+    pub y: f64,
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
 fn file_row(
     state: Signal<ClientState>,
     e: &FileEntry,
@@ -747,6 +965,7 @@ fn file_row(
     tabs: Signal<Vec<PreviewTab>>,
     active: Signal<Option<u64>>,
     next_id: Signal<u64>,
+    file_ctx: Signal<Option<FileCtx>>,
 ) -> Element {
     let name = e.name.clone();
     let path = e.path.clone();
@@ -768,6 +987,16 @@ fn file_row(
             class: "filetree-item",
             style: "padding-left:{depth * 12 + 4}px;",
             title: "{path}",
+            oncontextmenu: {
+                let mut file_ctx = file_ctx.clone();
+                let path = path.clone();
+                let name = name.clone();
+                move |e| {
+                    e.prevent_default();
+                    let p = e.data().client_coordinates();
+                    file_ctx.set(Some(FileCtx { x: p.x, y: p.y, path: path.clone(), name: name.clone(), is_dir }));
+                }
+            },
             onclick: {
                 let state = state.clone();
                 let mut expanded = expanded.clone();
@@ -791,7 +1020,7 @@ fn file_row(
                             return;
                         }
                         let dir = path.clone();
-                        let key = name.clone();
+                        let key = path.clone();
                         let rid = remote_id.clone();
                         let root = root.clone();
                         let mut children = children;
@@ -1034,6 +1263,7 @@ fn FilePreviewTab(
                 rsx! {
                     button {
                         class: if dirty { "file-preview-btn primary" } else { "file-preview-btn" },
+                        title: if is_saving { "{tr(&lang, \"previewSaving\")}" } else { "{tr(&lang, \"previewSave\")}" },
                         disabled: !dirty || is_saving,
                         onclick: {
                             let st = state.clone();
@@ -1078,7 +1308,14 @@ fn FilePreviewTab(
                                 });
                             }
                         },
-                        if is_saving { "{tr(&lang, \"previewSaving\")}" } else { "{tr(&lang, \"previewSave\")}" }
+                        svg {
+                            width: "14", height: "14", view_box: "0 0 24 24",
+                            fill: "none", stroke: "currentColor",
+                            "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
+                            path { d: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" }
+                            polyline { points: "17 21 17 13 7 13 7 21" }
+                            polyline { points: "7 3 7 8 15 8" }
+                        }
                     }
                 }
             } else {

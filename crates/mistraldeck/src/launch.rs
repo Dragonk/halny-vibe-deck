@@ -70,16 +70,19 @@ pub fn main_dispatch(force_headless: bool) {
             );
         }
         let remote_port = cfg.remote_port;
-        if remote_on && remote_port == port {
-            eprintln!(
-                "mistraldeck: remote port equals the local port ({port}) - pick a different port in Settings → Zdalne."
-            );
-        }
+        // When the configured remote port equals the app port, the app port
+        // itself becomes the 0.0.0.0 + login surface (see below) — no
+        // separate listener needed, nothing is silently disabled anymore.
         let start_remote = remote_on && remote_port != port;
         if remote_on {
             let ips = crate::serve::local_lan_ips().join(", ");
+            let main_desc = if remote_port == port {
+                format!("https://0.0.0.0:{port}")
+            } else {
+                format!("https://0.0.0.0:{remote_port}")
+            };
             println!(
-                "mistraldeck: remote access on https://0.0.0.0:{remote_port} (device: {ips}) — login required"
+                "mistraldeck: remote access on {main_desc} (device: {ips}) — HTTPS + login required"
             );
         }
 
@@ -110,14 +113,25 @@ pub fn main_dispatch(force_headless: bool) {
             // PWA static routes (sw.js / manifest / icon) served from the
             // binary itself, and the v0.13.4 gzip layer over both listeners.
             let router = crate::pwa::install_pwa_routes(router);
-            // Main app listener: HTTPS-only on the loopback interface.
+            // Main app listener: HTTPS-only.
+            // - remote access OFF: loopback only (127.0.0.1), no login — the
+            //   local app surface;
+            // - remote access ON: 0.0.0.0 with the login page, exactly like
+            //   the stable edition's serve listener — reachable via the
+            //   device's IP and every request (incl. localhost) requires
+            //   authentication.
             {
                 let local_router = router
                     .clone()
                     .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
+                let (host, require_login) = if remote_on {
+                    ("0.0.0.0", true)
+                } else {
+                    ("127.0.0.1", false)
+                };
                 tokio::spawn(async move {
                     if let Err(e) =
-                        crate::serve::run_local_https(local_router, "127.0.0.1", port, false).await
+                        crate::serve::run_local_https(local_router, host, port, require_login).await
                     {
                         eprintln!("mistraldeck: local HTTPS server error: {e}");
                     }
