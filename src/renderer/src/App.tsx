@@ -335,6 +335,14 @@ export default function App(): React.JSX.Element {
           break
         }
 
+        case 'SubagentProgress':
+        case 'SubagentFinished':
+        case 'SubagentStarted': {
+          // v1.0.37: live state of a spawned subagent (elapsed, steps, work).
+          useStore.getState().applySubagentEvent(d as Record<string, unknown>)
+          break
+        }
+
         case 'SessionLoadProgress': {
           const store = useStore.getState()
           store.setSessionLoadProgress({

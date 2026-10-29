@@ -6977,3 +6977,50 @@ code {
 .np-item:hover { background: var(--surface); }
 .np-item-icon { flex-shrink: 0; }
 .np-loading { padding: 14px 10px; font-size: 12px; color: var(--text-dim); text-align: center; }
+
+/* v1.0.37: live subagent card + a spinner/elapsed counter for every running
+   tool. A command or an agent can run for many minutes; the old card showed a
+   static "…" (or a tick after the app closed the call) with no sense of
+   progress. */
+.subagent-card { padding: 8px 10px; border-radius: 8px; background: var(--panel-2, rgba(255,255,255,0.03)); border: 1px solid var(--border, #2a2a2f); margin: 6px 0; }
+.subagent-card.running { border-color: var(--accent, #7c6bff); }
+.subagent-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.subagent-status { display: inline-flex; align-items: center; width: 14px; height: 14px; justify-content: center; flex-shrink: 0; }
+.subagent-status svg { width: 13px; height: 13px; }
+.subagent-status.running { color: var(--accent, #7c6bff); }
+.subagent-status.done { color: var(--ok, #3fb950); }
+.subagent-status.error { color: var(--danger, #e5534b); }
+.subagent-elapsed { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-left: auto; }
+.subagent-truncated { font-size: 10px; color: var(--text-muted); border: 1px solid var(--border, #2a2a2f); border-radius: 4px; padding: 0 4px; }
+.subagent-steps { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.subagent-step { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.subagent-step-icon { width: 12px; height: 12px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.subagent-step-icon svg { width: 11px; height: 11px; }
+.subagent-step.running { color: var(--text); }
+.subagent-step.running .subagent-step-icon { color: var(--accent, #7c6bff); }
+.subagent-step.error { color: var(--danger, #e5534b); }
+.subagent-work-tool { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
+.subagent-work-tool svg { width: 10px; height: 10px; }
+.subagent-work-tool.running { color: var(--text); }
+.subagent-work-tool.error { color: var(--danger, #e5534b); }
+
+/* every running tool call: live counter next to the label */
+.step-elapsed { margin-left: 6px; font-size: 10px; color: var(--text-muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.tool-no-output { font-size: 11px; color: var(--text-muted); font-style: italic; padding: 2px 0; }
+.tool-no-output.running { display: flex; align-items: center; gap: 6px; font-style: normal; }
+.tool-spin-wrap { display: inline-flex; width: 12px; height: 12px; color: var(--accent, #7c6bff); }
+.tool-spin-wrap svg { width: 12px; height: 12px; }
+
+/* v1.0.37: agents.list result table (it used to render the bare title) */
+.agents-list-card { padding: 8px 10px; border-radius: 8px; background: var(--panel-2, rgba(255,255,255,0.03)); border: 1px solid var(--border, #2a2a2f); margin: 6px 0; }
+.agents-list-header { display: flex; align-items: center; gap: 8px; }
+.agents-list-title { font-size: 12px; color: var(--text); }
+.agents-list-empty { font-size: 11px; color: var(--text-muted); font-style: italic; margin-top: 4px; }
+.agents-list-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 11px; }
+.agents-list-table th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 2px 6px 2px 0; border-bottom: 1px solid var(--border, #2a2a2f); }
+.agents-list-table td { padding: 3px 6px 3px 0; vertical-align: top; }
+.agents-list-name { color: var(--text); font-family: var(--font-mono, monospace); }
+.agents-list-status { display: flex; align-items: center; gap: 5px; color: var(--text-muted); }
+.agents-list-status svg { width: 11px; height: 11px; }
+.agents-list-status.error { color: var(--danger, #e5534b); }
+.agents-list-error { color: var(--danger, #e5534b); opacity: 0.8; }

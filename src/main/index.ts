@@ -14,6 +14,9 @@ import {
   addToQueue,
   removeFromQueue,
   clearQueue,
+  promoteInQueue,
+  queueRevision,
+  updateQueueText,
   queueSessionIds,
 } from "./promptQueue";
 import { loadConfig, saveConfig, AppConfig } from "./config";
@@ -160,9 +163,17 @@ const remoteAcpManagers = new Map<string, AcpManager>()
 let mainWinRef: BrowserWindow | null = null
 
 // v1.0.24: every client (window + all web/PWA views) sees the same queue.
+// v1.0.37: the payload carries a revision. The client ignores an older
+// revision, so a locally reordered view can no longer be resurrected by a
+// late broadcast (and the order is server-owned anyway).
+function queuePayload(): { rev: number; items: ReturnType<typeof listQueue> } {
+  return { rev: queueRevision(), items: listQueue() };
+}
+
 function broadcastQueue(): void {
-  mainWinRef?.webContents.send("queue:changed", listQueue());
-  broadcastToWeb("queue:changed", [listQueue()]);
+  const payload = queuePayload();
+  mainWinRef?.webContents.send("queue:changed", payload);
+  broadcastToWeb("queue:changed", [payload]);
 }
 
 // v1.0.24: the server-side queue flush - one session at a time; a
@@ -732,6 +743,49 @@ app.whenReady().then(() => {
     clearQueue();
     broadcastQueue();
     return { ok: true };
+  });
+
+  // v1.0.37: queue mutations the client is not allowed to fake locally.
+  ipcMain.handle("queue:update", (_e, id: string, text: string) => {
+    updateQueueText(id, text, text);
+    broadcastQueue();
+    return { ok: true };
+  });
+
+  ipcMain.handle("queue:promote", (_e, id: string) => {
+    const ok = promoteInQueue(id);
+    broadcastQueue();
+    return { ok };
+  });
+
+  /**
+   * "Send this one now". Server-side, in this order: promote it to the front
+   * of its session, stop the running turn, WAIT until the worker is idle, then
+   * flush. The old client-side version only reordered its own copy and
+   * cancelled the turn - deliverQueued refuses while a turn is in flight, so
+   * the prompt was not delivered next (or at all).
+   */
+  ipcMain.handle("queue:send-now", async (_e, id: string) => {
+    const item = listQueue().find((q) => q.id === id);
+    if (!item) return { ok: false, error: "not-queued" };
+    promoteInQueue(id);
+    broadcastQueue();
+    const mgr = item.remoteId ? getRemoteManager(item.remoteId) : acpManager;
+    try {
+      if (mgr.busySessionIds().includes(item.acpSessionId)) {
+        await mgr.cancelSession(item.acpSessionId);
+      }
+      // wait for the turn to actually end (the cancel reply is not the end)
+      const deadline = Date.now() + 60_000;
+      while (mgr.busySessionIds().includes(item.acpSessionId) && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      await flushQueueFor(item.acpSessionId);
+      broadcastQueue();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // v1.0.25: re-pull the CLI's session list into the sidebar - a client

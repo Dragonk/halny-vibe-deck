@@ -25,6 +25,18 @@ export interface QueuedPrompt {
 }
 
 let queue: QueuedPrompt[] = []
+/**
+ * v1.0.37: every mutation bumps a revision. Clients used to reorder the queue
+ * locally (the "send now" button), and the next broadcast silently overwrote
+ * that order - so the button looked broken. Order is server-owned now, and a
+ * client ignores a broadcast that is older than what it already shows.
+ */
+let queueRev = 0
+
+function bump(): void {
+  queueRev += 1
+  persist()
+}
 
 function queueFile(): string {
   return path.join(app.getPath("userData"), "prompt-queue.json")
@@ -37,6 +49,10 @@ export function loadQueue(): void {
   } catch {
     queue = []
   }
+}
+
+export function queueRevision(): number {
+  return queueRev
 }
 
 function persist(): void {
@@ -59,24 +75,43 @@ export function addToQueue(item: QueuedPrompt): void {
   // one queued prompt per client-command id (idempotent retries)
   queue = queue.filter((q) => q.id !== item.id)
   queue.push(item)
-  persist()
+  bump()
+}
+
+/**
+ * v1.0.37: move a prompt to the FRONT of its own session's group. The old
+ * "send now" only reordered the client's copy, so when the turn ended the
+ * server delivered whatever happened to be first in ITS list.
+ */
+export function promoteInQueue(id: string): boolean {
+  const item = queue.find((q) => q.id === id)
+  if (!item) return false
+  const others = queue.filter((q) => q.id !== id)
+  const firstSameSession = others.findIndex((q) => q.acpSessionId === item.acpSessionId)
+  if (firstSameSession < 0) {
+    queue = [...others, item]
+  } else {
+    queue = [...others.slice(0, firstSameSession), item, ...others.slice(firstSameSession)]
+  }
+  bump()
+  return true
 }
 
 export function removeFromQueue(id: string): void {
   queue = queue.filter((q) => q.id !== id)
-  persist()
+  bump()
 }
 
 export function updateQueueText(id: string, text: string, displayText: string): void {
   queue = queue.map((q) =>
     q.id === id ? { ...q, text, displayText, userMsg: q.userMsg ? { ...q.userMsg, text: displayText } : undefined } : q,
   )
-  persist()
+  bump()
 }
 
 export function clearQueue(): void {
   queue = []
-  persist()
+  bump()
 }
 
 export function queueSessionIds(): string[] {

@@ -26,7 +26,15 @@ const CheckIcon = (): React.JSX.Element => (
 );
 
 export default function MessageQueue({ config }: Props): React.JSX.Element | null {
-  const { messageQueue, removeFromMessageQueue, updateQueueMessage, clearMessageQueue, sendQueuedNow } = useStore();
+  // v1.0.37: only THIS session's prompts. The server queue is global; showing
+  // everything made prompts of other sessions look like they belonged here
+  // (and "send now" then delivered them into the wrong chat).
+  const messageQueue = useStore((st) => st.messageQueue.filter((m) => {
+    const sess = st.sessions.find((x) => x.id === st.currentSessionId);
+    return !m.acpSessionId || !sess?.acpSessionId || m.acpSessionId === sess.acpSessionId;
+  }));
+  const { removeFromMessageQueue, updateQueueMessage, clearMessageQueue, sendQueuedNow } = useStore();
+  const currentAcpId = useStore((st) => st.sessions.find((x) => x.id === st.currentSessionId)?.acpSessionId);
   const tr = useTranslation(config.language);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -60,7 +68,13 @@ export default function MessageQueue({ config }: Props): React.JSX.Element | nul
     <div className="msg-queue" role="list">
       <div className="msg-queue-header">
         <p className="msg-queue-title">{title}</p>
-        <button type="button" className="msg-queue-clear" onClick={clearMessageQueue}>
+        <button
+          type="button"
+          className="msg-queue-clear"
+          onClick={() => {
+            for (const m of messageQueue) removeFromMessageQueue(m.id);
+          }}
+        >
           {tr.clearQueueLabel}
         </button>
       </div>

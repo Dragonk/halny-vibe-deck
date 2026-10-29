@@ -302,9 +302,18 @@ export function noteUserMessage(
   return msg
 }
 
+/**
+ * A tool call belongs to the segment that was current when it started. It must
+ * NOT open a segment of its own keyed by the call id - that split the answer
+ * into a new bubble for every tool and glued later text under the wrong one.
+ */
 export function startToolCall(sessionId: string, toolCall: RegToolCall): { msgId: string; seq: number } {
   const st = stateFor(sessionId)
-  const msg = segmentFor(st, 'tc|' + toolCall.id)
+  let msg = st.currentAiId ? st.messages.find((m) => m.id === st.currentAiId) : undefined
+  if (!msg) {
+    st.segCounter += 1
+    msg = newSegment(st, 'tc|' + toolCall.id)
+  }
   msg.toolCalls.push(toolCall)
   return { msgId: msg.id, seq: touch(st) }
 }

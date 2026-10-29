@@ -7,6 +7,8 @@ import crypto from "crypto"
 import { WebSocketServer, WebSocket } from "ws"
 import selfsigned from "selfsigned"
 import { app, safeStorage } from "electron"
+import { signToken, verifyTokenWith, newPayload, needsRefresh } from "./token"
+import type { TokenPayload } from "./token"
 import { bus } from "./bus"
 import { localHandlers } from "./ipc-registry"
 import { loadConfig } from "./config"
@@ -55,20 +57,6 @@ const COOKIE_NAME = "nexus_token"
 const SLIDING_TTL_MS = 180 * 24 * 60 * 60 * 1000
 const ABSOLUTE_TTL_MS = 365 * 24 * 60 * 60 * 1000
 /** renew the cookie when less than this share of the sliding window is left */
-const REFRESH_THRESHOLD = 0.5
-
-interface TokenPayload {
-  /** username */
-  u: string
-  /** issued at (ms) */
-  iat: number
-  /** absolute expiry (ms) - never extended */
-  exp: number
-  /** credentials version - a password change invalidates every token */
-  ver: number
-  /** token id - the revoke list key */
-  jti: string
-}
 
 interface SecretStore {
   kid: string
@@ -130,41 +118,21 @@ function hmacKey(): { kid: string; key: Buffer } {
   return { kid: store.kid, key: Buffer.from(store.keys[store.kid], "hex") }
 }
 
-function sign(payload: TokenPayload, kid: string, key: Buffer): string {
-  const body = Buffer.from(JSON.stringify({ ...payload, kid })).toString("base64url")
-  const mac = crypto.createHmac("sha256", key).update(body).digest("base64url")
-  return "v1." + body + "." + mac
+function sign(payload: Omit<TokenPayload, "kid">, kid: string): string {
+  const store = signSecret()
+  return signToken(payload, kid, store.keys[kid])
 }
 
-/** Constant-time signature check, then payload validation. */
+/** Constant-time signature check, then payload validation (see token.ts). */
 function verifyToken(token: string | undefined): { user: string; jti: string; payload: TokenPayload } | null {
-  if (!token) return null
-  const parts = token.split(".")
-  if (parts.length !== 3 || parts[0] !== "v1") return null
-  const [, body, mac] = parts
-  let payload: TokenPayload & { kid?: string }
-  try {
-    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as TokenPayload & { kid?: string }
-  } catch {
-    return null
-  }
   const store = signSecret()
-  const kid = payload.kid && store.keys[payload.kid] ? payload.kid : store.kid
-  const expected = crypto.createHmac("sha256", Buffer.from(store.keys[kid], "hex")).update(body).digest()
-  let given: Buffer
-  try {
-    given = Buffer.from(mac, "base64url")
-  } catch {
-    return null
-  }
-  if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return null
-
-  const now = Date.now()
-  if (!payload.u || typeof payload.exp !== "number" || payload.exp < now) return null
-  if (typeof payload.iat !== "number" || now - payload.iat > ABSOLUTE_TTL_MS) return null
-  if (payload.ver !== credentialsVersion()) return null
-  if (isRevoked(payload.jti)) return null
-  return { user: payload.u, jti: payload.jti, payload }
+  return verifyTokenWith({
+    token,
+    keys: store.keys,
+    ver: credentialsVersion(),
+    absoluteMs: ABSOLUTE_TTL_MS,
+    isRevoked,
+  })
 }
 
 /** Token `ver` check - bumped whenever the password changes. */
@@ -222,16 +190,12 @@ export function clearRevokedTokens(): void {
 }
 
 function createToken(user: string, remember: boolean): { token: string; maxAge: number | null } {
-  const now = Date.now()
-  const payload: TokenPayload = {
-    u: user,
-    iat: now,
-    exp: Math.min(now + SLIDING_TTL_MS, now + ABSOLUTE_TTL_MS),
-    ver: credentialsVersion(),
-    jti: crypto.randomBytes(16).toString("hex"),
-  }
-  const { kid, key } = hmacKey()
-  return { token: sign(payload, kid, key), maxAge: remember ? SLIDING_TTL_MS : null }
+  const payload = newPayload(user, credentialsVersion(), {
+    slidingMs: SLIDING_TTL_MS,
+    absoluteMs: ABSOLUTE_TTL_MS,
+  })
+  const { kid } = hmacKey()
+  return { token: sign(payload, kid), maxAge: remember ? SLIDING_TTL_MS : null }
 }
 
 function cookieHeader(token: string, maxAge: number | null): string {
@@ -245,19 +209,15 @@ function cookieHeader(token: string, maxAge: number | null): string {
  * itself talks over the websocket, which cannot set cookies.
  */
 function maybeRefreshCookie(req: IncomingMessage, res: ServerResponse, auth: { jti: string; payload: TokenPayload }): void {
-  const remaining = auth.payload.exp - Date.now()
-  if (remaining > SLIDING_TTL_MS * REFRESH_THRESHOLD) return
-  // keep the ABSOLUTE deadline of the current token chain
-  const now = Date.now()
-  const payload: TokenPayload = {
-    u: auth.payload.u,
-    iat: auth.payload.iat,
-    exp: Math.min(now + SLIDING_TTL_MS, auth.payload.iat + ABSOLUTE_TTL_MS),
-    ver: auth.payload.ver,
-    jti: crypto.randomBytes(16).toString("hex"),
-  }
-  const { kid, key } = hmacKey()
-  res.setHeader("Set-Cookie", cookieHeader(sign(payload, kid, key), SLIDING_TTL_MS))
+  void req
+  if (!needsRefresh(auth.payload, SLIDING_TTL_MS)) return
+  // keep the ABSOLUTE deadline of the current token chain (iat carries over)
+  const payload = newPayload(auth.payload.u, auth.payload.ver, {
+    slidingMs: SLIDING_TTL_MS,
+    absoluteMs: ABSOLUTE_TTL_MS,
+  }, auth.payload.iat)
+  const { kid } = hmacKey()
+  res.setHeader("Set-Cookie", cookieHeader(sign(payload, kid), SLIDING_TTL_MS))
 }
 
 /** Close every websocket authenticated with a revoked/finished session. */

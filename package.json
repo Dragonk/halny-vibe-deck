@@ -1,6 +1,6 @@
 {
   "name": "halny-vibe-deck",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "description": "Halny Vibe Deck \u2014 unofficial desktop client for the Mistral Vibe coding agent",
   "main": "out/main/index.js",
   "author": "Dragonk",
@@ -21,6 +21,7 @@
     "dist:all": "npm run dist:win && npm run create-portable",
     "create-portable": "node scripts/create-portable.js",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "test:unit": "npm run build:main && node --test \"scripts/tests/*.test.mjs\"",
     "start": "electron .",
     "dist:linux": "npm run build && electron-builder --linux dir && cd dist/linux-unpacked && zip -r ../halny-vibe-deck-linux-x64.zip ."
   },

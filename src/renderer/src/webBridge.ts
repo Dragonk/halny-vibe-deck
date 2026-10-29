@@ -404,6 +404,9 @@ function buildApi(): AppAPI {
       list: (): Promise<unknown> => invoke('queue:list', []),
       remove: (id: string): Promise<unknown> => invoke('queue:remove', [id]),
       clear: (): Promise<unknown> => invoke('queue:clear', []),
+      update: (id: string, text: string): Promise<unknown> => invoke('queue:update', [id, text]),
+      promote: (id: string): Promise<unknown> => invoke('queue:promote', [id]),
+      sendNow: (id: string): Promise<unknown> => invoke('queue:send-now', [id]),
       onChanged: (cb: (items: unknown) => void): (() => void) => subscribeWebEvent('queue:changed', cb as (...args: unknown[]) => void)
     },
     updates: {

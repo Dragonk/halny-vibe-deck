@@ -5,6 +5,7 @@ import * as os from 'os'
 import { randomUUID } from 'crypto'
 import { broadcastToWeb } from './bus'
 import * as registry from './sessionRegistry'
+import { trackSubagent, noteToolStatus } from './subagentTracker'
 
 export interface AcpConfigOptionChoice {
   value: string
@@ -69,6 +70,9 @@ export interface AcpEvent {
     | 'ThinkingChunk'
     | 'ThinkingComplete'
     | 'PromptComplete'
+    | 'SubagentStarted'
+    | 'SubagentProgress'
+    | 'SubagentFinished'
     | 'ToolCall'
     | 'ToolCallUpdate'
     | 'ToolApprovalRequest'
@@ -403,7 +407,13 @@ export class AcpManager {
   /** v0.12: raw structured output of process tools (process card in the GUI). */
   private processRawOutput(update: Record<string, unknown>): Record<string, unknown> | undefined {
     const tn = this.metaToolName(update)
-    if (!tn || !tn.toLowerCase().startsWith('process.')) return undefined
+    // v1.0.37: `agents.*` results (agents.list -> {agents:[...]}) were dropped
+    // here, so the "Listed subagents" card had nothing to render and looked
+    // like the session had no active subagents at all.
+    const keep =
+      !!tn &&
+      (tn.toLowerCase().startsWith('process.') || tn.toLowerCase().startsWith('agents.'))
+    if (!keep) return undefined
     const raw = update.rawOutput ?? update.raw_output
     return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined
   }
@@ -536,6 +546,21 @@ export class AcpManager {
             toolName: this.metaToolName(update),
             subagent: this.metaSubagent(update),
           })
+          // v1.0.37: a spawned subagent lives in its own child session - track
+          // it so the card can show elapsed time, steps and live work instead
+          // of a green tick while the child is still running.
+          const subMeta = this.metaSubagent(update)
+          const childSessionId = subMeta?.['childSessionId']
+          if (typeof childSessionId === 'string' && childSessionId.length > 0) {
+            trackSubagent({
+              toolCallId,
+              parentSessionId: sessionId,
+              childSessionId,
+              agent: typeof subMeta?.['agent'] === 'string' ? (subMeta['agent'] as string) : null,
+              task: typeof subMeta?.['task'] === 'string' ? (subMeta['task'] as string) : null,
+              emit: (ev) => this.emit(ev as never),
+            })
+          }
           this.emit({
             type: 'ToolCall',
             data: {
@@ -584,6 +609,8 @@ export class AcpManager {
               subagent: this.metaSubagent(update)
             }
           })
+          // v1.0.37: subagent tracking follows the parent call's terminal state
+          noteToolStatus(toolCallId, tcuStatus)
           // v0.9.0: release the name entry once the call reaches a terminal
           // status so long-running workers do not grow the map forever.
           if (tcuStatus !== 'running') this.toolCallNames.delete(toolCallId)

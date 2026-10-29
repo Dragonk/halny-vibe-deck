@@ -768,9 +768,104 @@ interface SubagentWorkData {
   }>;
 }
 
-// v0.13: subagent invocation card (agents.spawn / task tool) - agent name,
-// the full task prompt, live status, and the subagent's own transcript
-// loaded on demand from its child session on disk.
+/**
+ * v1.0.37: a ticking clock for running work. Tool calls and subagents can run
+ * for many minutes (a build, a test suite, an agent turn) - a static "..." gave
+ * no sense of progress, and a finished look was plainly wrong. The timer keeps
+ * running until the status says otherwise; there is no client-side timeout.
+ */
+function useTicker(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const iv = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(iv);
+  }, [active]);
+  return now;
+}
+
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return h + "h " + m + "m";
+  if (m > 0) return m + "m " + String(sec).padStart(2, "0") + "s";
+  return sec + "s";
+}
+
+const SPINNER_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="tool-spin">
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  </svg>
+);
+
+/**
+ * v1.0.37: `agents.list` result card. The tool returns
+ * `{agents:[{name,status,pending_turn,error?,config_name?}]}` in rawOutput,
+ * which the main process used to drop - so the card rendered the bare title
+ * "Listed subagents" and the session looked like it had no agents at all.
+ */
+function AgentsListBlock({
+  toolCall,
+  tr,
+}: {
+  toolCall: ToolCall;
+  tr: Record<TranslationKeys, string>;
+}): React.JSX.Element {
+  const raw = (toolCall.rawOutput ?? {}) as Record<string, unknown>;
+  const list = Array.isArray(raw.agents)
+    ? (raw.agents as Array<Record<string, unknown>>)
+    : Array.isArray(raw.subagents)
+      ? (raw.subagents as Array<Record<string, unknown>>)
+      : [];
+  return (
+    <div className="agents-list-card">
+      <div className="agents-list-header">
+        <span className="agents-list-title">{toolCall.title}</span>
+        <span className={"subagent-status" + (toolCall.status === "running" ? " running" : "")}>
+          {toolCall.status === "running" ? SPINNER_ICON : toolCall.status === "error" ? "✕" : "✓"}
+        </span>
+      </div>
+      {list.length === 0 ? (
+        <div className="agents-list-empty">{tr.subagentNoActive}</div>
+      ) : (
+        <table className="agents-list-table">
+          <thead>
+            <tr>
+              <th>{tr.subagent}</th>
+              <th>{tr.toolRunning}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((a, i) => {
+              const status = String(a.status ?? (a.pending_turn ? "running" : "idle"));
+              const failed = status === "failed" || status === "error";
+              return (
+                <tr key={i}>
+                  <td className="agents-list-name">{String(a.name ?? a.agent ?? "?")}</td>
+                  <td className={failed ? "agents-list-status error" : "agents-list-status"}>
+                    {status === "running" || a.pending_turn ? SPINNER_ICON : failed ? "✕" : "✓"}
+                    <span>{status}</span>
+                    {a.error ? <span className="agents-list-error">{String(a.error)}</span> : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// v1.0.37: subagent invocation card (agents.spawn / task tool).
+// It follows the LIVE run from the main-process tracker: animated spinner,
+// elapsed time, per-step status and the child's transcript as it grows. The
+// old card trusted the parent tool call's status, which the app itself closed
+// on PromptComplete - so a busy agent looked finished and "show work" showed
+// nothing (it read the child file once, only after that wrong "done").
 function SubagentBlock({
   toolCall,
   tr,
@@ -780,27 +875,36 @@ function SubagentBlock({
   tr: Record<TranslationKeys, string>;
   acpSessionId?: string;
 }): React.JSX.Element {
+  const run = useStore((st) => st.subagentRuns[toolCall.id]);
   const sa = toolCall.subagent;
   const agent =
-    typeof sa?.agent === "string" && sa.agent.length > 0
+    run?.agent ??
+    (typeof sa?.agent === "string" && sa.agent.length > 0
       ? sa.agent
       : typeof sa?.agentName === "string" && sa.agentName.length > 0
         ? sa.agentName
-        : tr.subagent;
-  const task = typeof sa?.task === "string" ? sa.task : "";
-  const childId = typeof sa?.childSessionId === "string" ? sa.childSessionId : null;
+        : tr.subagent);
+  const task = run?.task ?? (typeof sa?.task === "string" ? sa.task : "");
+  const childId = run?.childSessionId ?? (typeof sa?.childSessionId === "string" ? sa.childSessionId : null);
+  const status = run?.status ?? toolCall.status;
+  const running = status === "running";
+  const failed = status === "error";
+  const now = useTicker(running);
+  const elapsed = run?.elapsedMs ?? (toolCall.startedAt ? now - toolCall.startedAt : 0);
   const [promptOpen, setPromptOpen] = useState(false);
+  // open by default while the agent works - the whole point is to see progress
+  const [open, setOpen] = useState(running);
   const [work, setWork] = useState<SubagentWorkData | null>(null);
   const [workErr, setWorkErr] = useState(false);
   const [workLoading, setWorkLoading] = useState(false);
 
-  const toggleWork = async (): Promise<void> => {
-    if (workLoading) return;
-    if (work) {
-      setWork(null);
-      return;
-    }
-    if (!childId) return;
+  useEffect(() => {
+    if (running) setOpen(true);
+  }, [running]);
+
+  /** Disk fallback for a finished child whose run state was lost (app restart). */
+  const loadWork = async (): Promise<void> => {
+    if (workLoading || !childId) return;
     setWorkLoading(true);
     setWorkErr(false);
     try {
@@ -823,19 +927,28 @@ function SubagentBlock({
     setWorkLoading(false);
   };
 
+  const messages = run?.messages ?? work?.messages ?? [];
+  const steps = run?.steps ?? [];
+  const toggleWork = (): void => {
+    const next = !open;
+    setOpen(next);
+    if (next && messages.length === 0 && !running) void loadWork();
+  };
+
   return (
-    <div className="subagent-card">
+    <div className={"subagent-card" + (running ? " running" : "")}>
       <div className="subagent-header">
         <span className="subagent-badge">{tr.subagent}</span>
         <span className="subagent-agent">{agent}</span>
-        <span
-          className={
-            "subagent-status" +
-            (toolCall.status === "running" ? " running" : toolCall.status === "error" ? " error" : "")
-          }
-        >
-          {toolCall.status === "error" ? "✕" : toolCall.status === "running" ? "…" : "✓"}
+        {run?.truncated ? <span className="subagent-truncated">{tr.subagentShowingLastN}</span> : null}
+        <span className={"subagent-status" + (running ? " running" : failed ? " error" : " done")}>
+          {running ? SPINNER_ICON : failed ? "✕" : "✓"}
         </span>
+        {elapsed > 0 ? (
+          <span className="subagent-elapsed" title={running ? tr.toolRunning : undefined}>
+            {running ? formatDuration(elapsed) : t(tr, "subagentFinishedIn", { duration: formatDuration(elapsed) })}
+          </span>
+        ) : null}
       </div>
       {task.length > 0 && (
         <div
@@ -846,18 +959,34 @@ function SubagentBlock({
           <span className="subagent-task-text">{task}</span>
         </div>
       )}
-      {toolCall.status === "error" && toolCall.output && toolCall.output.length > 0 && (
+      {failed && toolCall.output && toolCall.output.length > 0 && (
         <pre className="subagent-error-out">{toolCall.output}</pre>
       )}
+      {steps.length > 0 && (
+        <ul className="subagent-steps">
+          {steps.map((st, i) => {
+            const stepRunning = st.status === "in_progress" || st.status === "running";
+            const stepError = st.status === "error" || st.status === "failed";
+            return (
+              <li key={i} className={"subagent-step" + (stepRunning ? " running" : stepError ? " error" : "")}>
+                <span className="subagent-step-icon">
+                  {stepRunning ? SPINNER_ICON : stepError ? "✕" : "✓"}
+                </span>
+                <span className="subagent-step-title">{st.title}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {childId && (
-        <button className="subagent-work-btn" onClick={() => void toggleWork()} disabled={workLoading}>
-          {work ? tr.subagentHideWork : tr.subagentShowWork}
+        <button className="subagent-work-btn" onClick={toggleWork} disabled={workLoading}>
+          {open ? tr.subagentHideWork : tr.subagentShowWork}
         </button>
       )}
       {workErr && <div className="subagent-work-error">{tr.subagentWorkUnavailable}</div>}
-      {work && (
+      {open && messages.length > 0 && (
         <div className="subagent-work">
-          {work.messages.map((m, i) => (
+          {messages.map((m, i) => (
             <div key={i} className="subagent-work-msg">
               {m.role === "user" ? (
                 <div className="subagent-work-user">{m.content}</div>
@@ -868,11 +997,17 @@ function SubagentBlock({
                       {th.content}
                     </div>
                   ))}
-                  {(m.toolCalls ?? []).map((tc, tci) => (
-                    <div key={"tc" + tci} className="subagent-work-tool">
-                      {"· " + tc.title + (tc.status === "error" ? " ✕" : "")}
-                    </div>
-                  ))}
+                  {(m.toolCalls ?? []).map((tc, tci) => {
+                    const tcRunning = tc.status === "in_progress" || tc.status === "running";
+                    return (
+                      <div
+                        key={"tc" + tci}
+                        className={"subagent-work-tool" + (tcRunning ? " running" : tc.status === "error" ? " error" : "")}
+                      >
+                        {tcRunning ? SPINNER_ICON : tc.status === "error" ? "✕" : "·"} {tc.title}
+                      </div>
+                    );
+                  })}
                   {m.content.length > 0 && (
                     <div className="subagent-work-answer">
                       <MarkdownContent content={m.content} />
@@ -918,6 +1053,11 @@ function ToolCallRichContent({
   }
   if (toolCall.subagent || tn === "agents.spawn" || tn === "task") {
     return <SubagentBlock toolCall={toolCall} tr={tr} acpSessionId={acpSessionId} />;
+  }
+  // v1.0.37: agents.list must render its result (the card used to show the bare
+  // title, which read as "no subagents at all").
+  if (tn === "agents.list" || tn === "agents.list_configs" || /listing subagents|listed subagents/i.test(toolCall.title)) {
+    return <AgentsListBlock toolCall={toolCall} tr={tr} />;
   }
   if (tn.startsWith("process.")) {
     return <ProcessBlock toolCall={toolCall} />;
@@ -1677,6 +1817,11 @@ function StepRow({
     : isError
       ? STEP_ERROR_ICON
       : STEP_CHECK_ICON;
+  // v1.0.37: a long command (10, 15, 30+ minutes) shows a spinner and a live
+  // counter for as long as the tool is running. There is no client-side cap.
+  const now = useTicker(running && step.kind === "tool");
+  const startedAt = step.kind === "tool" ? (step.toolCall as ToolCall).startedAt : undefined;
+  const elapsed = running && startedAt ? now - startedAt : 0;
 
   return (
     <div className={"step-row " + statusClass + (open ? " open" : "")}>
@@ -1689,6 +1834,11 @@ function StepRow({
           <span className={"step-label" + (running ? " steps-shimmer" : "")}>
             {stepLabel(step, tr)}
           </span>
+          {elapsed > 0 && (
+            <span className="step-elapsed" title={tr.toolRunning}>
+              {formatDuration(elapsed)}
+            </span>
+          )}
           <span className="step-chevron">{STEP_CHEVRON_ICON}</span>
         </button>
         {open && (
@@ -1709,6 +1859,14 @@ function StepRow({
                 // v0.13: subagent invocations (agents.spawn / task) get the rich card
                 if (tc.subagent || tc.toolName === 'agents.spawn') {
                   return <SubagentBlock toolCall={tc} tr={tr} acpSessionId={acpSessionId} />;
+                }
+                // v1.0.37: agents.list has its own card (agent table)
+                if (
+                  tc.toolName === 'agents.list' ||
+                  tc.toolName === 'agents.list_configs' ||
+                  /listing subagents|listed subagents/i.test(tc.title)
+                ) {
+                  return <AgentsListBlock toolCall={tc} tr={tr} />;
                 }
                 const isTaskTool =
                   tc.title === "task" ||
@@ -1736,6 +1894,17 @@ function StepRow({
                       <pre className="tool-call-output">
                         {parseToolOutput(tc.output) ?? tc.output}
                       </pre>
+                    )}
+                    {/* v1.0.37: never a bare sentence with no body - say why the
+                        card is empty instead of looking like a broken session */}
+                    {!tc.output && tc.status !== 'running' && (
+                      <div className="tool-no-output">{tr.toolNoOutput}</div>
+                    )}
+                    {tc.status === 'running' && !tc.output && (
+                      <div className="tool-no-output running">
+                        <span className="tool-spin-wrap">{SPINNER_ICON}</span>
+                        <span>{tr.toolRunning}</span>
+                      </div>
                     )}
                   </>
                 );

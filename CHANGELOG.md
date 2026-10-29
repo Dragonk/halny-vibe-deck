@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.0.37 — 2026-10-29
+
+Stability release: five long-standing problems reported from real use (a phone
+PWA and a desktop window sharing one server).
+
+### Fixed
+
+- **A hidden tab no longer loses the middle of an answer.** The transcript is
+  assembled in the main process once, with a monotonic per-session `seq`.
+  Every event carries `msgId` + `seq`, the client detects a gap (frozen tab,
+  dropped socket) and pulls a snapshot instead of waiting for F5. Before, the
+  only "catch-up" was re-reading the session file, and sessions that were still
+  busy - exactly the ones that lost events - were skipped.
+- **Long sessions no longer show reordered, duplicated or glued messages.**
+  Text/thinking deltas are offset-checked (a duplicate is dropped, a missing
+  chunk triggers a snapshot) and the old prefix heuristic with its 40-character
+  threshold - which duplicated every resent text shorter than that - is gone.
+  Tool calls attach to the message the registry assigned them to instead of
+  "the last AI message", and events of an unknown session are no longer routed
+  into the currently viewed one.
+- **The login survives app restarts and long absences.** Session tokens are
+  stateless HMAC blobs (safeStorage-protected key, sliding 180-day window, a
+  one-year absolute cap, `ver` bumped on password change, a persistent revoke
+  list). They used to live in a `Map`, so every self-update or watchdog restart
+  logged every device out, and the cookie was never renewed. The SPA now calls
+  `POST /api/auth/refresh` (a websocket cannot set cookies), and the login rate
+  limiter counts failed attempts only - eight successful logins used to return
+  429.
+- **SSH sessions are visible on the phone again.** A browser `config:save` could
+  overwrite the whole config server-side (only the `serve` section was
+  protected), wiping `remoteConnections` permanently. `remoteConnections` is now
+  protected too. The SSH list itself is owned by a main-process registry
+  (single-flight, 30 s TTL, persisted last known list, broadcast to every
+  client), so a fresh client no longer depends on one fragile probe: the old
+  status gate silently dropped every session when `ssh` timed out, and failures
+  had no message at all.
+- **"Send now" from the queue actually delivers that prompt next.** The queue is
+  server-owned: `promote` + cancel + wait for the turn to end + flush. The old
+  button only reordered the local view (overwritten by the next broadcast) while
+  `deliverQueued` refuses to deliver during a turn. The panel also keeps
+  `acpSessionId` now - it used to list prompts of other sessions, which then went
+  to the wrong chat - and editing a queued prompt no longer moves it.
+- **Subagents show real progress instead of a green tick.** The app itself closed
+  a spawn on `PromptComplete` while the child kept working. A tracker now follows
+  the child session (`unified/child-*`), pushing elapsed time, steps and live
+  work, and the card keeps a subagent running until the child finishes.
+  `agents.list` renders its agent table (the result was dropped by the raw-output
+  filter, so the card showed only "Listed subagents").
+- **Every tool call shows a spinner and a live counter while it runs** - builds,
+  test suites and agent turns can take 10, 30 or more minutes, and a card no
+  longer flips to "done" or "error" before the tool reports it.
+- A half-open websocket is detected in seconds (client ping/pong, 70 s budget)
+  instead of waiting for the server's 60 s termination, and `pageshow`, `online`
+  and `focus` trigger the same catch-up as `visibilitychange`.
+
+### Added
+
+- `npm run test:unit` (node:test, no extra dependencies): token format
+  (signature, expiry, absolute cap, credentials version, revoke list) and the
+  session registry (delta offsets, resend handling, segment rules).
+
+**Full Changelog**: https://github.com/Dragonk/halny-vibe-deck/compare/v1.0.36...v1.0.37
+
 ## 1.0.36 — 2026-10-28
 
 ### Fixed

@@ -62,6 +62,25 @@ export interface AcpHistoryToolCall {
   subagent?: { agent: string | null; agentName?: string | null; task: string; childSessionId: string | null } | null;
 }
 
+/** v1.0.37: live state of one spawned subagent (see main/subagentTracker). */
+export interface SubagentRunState {
+  toolCallId: string;
+  parentSessionId: string;
+  childSessionId: string;
+  agent: string | null;
+  task: string | null;
+  status: "running" | "done" | "error" | "unknown";
+  elapsedMs: number;
+  steps: Array<{ title: string; status: string }>;
+  messages: Array<{
+    role: string;
+    content: string;
+    thinking?: Array<{ id: string; content: string }>;
+    toolCalls?: Array<{ title: string; status: string }>;
+  }>;
+  truncated: boolean;
+}
+
 /** v1.0.37: authoritative transcript sent by the main process. */
 export interface AcpSnapshotMessage {
   id: string;
@@ -265,9 +284,18 @@ interface AppStore {
   toggleProjectCollapse: (project: string) => void;
 
   // Message queue
-  messageQueue: Array<{ id: string; content: string; timestamp: number }>;
+  messageQueue: Array<{ id: string; acpSessionId?: string; content: string; timestamp: number }>;
   /** v1.0.24: replace the local queue view with the server's state. */
-  setQueue: (items: Array<{ id: string; acpSessionId?: string; displayText?: string; queuedAt?: number }>) => void;
+  /**
+   * v1.0.37: the queue view keeps `acpSessionId` (it used to be dropped, so the
+   * panel listed prompts of OTHER sessions as if they belonged to the current
+   * one) and ignores a broadcast older than what is already displayed.
+   */
+  setQueue: (payload: unknown) => void;
+  /** monotonically increasing server revision of the queue view */
+  queueRev: number;
+  /** items of the CURRENT session only (the panel filters by this) */
+  queueForCurrentSession: () => Array<{ id: string; acpSessionId?: string; content: string; timestamp: number }>;
   addToMessageQueue: (
     content: string,
     images?: Array<{ data: string; mimeType: string; uri?: string }>,
@@ -343,6 +371,9 @@ interface AppStore {
   upsertToolCall: (sessionId: string, msgId: string | undefined, toolCall: ToolCall) => void;
   /** Patch a tool call wherever it lives (by id, never "last AI message"). */
   patchToolCall: (sessionId: string, toolCallId: string, updates: Partial<ToolCall>) => void;
+  /** v1.0.37: live subagent runs, keyed by the parent's tool call id. */
+  subagentRuns: Record<string, SubagentRunState>;
+  applySubagentEvent: (data: Record<string, unknown>) => void;
   loadAcpSession: (localSessionId: string, internalAttempt?: number) => Promise<void>;
   loadVibeSessionMessages: (localSessionId: string) => Promise<void>;
   fetchContextSummary: (localSessionId: string) => Promise<void>;
@@ -1452,14 +1483,39 @@ export const useStore = create<AppStore>((set, get) => ({
   // v1.0.24: the queue lives on the SERVER - the local list is a mirror
   // (broadcast via queue:changed). A queued prompt survives closing every
   // client AND an app restart; the server delivers it when the turn ends.
-  setQueue: (items) =>
+  queueRev: -1,
+
+  setQueue: (payload) => {
+    // Accept both shapes: the v1.0.37 object ({rev, items}) and the legacy
+    // array (older server) so a cached PWA bundle keeps working.
+    const obj = payload as { rev?: number; items?: unknown } | unknown[] | null;
+    const rev = Array.isArray(obj) ? undefined : obj?.rev;
+    const rawItems = Array.isArray(obj) ? obj : (obj?.items ?? []);
+    if (typeof rev === "number" && rev < get().queueRev) return;
+    const list = (Array.isArray(rawItems) ? rawItems : []) as Array<{
+      id: string;
+      acpSessionId?: string;
+      displayText?: string;
+      text?: string;
+      queuedAt?: number;
+    }>;
     set({
-      messageQueue: (items ?? []).map((q) => ({
+      messageQueue: list.map((q) => ({
         id: q.id,
-        content: q.displayText ?? "",
+        acpSessionId: q.acpSessionId,
+        content: q.displayText ?? q.text ?? "",
         timestamp: q.queuedAt ?? Date.now(),
       })),
-    }),
+      queueRev: typeof rev === "number" ? rev : get().queueRev,
+    });
+  },
+
+  queueForCurrentSession: () => {
+    const sess = get().currentSession();
+    const acpId = sess?.acpSessionId;
+    return get().messageQueue.filter((m) => !m.acpSessionId || !acpId || m.acpSessionId === acpId);
+  },
+
   addToMessageQueue: (content, images) => {
     const sess = get().currentSession();
     if (!sess?.acpSessionId) return; // nothing to queue against
@@ -1475,7 +1531,10 @@ export const useStore = create<AppStore>((set, get) => ({
     };
     // optimistic; the queue:changed broadcast reconciles every client
     set((s) => ({
-      messageQueue: [...s.messageQueue, { id: item.id, content, timestamp: item.queuedAt }],
+      messageQueue: [
+        ...s.messageQueue,
+        { id: item.id, acpSessionId: item.acpSessionId, content, timestamp: item.queuedAt },
+      ],
     }));
     window.api.queue.add(item).catch(console.error);
   },
@@ -1487,24 +1546,10 @@ export const useStore = create<AppStore>((set, get) => ({
     set((s) => ({
       messageQueue: s.messageQueue.map((m) => (m.id === id ? { ...m, content } : m)),
     }));
-    // v1.0.24: the edit rewrites the delivered text (text = display form -
-    // the queued payload is refreshed with the same content).
-    window.api.queue
-      .remove(id)
-      .then(() => {
-        const sess = get().currentSession();
-        if (!sess?.acpSessionId) return;
-        return window.api.queue.add({
-          id,
-          acpSessionId: sess.acpSessionId,
-          remoteId: sess.remoteId ?? null,
-          cwd: sess.workingDirectory || "",
-          text: content,
-          displayText: content,
-          queuedAt: Date.now(),
-        });
-      })
-      .catch(console.error);
+    // v1.0.37: edit in place on the server. The old remove+add pair re-queued
+    // the prompt against the CURRENT session - editing a prompt of another
+    // session silently moved it here.
+    window.api.queue.update(id, content).catch(console.error);
   },
   clearMessageQueue: () => {
     set({ messageQueue: [] });
@@ -1522,59 +1567,28 @@ export const useStore = create<AppStore>((set, get) => ({
   // no turn-end flush that would ever pick the message up - it would sit in
   // the queue forever, so it is sent right away instead.
   sendQueuedNow: (id) => {
-    const { messageQueue } = get();
-    const msg = messageQueue.find((m) => m.id === id);
+    const msg = get().messageQueue.find((m) => m.id === id);
     if (!msg) return;
-    const sessionId = get().currentSessionId;
-    const session = sessionId ? get().sessions.find((s) => s.id === sessionId) : undefined;
-    if (!session || !session.acpSessionId) return;
-    const isBusy = sessionId != null && get().busySessions.includes(sessionId);
-    if (!isBusy) {
-      // Force send: no turn to break, so deliver the message immediately.
-      set({ messageQueue: messageQueue.filter((m) => m.id !== id) });
-      const acpSessionId = useStore.getState().activeAcpSessionId ?? session.acpSessionId;
-      const promptText = session.contextSummary
-        ? `${session.contextSummary}\n\nUser: ${msg.content}`
-        : msg.content;
-      // v1.0.21: deterministic id + echo payload (other clients see it).
-      const qid = "q-" + msg.id;
-      get().addUserMessage(msg.content, undefined, qid);
-      get().markSessionBusy(session.id);
-      // v1.0.21: the worker may be dead here (a hung turn was just
-      // stopped) - revive + restore the session before delivering,
-      // exactly like the queue flush recovery in App.
-      void (async () => {
-        try {
-          await get().ensureAcpWorker(session.remoteId ?? null, session.workingDirectory || "");
-          try {
-            await window.api.acp.sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined, undefined, {
-              id: qid,
-              text: msg.content,
-            });
-          } catch (sendErr) {
-            const m = String((sendErr as Error)?.message ?? sendErr);
-            if (!/not started|not running|No active session|Session not found|No target session/.test(m)) {
-              throw sendErr;
-            }
-            await window.api.acp
-              .loadSession(acpSessionId, session.workingDirectory || ".", session.remoteId ?? undefined)
-              .catch(() =>
-                window.api.acp.newSession(session.workingDirectory || ".", session.remoteId ?? undefined),
-              );
-            await window.api.acp.sendPrompt(promptText, acpSessionId, session.remoteId ?? undefined, undefined, {
-              id: qid,
-              text: msg.content,
-            });
-          }
-        } catch (err: unknown) {
-          get().markSessionIdle(session.id);
-          set({ acpError: (err as Error)?.message ?? String(err) });
-        }
-      })();
+    const sess = get().currentSession();
+    // v1.0.37: the whole operation runs on the server. The old version moved
+    // the item to the front of the LOCAL list (immediately overwritten by the
+    // next `queue:changed` broadcast) and cancelled the turn, while
+    // deliverQueued refuses to deliver during a turn - so the chosen prompt was
+    // not the next one sent, or was never sent at all. It also addressed
+    // `activeAcpSessionId` instead of the item's own session.
+    if (sess?.acpSessionId && msg.acpSessionId && msg.acpSessionId !== sess.acpSessionId) {
+      set({ acpError: "Queue policy: this prompt belongs to another session." });
       return;
     }
-    set({ messageQueue: [msg, ...messageQueue.filter((m) => m.id !== id)] });
-    window.api.acp.cancelSession(session.acpSessionId, session.remoteId ?? undefined).catch(console.error);
+    void window.api.queue
+      .sendNow(id)
+      .then((res: unknown) => {
+        const r = res as { ok?: boolean; error?: string } | undefined;
+        if (r && r.ok === false && r.error) set({ acpError: r.error });
+      })
+      .catch((err: unknown) =>
+        set({ acpError: err instanceof Error ? err.message : String(err) }),
+      );
   },
 
   currentSessionWorkingDirectory: () => {
@@ -1799,9 +1813,15 @@ export const useStore = create<AppStore>((set, get) => ({
         if (sess.id !== sessionId) return sess;
         const messages = sess.messages.map((m) => {
           if (m.id !== messageId) return m;
-          const toolCalls = (m.toolCalls ?? []).map((tc) =>
-            tc.status === "running" ? { ...tc, status: "done" as const } : tc,
-          );
+          const toolCalls = (m.toolCalls ?? []).map((tc) => {
+            if (tc.status !== "running") return tc;
+            // v1.0.37: a subagent invocation stays running while the child
+            // works - closing it on PromptComplete is what painted a green
+            // tick on an agent that was still busy. The server ends it with a
+            // SubagentFinished event.
+            if (tc.subagent && tc.subagent.childSessionId) return tc;
+            return { ...tc, status: "done" as const };
+          });
           return { ...m, toolCalls };
         });
         return { ...sess, messages };
@@ -2176,6 +2196,38 @@ export const useStore = create<AppStore>((set, get) => ({
     });
   },
 
+  applySubagentEvent: (data) => {
+    const toolCallId = String(data.toolCallId ?? "");
+    if (!toolCallId) return;
+    const run: SubagentRunState = {
+      toolCallId,
+      parentSessionId: String(data.parentSessionId ?? ""),
+      childSessionId: String(data.childSessionId ?? ""),
+      agent: (data.agent as string | null) ?? null,
+      task: (data.task as string | null) ?? null,
+      status: (data.status as SubagentRunState["status"]) ?? "running",
+      elapsedMs: Number(data.elapsedMs ?? 0),
+      steps: (data.steps as SubagentRunState["steps"]) ?? [],
+      messages: (data.messages as SubagentRunState["messages"]) ?? [],
+      truncated: Boolean(data.truncated),
+    };
+    set((st) => ({ subagentRuns: { ...st.subagentRuns, [toolCallId]: run } }));
+    // keep the parent card's own status in sync, so the timeline spinner and
+    // the card agree (and a finished child finally shows a tick)
+    const parent = get().sessions.find((sess) => sess.acpSessionId === run.parentSessionId);
+    if (parent) {
+      get().patchToolCall(parent.id, toolCallId, {
+        status: run.status === "running" ? "running" : run.status === "error" ? "error" : "done",
+        subagent: {
+          ...( { } as Record<string, unknown>),
+          agent: run.agent,
+          task: run.task ?? undefined,
+          childSessionId: run.childSessionId,
+        } as ToolCall["subagent"],
+      });
+    }
+  },
+
   patchToolCall: (sessionId, toolCallId, updates) => {
     const sess = get().sessions.find((x) => x.id === sessionId);
     if (!sess) return;
@@ -2461,6 +2513,7 @@ export const useStore = create<AppStore>((set, get) => ({
   backStack: [],
   historyLoadedSessions: [],
   snapshotSeqs: {},
+  subagentRuns: {},
   pushBack: (run) => {
     const id = Date.now() + Math.random();
     set((s) => ({ backStack: [...s.backStack.slice(-31), { id, run }] }));
