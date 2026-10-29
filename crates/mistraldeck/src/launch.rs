@@ -80,7 +80,8 @@ pub fn main_dispatch(force_headless: bool) {
         if gui {
             #[cfg(feature = "gui")]
             {
-                let url = format!("http://127.0.0.1:{port}");
+                // `desktop=1`: the webview keeps the frameless title bar, a browser never does.
+                let url = format!("http://127.0.0.1:{port}/?desktop=1");
                 std::thread::Builder::new()
                     .name("mistraldeck-gui".into())
                     .spawn(move || {
@@ -121,35 +122,55 @@ pub fn main_dispatch(force_headless: bool) {
             .build()
             .expect("mistraldeck: failed to start the async runtime");
         rt.block_on(async move {
-            let cfg = mistraldeck_engine::EngineConfig::load();
-            let engine = mistraldeck_engine::Engine::init(cfg);
-            // Connect the agent + index CLI sessions before the first
-            // snapshot request lands (Prime like Nexus does).
+            let cfg_local = mistraldeck_engine::EngineConfig::load();
+            let engine = mistraldeck_engine::Engine::init(cfg_local.clone());
+            // Index the session history from disk. No agent process and no
+            // handshake at boot (Z5): the agent is contacted on the first
+            // prompt or when a session is resumed.
             engine.prime();
             let router = dioxus::server::router(crate::app::App);
             // PWA static routes (sw.js / manifest / icon) served from the
             // binary itself, and the v0.13.4 gzip layer over both listeners.
             let router = crate::pwa::install_pwa_routes(router);
-            // Local listener: localhost-only, no login.
-            let local = tokio::net::TcpListener::bind(("127.0.0.1", port))
-                .await
-                .unwrap_or_else(|e| panic!("mistraldeck: cannot bind 127.0.0.1:{port}: {e}"));
-            println!("mistraldeck: local UI at http://127.0.0.1:{port}");
+            // Local listener (Z14):
+            // - headless/server build -> **HTTPS** on 127.0.0.1 (a browser is
+            //   the client; the self-signed warning is accepted once);
+            // - desktop build -> plain loopback HTTP for the embedded webview,
+            //   which rejects self-signed certificates and never leaves the
+            //   loopback interface. Network-exposed surfaces are HTTPS-only.
+            if gui {
+                let local = tokio::net::TcpListener::bind(("127.0.0.1", port))
+                    .await
+                    .unwrap_or_else(|e| panic!("mistraldeck: cannot bind 127.0.0.1:{port}: {e}"));
+                println!("mistraldeck: local webview UI at http://127.0.0.1:{port} (loopback only)");
+                let local_router = router
+                    .clone()
+                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))
+                    .layer(axum::middleware::from_fn(crate::pwa::gzip_mw));
+                tokio::spawn(async move {
+                    if let Err(e) = axum::serve(local, local_router).await {
+                        eprintln!("mistraldeck: local server error: {e}");
+                    }
+                });
+            } else {
+                let local_router = router
+                    .clone()
+                    .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
+                let require_login = cfg_local.auth.is_some();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        crate::serve::run_local_https(local_router, port, require_login).await
+                    {
+                        eprintln!("mistraldeck: local HTTPS server error: {e}");
+                    }
+                });
+            }
             // systemd: Type=notify gets READY now that the UI listener is
             // up; WatchdogSec keeps being fed in the background (v1.0.30/31
             // parity — no cgroup self-heal needed, this process stays in
             // the unit cgroup).
             mistraldeck_engine::systemd::notify_state("READY=1");
             mistraldeck_engine::systemd::start_watchdog();
-            let local_router = router
-                .clone()
-                .layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw))
-                .layer(axum::middleware::from_fn(crate::pwa::gzip_mw));
-            tokio::spawn(async move {
-                if let Err(e) = axum::serve(local, local_router).await {
-                    eprintln!("mistraldeck: local server error: {e}");
-                }
-            });
             if start_remote {
                 let remote_router = router.clone().layer(axum::middleware::from_fn(crate::pwa::no_store_html_mw));
                 tokio::spawn(async move {

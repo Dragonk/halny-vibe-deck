@@ -20,6 +20,8 @@ mistraldeck-engine = { workspace = true, optional = true }
 mistraldeck-setup = { workspace = true, optional = true }
 mistraldeck-vibe = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
+# "New project…" picker: home directory of the host
+dirs = { workspace = true, optional = true }
 tokio = { version = "1", features = ["time"] }
 # optional server-side preview parsers (same versions as the egui app)
 calamine = { version = "0.37", optional = true }
@@ -47,7 +49,7 @@ flate2 = { version = "1", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Navigator"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Location"] }
 console_error_panic_hook = "0.1"
 # tokio::time::sleep panics on wasm (std::time::Instant is unimplemented)
 # — client-side sleeps must use the gloo timer instead (state::sleep_ms).
@@ -57,5 +59,5 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:mistraldeck-engine", "dep:mistraldeck-setup", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2"]
+server = ["dioxus/server", "dep:mistraldeck-engine", "dep:mistraldeck-setup", "tokio/rt-multi-thread", "tokio/macros", "dep:calamine", "dep:zip", "dep:pdf-extract", "dep:quick-xml", "dep:pdfium-render", "dep:image", "dep:mistraldeck-vibe", "dep:toml", "dep:dirs", "dep:axum", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:rcgen", "dep:flate2"]
 gui = ["dep:wry", "dep:tao"]

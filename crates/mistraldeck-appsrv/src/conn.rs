@@ -61,13 +61,24 @@ impl Conn {
         if argv.is_empty() {
             bail!("empty vibe-app-server argv");
         }
-        let mut child = Command::new(&argv[0])
-            .args(&argv[1..])
+        let mut cmd = Command::new(&argv[0]);
+        cmd.args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Agent stderr carries the CLI's own warnings and, with the e2e
             // stub, its trace — forward it to the server log (CI diagnosis).
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::inherit());
+        // Never flash an empty console window per session (issue Z28): every
+        // local session owns one agent process, so a GUI build without
+        // CREATE_NO_WINDOW opens a black terminal per session. Stable parity:
+        // `windowsHide: true` on the child process.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn {:?} (is vibe-app-server installed?)", argv[0]))?;
 

@@ -591,7 +591,8 @@ async fn bind_with_retry(
     Err(format!("bind {host}:{port} failed: {last}"))
 }
 
-pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
+/// rustls config for the self-signed certificate (both listeners share it).
+fn tls_server_config() -> Result<rustls::ServerConfig, String> {
     let (cert_pem, key_pem) = ensure_certificate()?;
     let certs: Vec<rustls_pki_types::CertificateDer<'static>> =
         rustls_pki_types::CertificateDer::pem_slice_iter(cert_pem.as_bytes())
@@ -599,10 +600,49 @@ pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
             .map_err(|e| format!("bad certificate pem: {e}"))?;
     let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
         .map_err(|e| format!("bad key pem: {e}"))?;
-    let tls = rustls::ServerConfig::builder()
+    rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .map_err(|e| format!("tls config failed: {e}"))?;
+        .map_err(|e| format!("tls config failed: {e}"))
+}
+
+/// Local UI over **HTTPS** (Z14): used by the headless/server build, where a
+/// browser is the client. The desktop webview keeps plain loopback HTTP —
+/// webview engines refuse a self-signed certificate and wry exposes no TLS
+/// hook, and that listener never leaves 127.0.0.1. Every network-exposed
+/// surface is HTTPS-only either way.
+pub async fn run_local_https(app_router: Router, port: u16, require_login: bool) -> Result<(), String> {
+    let tls = tls_server_config()?;
+    let tcp = bind_with_retry("127.0.0.1", port, 6).await?;
+    let router = if require_login {
+        let login = Router::new()
+            .route("/login", get(login_page))
+            .route("/api/auth/login", post(login_post))
+            .route("/api/auth/logout", post(logout_post));
+        app_router
+            .layer(middleware::from_fn(remote_auth))
+            .merge(login)
+    } else {
+        app_router
+    };
+    let router = router.layer(middleware::from_fn(crate::pwa::gzip_mw));
+    eprintln!(
+        "mistraldeck: local UI at https://127.0.0.1:{port} (self-signed certificate{})",
+        if require_login { "; login required" } else { "" }
+    );
+    axum::serve(
+        TlsListener {
+            tcp,
+            tls: Arc::new(tls),
+        },
+        router.into_make_service_with_connect_info::<RemoteConnectInfo>(),
+    )
+    .await
+    .map_err(|e| format!("local https server failed: {e}"))
+}
+
+pub async fn run_remote(app_router: Router, port: u16) -> Result<(), String> {
+    let tls = tls_server_config()?;
 
     // v1.0.19 parity: after an in-app update the previous instance may
     // still hold the port for a moment (socket teardown, systemd handover).

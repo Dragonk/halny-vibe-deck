@@ -507,12 +507,18 @@ pub fn os_lang() -> String {
     }
 }
 
-/// True when the UI runs inside the desktop webview window (wry injects
-/// `window.ipc`); in a plain browser (remote access) it is false.
+/// True when the UI runs inside the desktop webview window.
+///
+/// The desktop launcher opens the webview at `/?desktop=1`; a browser (local
+/// or remote access) never carries that flag, so the web layout — no title
+/// bar — is guaranteed there (Z23). The old `window.ipc` probe was unreliable
+/// in both directions.
 pub fn is_desktop() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
-        js_sys::Reflect::has(&js_sys::global(), &wasm_bindgen::JsValue::from_str("ipc"))
+        web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .map(|q| q.contains("desktop=1"))
             .unwrap_or(false)
     }
     #[cfg(not(target_arch = "wasm32"))]

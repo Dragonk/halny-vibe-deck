@@ -1112,6 +1112,101 @@ pub async fn api_list_dir(
     imp::list_dir(&path, remote_id.as_deref(), &remote_root)
 }
 
+/// Open a file with the OS default application (desktop only; the browser
+/// build hides the button — the stable edition does the same).
+#[server]
+pub async fn api_open_externally(token: String, path: String) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    let target = path.trim().to_string();
+    if target.is_empty() {
+        return Err(ServerFnError::new("empty path"));
+    }
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", &target]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(&target);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&target);
+        c
+    };
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Create a project folder (the picker's "new folder" field).
+#[server]
+pub async fn api_create_dir(token: String, path: String) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    std::fs::create_dir_all(path.trim()).map_err(|e| ServerFnError::new(e.to_string()))
+}
+
+/// Home directory of this host (start of the "New project…" picker).
+#[server]
+pub async fn api_home_dir(token: String) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    Ok(dirs::home_dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| "/".to_string()))
+}
+
+/// List the **directories** of an absolute path for the project picker.
+///
+/// Unlike [`api_list_dir`] this is not confined to the engine working
+/// directory: choosing a project means browsing the whole disk (the stable
+/// edition's `NewProjectModal` does the same). Only directory entries are
+/// returned, sorted by name.
+#[server]
+pub async fn api_browse_dirs(token: String, path: String) -> Result<Vec<FileEntry>, ServerFnError> {
+    imp::check(&token)?;
+    let dir = if path.trim().is_empty() {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
+    } else {
+        std::path::PathBuf::from(path.trim())
+    };
+    let mut out: Vec<FileEntry> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| ServerFnError::new(e.to_string()))? {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue; // keep the picker readable; hidden dirs are never projects
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if !is_dir {
+            continue;
+        }
+        let full = entry.path().display().to_string();
+        out.push(FileEntry {
+            name,
+            path: full,
+            is_dir: true,
+            size: 0,
+            modified_ms: 0,
+        });
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(out)
+}
+
 /// Preview one file (text/markdown/csv/image/xlsx/doc/slides/pdf/zip).
 /// Remote sessions pull the file over SSH first (Nexus remoteFs).
 #[server]

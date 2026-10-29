@@ -322,6 +322,10 @@ pub fn Dock() -> Element {
 
     // local state that survives tab switches but resets with the component
     let cwd = use_signal(String::new);
+    // Z22: tree expansion + per-directory listings live here, so opening a
+    // preview tab and coming back keeps the tree exactly as it was.
+    let children = use_signal(std::collections::HashMap::<String, Vec<FileEntry>>::new);
+    let expanded = use_signal(Vec::<String>::new);
     let files_msg = use_signal(String::new);
     let tabs = use_signal(Vec::<PreviewTab>::new);
     let active = use_signal(|| None::<u64>);
@@ -481,6 +485,8 @@ pub fn Dock() -> Element {
             fs_root.clone(),
             cwd,
             entries,
+            children,
+            expanded,
             files_msg,
             tabs,
             active,
@@ -574,6 +580,7 @@ pub fn Dock() -> Element {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn files_panel(
     state: Signal<ClientState>,
     lang: String,
@@ -582,6 +589,8 @@ fn files_panel(
     root: String,
     cwd: Signal<String>,
     entries: Signal<Vec<FileEntry>>,
+    children: Signal<std::collections::HashMap<String, Vec<FileEntry>>>,
+    expanded: Signal<Vec<String>>,
     files_msg: Signal<String>,
     tabs: Signal<Vec<PreviewTab>>,
     active: Signal<Option<u64>>,
@@ -656,17 +665,42 @@ fn files_panel(
         }
     }
 
-    // ---------------- rows ----------------
-    let row_els: Vec<Element> = list
+    // ---------------- rows (tree, Z22) ----------------
+    // Flatten the expanded tree: each row carries its depth for indentation.
+    let expanded_set = expanded.read().clone();
+    let child_map = children.read().clone();
+    let mut flat: Vec<(FileEntry, usize)> = Vec::new();
+    fn walk(
+        list: &[FileEntry],
+        depth: usize,
+        expanded: &[String],
+        children: &std::collections::HashMap<String, Vec<FileEntry>>,
+        out: &mut Vec<(FileEntry, usize)>,
+    ) {
+        for e in list {
+            out.push((e.clone(), depth));
+            if e.is_dir && expanded.iter().any(|p| p == &e.path) {
+                if let Some(kids) = children.get(&e.path) {
+                    if depth < 8 {
+                        walk(kids, depth + 1, expanded, children, out);
+                    }
+                }
+            }
+        }
+    }
+    walk(&list, 0, &expanded_set, &child_map, &mut flat);
+
+    let row_els: Vec<Element> = flat
         .iter()
-        .map(|e| {
+        .map(|(e, depth)| {
             file_row(
                 state.clone(),
                 e,
+                *depth,
                 remote_id.clone(),
                 root.clone(),
-                cwd.clone(),
-                entries.clone(),
+                children.clone(),
+                expanded.clone(),
                 files_msg.clone(),
                 tabs.clone(),
                 active.clone(),
@@ -704,10 +738,11 @@ fn files_panel(
 fn file_row(
     state: Signal<ClientState>,
     e: &FileEntry,
+    depth: usize,
     remote_id: Option<String>,
     root: String,
-    cwd: Signal<String>,
-    entries: Signal<Vec<FileEntry>>,
+    children: Signal<std::collections::HashMap<String, Vec<FileEntry>>>,
+    expanded: Signal<Vec<String>>,
     files_msg: Signal<String>,
     tabs: Signal<Vec<PreviewTab>>,
     active: Signal<Option<u64>>,
@@ -717,30 +752,55 @@ fn file_row(
     let path = e.path.clone();
     let is_dir = e.is_dir;
     let size = fmt_size(e.size);
-    let icon = if is_dir { "📁" } else { "📄" };
-
+    let is_open = expanded.read().iter().any(|p| p == &path);
+    let icon = if is_dir {
+        if is_open { "📂" } else { "📁" }
+    } else {
+        "📄"
+    };
+    let chevron = if is_dir {
+        if is_open { "▾" } else { "▸" }
+    } else {
+        " "
+    };
     rsx! {
         div {
             class: "filetree-item",
+            style: "padding-left:{depth * 12 + 4}px;",
+            title: "{path}",
             onclick: {
                 let state = state.clone();
-                let mut cwd = cwd.clone();
-                let mut entries = entries.clone();
-                let mut files_msg = files_msg.clone();
+                let mut expanded = expanded.clone();
                 let tabs = tabs.clone();
                 let active = active.clone();
                 let next_id = next_id.clone();
                 let name = name.clone();
                 let path = path.clone();
+                let remote_id = remote_id.clone();
+                let root = root.clone();
                 move |_| {
                     if is_dir {
-                        let path = path.clone();
-                        cwd.set(path.clone());
+                        // Z22: a directory expands in place — the tree is
+                        // never replaced by a listing of the target folder.
+                        if expanded.read().iter().any(|p| p == &path) {
+                            expanded.write().retain(|p| p != &path);
+                            return;
+                        }
+                        expanded.write().push(path.clone());
+                        if children.read().contains_key(&path) {
+                            return;
+                        }
+                        let dir = path.clone();
+                        let key = name.clone();
                         let rid = remote_id.clone();
                         let root = root.clone();
+                        let mut children = children;
+                        let mut files_msg = files_msg.clone();
                         spawn(async move {
-                            match api_list_dir(token(&state), path, rid, root).await {
-                                Ok(v) => entries.set(v),
+                            match api_list_dir(token(&state), dir, rid, root).await {
+                                Ok(v) => {
+                                    children.write().insert(key, v);
+                                }
                                 Err(e) => files_msg.set(e.to_string()),
                             }
                         });
@@ -758,6 +818,7 @@ fn file_row(
                     }
                 }
             },
+            span { class: "filetree-chevron", "{chevron}" }
             span { "{icon}" }
             span { "{name}" }
             span { style: "color:var(--text-dim);font-size:10px;margin-left:auto;",
@@ -780,6 +841,7 @@ fn FilePreviewTab(
     active: Signal<Option<u64>>,
 ) -> Element {
     let name = tab.name.clone();
+    let path_lbl = tab.path.clone();
     let size = tab
         .data
         .as_ref()
@@ -1040,10 +1102,33 @@ fn FilePreviewTab(
                             span { class: "file-preview-name", "{name}" }
                             span { class: "file-preview-size", "{size}" }
                         }
+                        // Z21: the full path (stable layout) - the row is the
+                        // title block, actions stay on the right.
+                        span { class: "file-preview-path", title: "{path_lbl}", "{path_lbl}" }
                         div { class: "file-preview-actions",
                             {save_status}
                             {edit_btn}
                             {save_btn}
+                            if crate::state::is_desktop() {
+                                {
+                                    let open_path = path_lbl.clone();
+                                    let st_open = state.clone();
+                                    rsx! {
+                                        button {
+                                            class: "file-preview-btn",
+                                            title: "{tr(&lang, \"previewOpenExternally\")}",
+                                            onclick: move |_| {
+                                                let st = st_open.clone();
+                                                let p = open_path.clone();
+                                                spawn(async move {
+                                                    let _ = crate::fsgit::api_open_externally(token(&st), p).await;
+                                                });
+                                            },
+                                            "↗"
+                                        }
+                                    }
+                                }
+                            }
                             button {
                                 class: "file-preview-btn",
                                 onclick: move |_| close_tab(tabs_c, active_c, tid),

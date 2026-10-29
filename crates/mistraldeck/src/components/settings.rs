@@ -132,85 +132,6 @@ async fn reload_files(
     }
 }
 
-/// L1: read-only account rows (status, plan, key preview, whoami)
-/// for the General tab — data comes from `account/read` +
-/// `identity/read` via the snapshot (Nexus /whoami parity).
-fn account_rows(state: &Signal<ClientState>, lang: &str) -> Element {
-    let s = state.read();
-    let account = s.snapshot.account.clone();
-    let identity = s.snapshot.identity.clone();
-    drop(s);
-    let unsupported = account.as_ref().map(|a| a.unsupported).unwrap_or(false);
-    let row = |label: String, value: String| {
-        rsx! {
-            div { class: "updates-row",
-                div { class: "updates-info",
-                    span { class: "updates-name", "{label}" }
-                    span { class: "updates-versions", "{value}" }
-                }
-            }
-        }
-    };
-    let mut rows: Vec<Element> = Vec::new();
-    if unsupported || account.is_none() {
-        rows.push(rsx! {
-            div { class: "field-hint", "{tr(lang, \"accountUnsupported\")}" }
-        });
-        return rsx! { div { {rows.iter().cloned()} } };
-    }
-    let acc = account.expect("checked above");
-    rows.push(row(
-        tr(lang, "accountStatus").to_string(),
-        acc.status.clone(),
-    ));
-    if let Some(plan) = &acc.plan {
-        if !plan.title.is_empty() {
-            rows.push(row(tr(lang, "accountPlan").to_string(), plan.title.clone()));
-        }
-    }
-    if let Some(key) = &acc.api_key {
-        if !key.preview.is_empty() {
-            let mut v = key.preview.clone();
-            if !key.scope.is_empty() {
-                v.push_str(&format!(" · {}", key.scope));
-            }
-            if let Some(asx) = &key.access_scope {
-                v.push_str(&format!(" · {asx}"));
-            }
-            rows.push(row(tr(lang, "accountApiKeyPreview").to_string(), v));
-        }
-    }
-    if let Some(id) = &identity {
-        if !id.raw_json.is_empty() {
-            // Tolerant whoami: pick the usual fields out of the raw
-            // JSON, fall back to a trimmed dump.
-            let who = serde_json::from_str::<serde_json::Value>(&id.raw_json)
-                .ok()
-                .and_then(|v| {
-                    ["name", "email", "login", "user", "username"]
-                        .iter()
-                        .find_map(|k| {
-                            v.get(*k)
-                                .or_else(|| v.get("user").and_then(|u| u.get(*k)))
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_string)
-                        })
-                })
-                .unwrap_or_else(|| {
-                    let raw = id.raw_json.trim();
-                    if raw.len() > 120 {
-                        format!("{}…", &raw[..120])
-                    } else {
-                        raw.to_string()
-                    }
-                });
-            if !who.is_empty() {
-                rows.push(row(tr(lang, "accountWhoami").to_string(), who));
-            }
-        }
-    }
-    rsx! { div { {rows.iter().cloned()} } }
-}
 
 fn del_btn(mut on_click: impl FnMut() + 'static) -> Element {
     rsx! {
@@ -438,7 +359,6 @@ pub fn SettingsView() -> Element {
     let remote_port = s.snapshot.config.remote_port;
     let ssh_conns = s.snapshot.config.remote_connections.clone();
     let serve_url = format!("https://<host>:{remote_port}");
-    let status = s.snapshot.status.clone();
     let session_cwd = s
         .snapshot
         .current
@@ -454,6 +374,7 @@ pub fn SettingsView() -> Element {
 
     // SSH remote-connections editor state (remote tab, second section).
     let ssh_draft = use_signal(|| Option::<SshDraft>::None);
+    let ssh_new_loc = use_signal(String::new);
     let ssh_msg = use_signal(String::new);
     let ssh_busy = use_signal(|| false);
 
@@ -782,7 +703,7 @@ pub fn SettingsView() -> Element {
     );
 
     let body_el = match tab.read().as_str() {
-        "remote" => rsx! {
+        "serve" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
                     div { class: "settings-section-title", "{loc(&lang, \"Zdalne sterowanie\", \"Remote control\")}" }
@@ -893,6 +814,8 @@ pub fn SettingsView() -> Element {
                     }
                 }
             }
+        },
+        "remote" => rsx! {
             div { class: "settings-section",
                 div { class: "settings-section-header",
                     div { class: "settings-section-title", "{loc(&lang, \"Serwery zdalne (SSH)\", \"Remote servers (SSH)\")}" }
@@ -915,7 +838,7 @@ pub fn SettingsView() -> Element {
                 }
                 {ssh_conn_rows(state, lang.clone(), &ssh_conns, ssh_draft.clone(), ssh_msg.clone()).iter().cloned()}
                 if let Some(d) = ssh_draft.read().clone() {
-                    {ssh_editor_el(state.clone(), lang.clone(), d, ssh_draft.clone(), ssh_msg.clone(), ssh_busy.clone())}
+                    {ssh_editor_el(state.clone(), lang.clone(), d, ssh_draft.clone(), ssh_new_loc, ssh_msg.clone(), ssh_busy.clone())}
                 }
                 if !ssh_msg.read().is_empty() {
                     div { class: "field-hint", style: "white-space:pre-wrap;", "{ssh_msg.read().clone()}" }
@@ -2313,15 +2236,7 @@ pub fn SettingsView() -> Element {
             let agent_install_lbl = loc(&lang, "Zainstaluj", "Install");
             let agent_installing_lbl = loc(&lang, "Instalowanie…", "Installing…");
             let idle_lbl = tr(&lang, "autoCloseIdleLabel");
-            let connect_lbl = tr(&lang, "connectToAgent");
-            let disconnect_lbl = tr(&lang, "disconnect");
             let save_lbl = tr(&lang, "saveLabel");
-            let agent_lbl = loc(&lang, "Agent", "Agent");
-            let reconnect_hint = loc(
-                &lang,
-                "Ponowne połączenie wykrywa agenta (vibe-app-server).",
-                "Reconnecting re-detects the agent (vibe-app-server).",
-            );
             let app_cur = app
                 .as_ref()
                 .map(|a| a.current_version.clone())
@@ -2578,153 +2493,97 @@ pub fn SettingsView() -> Element {
                         span { class: "field-hint", style: "margin-left:10px;", "{g_msg.read()}" }
                     }
                 }
-                div { class: "field",
-                    div { class: "field-label", "{agent_lbl}" }
-                    div { class: "agent-status {status}",
-                        span { class: "status-dot" }
-                        span { class: "status-label", "{status}" }
-                    }
-                    div { class: "field-row", style: "margin-top:6px;",
-                        button {
-                            class: "action-btn",
-                            onclick: {
-                                let state = state.clone();
-                                move |_| {
-                                    let state = state.clone();
-                                    async move {
-                                        let _ = crate::api::api_agent_connect(token(&state)).await;
-                                        refresh_after_save(state).await;
-                                    }
-                                }
-                            },
-                            "{connect_lbl}"
-                        }
-                        button {
-                            class: "action-btn danger",
-                            style: "margin-left:8px;",
-                            onclick: {
-                                let state = state.clone();
-                                move |_| {
-                                    let state = state.clone();
-                                    async move {
-                                        let _ = crate::api::api_agent_disconnect(token(&state)).await;
-                                        refresh_after_save(state).await;
-                                    }
-                                }
-                            },
-                            "{disconnect_lbl}"
-                        }
-                    }
-                    div { class: "field-hint", "{reconnect_hint}" }
-                }
-                // ---- Konto (L1; TUI /whoami + AccountView parity) ----
-                div { class: "settings-section-header",
-                    div { class: "settings-section-title", "{tr(&lang, \"accountSection\")}" }
-                }
-                {account_rows(&state, &lang)}
-                div { class: "updates-row",
-                    div { class: "updates-actions",
-                        button {
-                            class: "field-btn",
-                            onclick: {
-                                let state = state;
-                                move |_| {
-                                    let state = state;
-                                    spawn(async move {
-                                        let _ = crate::api::api_setup_account_status(
-                                            token(&state),
-                                        )
-                                        .await;
-                                        crate::state::refresh(state).await;
-                                    });
-                                }
-                            },
-                            "{tr(&lang, \"accountRefresh\")}"
-                        }
-                        button {
-                            class: "field-btn",
-                            onclick: {
-                                let state = state;
-                                move |_| {
-                                    let mut state = state;
-                                    state.write().login_requested = true;
-                                }
-                            },
-                            "{tr(&lang, \"accountReLogin\")}"
-                        }
-                    }
-                }
                 // ---- Updates (element 6; Nexus SettingsView general tab) ----
                 div { class: "settings-section-header",
                     div { class: "settings-section-title", "{loc(&lang, \"Aktualizacje\", \"Updates\")}" }
                 }
+                // Z11: the update action only exists when a newer version is
+                // actually available; otherwise the row shows the installed
+                // version plus the manual check.
                 div { class: "updates-row",
                     div { class: "updates-info",
                         span { class: "updates-name", "{loc(&lang, \"Aplikacja\", \"App\")}" }
                         span { class: "updates-versions",
-                            "{loc(&lang, \"Obecna\", \"Current\")}: {app_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {app_latest}"
+                            if app_avail {
+                                "{loc(&lang, \"Obecna\", \"Current\")}: {app_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {app_latest}"
+                            } else {
+                                "{loc(&lang, \"Wersja\", \"Version\")}: {app_cur}"
+                            }
                         }
                         if let Some(pt) = &prog_text {
                             span { class: "updates-progress", "{pt}" }
                         }
                     }
                     div { class: "updates-actions",
-                        button {
-                            class: "field-btn",
-                            disabled: busy,
-                            onclick: {
-                                let state = state;
-                                move |_| {
+                        if app_avail && desktop {
+                            button {
+                                class: "action-btn",
+                                disabled: busy,
+                                onclick: {
                                     let state = state;
-                                    spawn(async move { crate::state::check_updates(state).await; });
-                                }
-                            },
-                            "{loc(&lang, \"Sprawdź aktualizacje\", \"Check for updates\")}"
-                        }
-                        button {
-                            class: "action-btn",
-                            disabled: busy || !app_avail || !desktop,
-                            onclick: {
-                                let state = state;
-                                move |_| {
+                                    move |_| {
+                                        let state = state;
+                                        spawn(async move { crate::state::start_app_update(state).await; });
+                                    }
+                                },
+                                "{loc(&lang, \"Aktualizuj\", \"Update now\")}"
+                            }
+                        } else {
+                            button {
+                                class: "field-btn",
+                                disabled: busy,
+                                onclick: {
                                     let state = state;
-                                    spawn(async move { crate::state::start_app_update(state).await; });
-                                }
-                            },
-                            "{loc(&lang, \"Aktualizuj\", \"Update now\")}"
+                                    move |_| {
+                                        let state = state;
+                                        spawn(async move { crate::state::check_updates(state).await; });
+                                    }
+                                },
+                                "{loc(&lang, \"Sprawdź aktualizacje\", \"Check for updates\")}"
+                            }
                         }
                     }
                 }
                 if let Some(e) = &app_err {
                     div { class: "field-hint", "❌ {e}" }
                 }
-                div { class: "field-hint", "{loc(&lang, \"Aktualizacja aplikacji pobiera nową wersję, instaluje ją i uruchamia aplikację ponownie.\", \"The app update downloads the new version, installs it and relaunches the app.\")}" }
+                if app_avail {
+                    div { class: "field-hint", "{loc(&lang, \"Aktualizacja aplikacji pobiera nową wersję, instaluje ją i uruchamia aplikację ponownie.\", \"The app update downloads the new version, installs it and relaunches the app.\")}" }
+                }
                 div { class: "updates-row",
                     div { class: "updates-info",
                         span { class: "updates-name", "CLI (mistral-vibe)" }
                         span { class: "updates-versions",
-                            "{loc(&lang, \"Obecna\", \"Current\")}: {cli_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {cli_latest}"
+                            if cli_avail {
+                                "{loc(&lang, \"Obecna\", \"Current\")}: {cli_cur} · {loc(&lang, \"Najnowsza\", \"Latest\")}: {cli_latest}"
+                            } else {
+                                "{loc(&lang, \"Wersja\", \"Version\")}: {cli_cur}"
+                            }
                         }
                     }
                     div { class: "updates-actions",
-                        button {
-                            class: "action-btn",
-                            disabled: busy || !cli_avail,
-                            onclick: {
-                                let state = state;
-                                move |_| {
+                        if cli_avail {
+                            button {
+                                class: "action-btn",
+                                disabled: busy,
+                                onclick: {
                                     let state = state;
-                                    spawn(async move { crate::state::upgrade_local_cli(state).await; });
-                                }
-                            },
-                            "{loc(&lang, \"Aktualizuj CLI\", \"Upgrade CLI\")}"
+                                    move |_| {
+                                        let state = state;
+                                        spawn(async move { crate::state::upgrade_local_cli(state).await; });
+                                    }
+                                },
+                                "{loc(&lang, \"Aktualizuj CLI\", \"Upgrade CLI\")}"
+                            }
                         }
                     }
                 }
                 if let Some(e) = &cli_err {
                     div { class: "field-hint", "❌ {e}" }
                 }
-                div { class: "field-hint", "{loc(&lang, \"Aktualizacja CLI działa przez uv (do 5 minut).\", \"The CLI upgrade runs through uv (up to to 5 minutes).\")}" }
+                if cli_avail {
+                    div { class: "field-hint", "{loc(&lang, \"Aktualizacja CLI działa przez uv (do 5 minut).\", \"The CLI upgrade runs through uv (up to 5 minutes).\")}" }
+                }
                 div { class: "remote-cli-updates",
                     div { class: "field-label", "{loc(&lang, \"Zdalne CLI\", \"Remote CLI\")}" }
                     if rem_rows.is_empty() {
@@ -2881,7 +2740,8 @@ pub fn SettingsView() -> Element {
             }
             div { class: "settings-tabs scope-switch",
                 button { class: "{tab_cls(\"general\")}", onclick: move |_| tab.set("general".into()), "{tr(&lang, \"general\")}" }
-                button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne\", \"Remote\")}" }
+                button { class: "{tab_cls(\"serve\")}", onclick: move |_| tab.set("serve".into()), "{loc(&lang, \"Serwer\", \"Server\")}" }
+                button { class: "{tab_cls(\"remote\")}", onclick: move |_| tab.set("remote".into()), "{loc(&lang, \"Zdalne (SSH)\", \"Remote (SSH)\")}" }
                 button { class: "{tab_cls(\"providers\")}", onclick: move |_| tab.set("providers".into()), "{tr(&lang, \"providers\")}" }
                 button { class: "{tab_cls(\"models\")}", onclick: move |_| tab.set("models".into()), "{tr(&lang, \"models\")}" }
                 button { class: "{tab_cls(\"mcp\")}", onclick: move |_| tab.set("mcp".into()), "{tr(&lang, \"mcp\")}" }
@@ -2953,11 +2813,13 @@ fn ssh_conn_rows(
 
 /// The SSH connection draft editor: name, ssh command, locations,
 /// install command + Test / Install / Save / Delete / Cancel.
+#[allow(clippy::too_many_arguments)]
 fn ssh_editor_el(
     state: Signal<ClientState>,
     lang: String,
     d: SshDraft,
     ssh_draft: Signal<Option<SshDraft>>,
+    ssh_new_loc: Signal<String>,
     ssh_msg: Signal<String>,
     ssh_busy: Signal<bool>,
 ) -> Element {
@@ -3012,18 +2874,98 @@ fn ssh_editor_el(
                 }
             }
             div { class: "field",
-                div { class: "field-label", "{loc(&lang, \"Katalogi projektów (jeden na linię)\", \"Project directories (one per line)\")}" }
-                textarea {
-                    class: "field-input",
-                    style: "min-height:60px;font-family:monospace;font-size:12px;",
-                    value: "{d.locations}",
-                    oninput: {
-                        let mut ssh_draft = ssh_draft.clone();
-                        move |e| {
-                            let mut w = ssh_draft.write();
-                            if let Some(x) = w.as_mut() { x.locations = e.value(); }
-                        }
-                    },
+                // Z13: one row per project directory (stable editor parity).
+                div { class: "field-label", "{loc(&lang, \"Katalogi projektów\", \"Project directories\")}" }
+                {
+                    let rows: Vec<String> = d
+                        .locations
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    let row_els: Vec<Element> = rows
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            let value = r.clone();
+                            let remaining: String = rows
+                                .iter()
+                                .enumerate()
+                                .filter(|(j, _)| *j != i)
+                                .map(|(_, v)| v.clone())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            rsx! {
+                                div { key: "loc{i}", class: "field-row",
+                                    input {
+                                        class: "field-input",
+                                        r#type: "text",
+                                        readonly: true,
+                                        style: "font-family:monospace;font-size:12px;",
+                                        value: "{value}",
+                                    }
+                                    button {
+                                        class: "save-btn",
+                                        style: "padding:2px 10px;",
+                                        title: "{loc(&lang, \"Usuń\", \"Remove\")}",
+                                        onclick: {
+                                            let mut ssh_draft = ssh_draft.clone();
+                                            let remaining = remaining.clone();
+                                            move |_| {
+                                                let mut w = ssh_draft.write();
+                                                if let Some(x) = w.as_mut() {
+                                                    x.locations = remaining.clone();
+                                                }
+                                            }
+                                        },
+                                        "✕"
+                                    }
+                                }
+                            }
+                        })
+                        .collect();
+                    rsx! { {row_els.iter().cloned()} }
+                }
+                div { class: "field-row",
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        placeholder: "/home/user/project",
+                        style: "font-family:monospace;font-size:12px;",
+                        value: "{*ssh_new_loc.read()}",
+                        oninput: {
+                            let mut ssh_new_loc = ssh_new_loc.clone();
+                            move |e| ssh_new_loc.set(e.value())
+                        },
+                    }
+                    button {
+                        class: "save-btn",
+                        style: "padding:2px 10px;",
+                        onclick: {
+                            let mut ssh_draft = ssh_draft.clone();
+                            let mut ssh_new_loc = ssh_new_loc.clone();
+                            move |_| {
+                                let loc = ssh_new_loc.read().trim().to_string();
+                                if loc.is_empty() {
+                                    return;
+                                }
+                                let mut w = ssh_draft.write();
+                                if let Some(x) = w.as_mut() {
+                                    if !x.locations.lines().any(|l| l.trim() == loc) {
+                                        if !x.locations.is_empty() {
+                                            x.locations.push('\n');
+                                        }
+                                        x.locations.push_str(&loc);
+                                    }
+                                }
+                                ssh_new_loc.set(String::new());
+                            }
+                        },
+                        "＋ {loc(&lang, \"Dodaj\", \"Add\")}"
+                    }
+                }
+                div { class: "field-hint",
+                    "{loc(&lang, \"Katalogi, w których pojawi się ten serwer na liście sesji.\", \"Directories this server exposes in the session list.\")}"
                 }
             }
             div { class: "field",

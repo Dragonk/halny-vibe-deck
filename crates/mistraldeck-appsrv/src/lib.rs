@@ -7,4 +7,4 @@ pub mod proto;
 pub mod reducer;
 pub mod worker;
 
-pub use worker::ApsHandle;
+pub use worker::{trace, ApsHandle};

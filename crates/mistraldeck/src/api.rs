@@ -147,10 +147,11 @@ pub async fn api_login_with_api_key(
     }
 }
 
+/// New session in a project (D1: a session always has a working directory).
 #[server]
-pub async fn api_create_session(token: String) -> Result<(), ServerFnError> {
+pub async fn api_create_session(token: String, cwd: String) -> Result<(), ServerFnError> {
     check(&token)?;
-    mistraldeck_engine::Engine::global().create_local_session();
+    mistraldeck_engine::Engine::global().create_local_session_in(&cwd);
     Ok(())
 }
 
@@ -209,10 +210,12 @@ pub async fn api_set_config_option(token: String, key: String, value: String) ->
     Ok(())
 }
 
+/// Re-index the history list from the local session store (no agent
+/// process — Z5).
 #[server]
 pub async fn api_refresh_sessions(token: String) -> Result<(), ServerFnError> {
     check(&token)?;
-    mistraldeck_engine::Engine::global().refresh_sessions();
+    mistraldeck_engine::Engine::global().refresh_sessions_from_disk();
     Ok(())
 }
 
@@ -238,22 +241,6 @@ pub async fn api_set_general(
 ) -> Result<(), ServerFnError> {
     check(&token)?;
     mistraldeck_engine::Engine::global().set_general(auto_close_idle_minutes);
-    Ok(())
-}
-
-/// Connect the local agent (Nexus handleStartAgent).
-#[server]
-pub async fn api_agent_connect(token: String) -> Result<(), ServerFnError> {
-    check(&token)?;
-    mistraldeck_engine::Engine::global().start_agent();
-    Ok(())
-}
-
-/// Disconnect the local agent (Nexus agent.stop).
-#[server]
-pub async fn api_agent_disconnect(token: String) -> Result<(), ServerFnError> {
-    check(&token)?;
-    mistraldeck_engine::Engine::global().stop_agent();
     Ok(())
 }
 

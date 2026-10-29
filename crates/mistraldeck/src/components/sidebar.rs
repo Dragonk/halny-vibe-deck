@@ -54,7 +54,44 @@ struct Group {
     wd: String,
     label: String,
     sessions: Vec<(usize, SessionMeta)>,
+    /// Past sessions of this project from the local store (`session/list`
+    /// or the on-disk index). Clicking one opens the lazy preview — no
+    /// agent process (Z6).
+    history: Vec<mistraldeck_core::proto::AgentSessionInfo>,
     newest: i64,
+}
+
+/// Epoch ms from an ISO-8601 timestamp (`2026-10-29T14:07:03Z`), enough to
+/// sort project groups that only exist in the history.
+fn ms_from_iso(ts: &str) -> i64 {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 10 {
+        return 0;
+    }
+    let num = |a: usize, b: usize| -> i64 {
+        std::str::from_utf8(&bytes[a..b])
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+    let (y, m, d) = (num(0, 4), num(5, 7), num(8, 10));
+    let (hh, mm, ss) = if bytes.len() >= 19 {
+        (num(11, 13), num(14, 16), num(17, 19))
+    } else {
+        (0, 0, 0)
+    };
+    if y == 0 || m == 0 || d == 0 {
+        return 0;
+    }
+    // days_from_civil (Howard Hinnant)
+    let y2 = if m <= 2 { y - 1 } else { y };
+    let era = if y2 >= 0 { y2 } else { y2 - 399 } / 400;
+    let yoe = y2 - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    days * 86_400_000 + (hh * 3600 + mm * 60 + ss) * 1000
 }
 
 fn date_str(ms: i64) -> String {
@@ -87,6 +124,9 @@ pub fn Sidebar() -> Element {
     let confirm = use_signal(|| None::<ConfirmTarget>);
     let collapsed = use_signal(Vec::<String>::new);
     let ctx = use_signal(|| None::<CtxMenu>);
+    // "New project…" picker (Z2): `np_remote` switches it to an SSH host.
+    let np_open = use_signal(|| false);
+    let np_remote = use_signal(|| None::<(String, String)>);
 
     let s = state.read();
     let lang = lang(&state);
@@ -96,7 +136,15 @@ pub fn Sidebar() -> Element {
     let cfg = s.snapshot.config.clone();
     let view = s.view;
     let cfg_desktop = s.desktop_mode;
+    let start_path = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| m.working_directory.clone())
+        .filter(|wd| !wd.is_empty())
+        .unwrap_or_default();
     drop(s);
+    let new_project_lbl = tr(&lang, "newProjectLabel").to_string();
 
     let desktop_mode = cfg_desktop;
     // v1.0.33 parity: web-only bottom controls (theme cycle + logout).
@@ -170,7 +218,50 @@ pub fn Sidebar() -> Element {
                 wd: wd.clone(),
                 label,
                 sessions: vec![(*idx, meta.clone())],
+                history: Vec::new(),
                 newest: meta.last_active_ms,
+            }),
+        }
+    }
+
+    // ---- Project history (Z6) ----
+    // Past sessions from the local store belong to their project group, and
+    // a project with only history still shows up. Nothing is spawned here:
+    // a click opens the on-disk preview (lazy resume).
+    let open_agent_ids: Vec<String> = visible
+        .iter()
+        .filter_map(|(_, m)| m.agent_session_id.clone())
+        .collect();
+    for info in backend.iter() {
+        if info.session_id.is_empty()
+            || open_agent_ids.iter().any(|id| id == &info.session_id)
+            || cfg.hidden_sessions.iter().any(|h| h == &info.session_id)
+        {
+            continue;
+        }
+        let wd = info.cwd.clone();
+        if !wd.is_empty() && cfg.hidden_projects.iter().any(|h| h == &wd) {
+            continue;
+        }
+        let newest = ms_from_iso(&info.start_time);
+        let label = if wd.is_empty() {
+            tr(&lang, "noProject").to_string()
+        } else {
+            short_dir(&wd)
+        };
+        match groups.iter_mut().find(|g| g.wd == wd) {
+            Some(g) => {
+                g.history.push(info.clone());
+                if newest > g.newest {
+                    g.newest = newest;
+                }
+            }
+            None => groups.push(Group {
+                wd: wd.clone(),
+                label,
+                sessions: Vec::new(),
+                history: vec![info.clone()],
+                newest,
             }),
         }
     }
@@ -180,10 +271,6 @@ pub fn Sidebar() -> Element {
     let group_els: Vec<Element> = groups
         .iter()
         .map(|g| group_el(state, lang.clone(), g, current, confirm, collapsed, ctx))
-        .collect();
-    let backend_els: Vec<Element> = backend
-        .iter()
-        .map(|info| backend_el(state, lang.clone(), info, confirm))
         .collect();
     let remote_panes = use_signal(std::collections::HashMap::<String, RemotePane>::new);
     let remotes: Vec<RemoteConnection> = cfg
@@ -218,6 +305,8 @@ pub fn Sidebar() -> Element {
                 current,
                 confirm,
                 ctx,
+                np_open,
+                np_remote,
             )
         })
         .collect();
@@ -263,52 +352,27 @@ pub fn Sidebar() -> Element {
                     span { class: "sidebar-brand-name", "{tr(&lang, \"appName\")}" }
                 }
             }
-            div { class: "sidebar-header",
+            // D3: the project button lives next to the SESSIONS label,
+            // right-aligned. A session always belongs to a project, so this
+            // is the only global entry point (Z2/Z4).
+            div { class: "sidebar-sessions-header",
+                span { class: "sidebar-sessions-label", "{tr(&lang, \"sessions\")}" }
                 button {
-                    class: "new-session-btn",
+                    class: "sidebar-np-btn",
+                    title: "{new_project_lbl}",
                     onclick: {
-                        let state = state.clone();
-                        move |_| {
-                            let state = state.clone();
-                            async move {
-                                let empty = {
-                                    let s = state.read();
-                                    s.snapshot
-                                        .sessions
-                                        .iter()
-                                        .enumerate()
-                                        .find(|(_, m)| m.message_count == 0 && m.agent_session_id.is_some())
-                                        .map(|(i, _)| i)
-                                };
-                                match empty {
-                                    Some(i) => {
-                                        let _ = crate::api::api_switch_session(token(&state), i).await;
-                                    }
-                                    None => {
-                                        let _ = crate::api::api_create_session(token(&state)).await;
-                                    }
-                                }
-                                crate::state::refresh(state).await;
-                                crate::app::set_view(state, View::Chat);
-                            }
-                        }
+                        let mut np_open = np_open;
+                        move |_| np_open.set(true)
                     },
-                    span { class: "new-session-icon", "+" }
-                    "{tr(&lang, \"newSession\")}"
+                    span { class: "sidebar-np-icon", "🆕" }
+                    span { class: "sidebar-np-text", "{new_project_lbl}" }
                 }
             }
-            div { class: "sidebar-sessions-label", "{tr(&lang, \"sessions\")}" }
             nav { class: "session-list session-list-projects",
                 if group_els.is_empty() {
                     span { class: "session-empty", "{tr(&lang, \"noSessionsYet\")}" }
                 }
                 {group_els.iter().cloned()}
-            }
-            if !backend.is_empty() {
-                div { class: "sidebar-sessions-label", "CLI" }
-                nav { class: "session-list",
-                    {backend_els.iter().cloned()}
-                }
             }
             if !remote_els.is_empty() {
                 div { class: "sidebar-sessions-label", "SSH" }
@@ -397,6 +461,9 @@ pub fn Sidebar() -> Element {
             div { class: "sidebar-resize-handle" }
         }
 
+        if *np_open.read() {
+            NewProjectModal { open: np_open, remote: np_remote.read().clone(), start_path: start_path.clone() }
+        }
         if let Some(el) = modal_el {
             {el}
         }
@@ -517,12 +584,20 @@ fn group_el(
         .iter()
         .map(|(idx, m)| session_row(state.clone(), lang.clone(), *idx, m, current, confirm.clone(), ctx.clone()))
         .collect();
+    // Z6: past sessions of this project, opened as a lazy preview.
+    let hist_rows: Vec<Element> = g
+        .history
+        .iter()
+        .map(|info| backend_el(state.clone(), info, confirm.clone(), false))
+        .collect();
     let title = if g.wd.is_empty() {
         tr(&lang, "noProject").to_string()
     } else {
         g.wd.clone()
     };
-    let count = g.sessions.len().to_string();
+    let count = (g.sessions.len() + g.history.len()).to_string();
+    let new_here_lbl = tr(&lang, "newSessionHere").to_string();
+    let new_here_wd = g.wd.clone();
     let is_collapsed = collapsed.read().contains(&g.wd);
     let chev_cls = if is_collapsed {
         "project-chevron"
@@ -568,9 +643,30 @@ fn group_el(
                 span { class: "{chev_cls}", "▸" }
                 span { class: "project-name", "{g.label}" }
                 span { class: "project-count", "{count}" }
+                // Z3/D2: a new session always starts in a project.
+                span {
+                    class: "pgh-plus",
+                    title: "{new_here_lbl}",
+                    onclick: {
+                        let state = state.clone();
+                        let wd = new_here_wd.clone();
+                        move |e| {
+                            e.stop_propagation();
+                            let state = state.clone();
+                            let wd = wd.clone();
+                            spawn(async move {
+                                let _ = crate::api::api_create_session(token(&state), wd).await;
+                                crate::state::refresh(state.clone()).await;
+                                crate::app::set_view(state, View::Chat);
+                            });
+                        }
+                    },
+                    "＋"
+                }
             }
             if !is_collapsed {
                 {rows.iter().cloned()}
+                {hist_rows.iter().cloned()}
             }
         }
     }
@@ -692,11 +788,13 @@ fn session_row(
     }
 }
 
+/// One history row (`session/list` or the on-disk index). `show_dir` adds
+/// the project directory to the meta line — off inside project groups.
 fn backend_el(
     state: Signal<ClientState>,
-    _lang: String,
     info: &mistraldeck_core::proto::AgentSessionInfo,
     confirm: Signal<Option<ConfirmTarget>>,
+    show_dir: bool,
 ) -> Element {
     let sid = info.session_id.clone();
     let name = if info.name.is_empty() {
@@ -732,7 +830,11 @@ fn backend_el(
                     span { class: "session-name", "{name}" }
                 }
                 div { class: "session-item-meta",
-                    span { class: "session-date", "{date} · {dir}" }
+                    if show_dir {
+                        span { class: "session-date", "{date} · {dir}" }
+                    } else {
+                        span { class: "session-date", "{date}" }
+                    }
                 }
             }
             span {
@@ -772,6 +874,8 @@ fn remote_conn_el(
     current: Option<usize>,
     confirm: Signal<Option<ConfirmTarget>>,
     ctx: Signal<Option<CtxMenu>>,
+    np_open: Signal<bool>,
+    np_remote: Signal<Option<(String, String)>>,
 ) -> Element {
     let conn_id = conn.id.clone();
     let group_key = format!("remote:{conn_id}");
@@ -781,6 +885,7 @@ fn remote_conn_el(
     } else {
         "project-chevron open"
     };
+    let np_lbl = tr(&lang, "newProjectLabel").to_string();
     let (dot_cls, dot_title) = match &pane.status {
         Some(st) if st.ok => (
             "remote-dot ok",
@@ -924,6 +1029,25 @@ fn remote_conn_el(
                 span { class: "remote-badge", "📍" }
                 span { class: "project-name", "{conn.name}" }
                 span { class: "{dot_cls}", title: "{dot_title}" }
+                // D4: same "New project…" entry as the local sessions header.
+                span {
+                    class: "pgh-plus",
+                    title: "{np_lbl}",
+                    onclick: {
+                        let mut np_open = np_open;
+                        let mut np_remote = np_remote;
+                        let conn_id = conn_id.clone();
+                        let conn_name = conn.name.clone();
+                        let default_loc = conn.locations.first().cloned().unwrap_or_default();
+                        move |e| {
+                            e.stop_propagation();
+                            np_remote.set(Some((conn_id.clone(), conn_name.clone())));
+                            let _ = default_loc.clone();
+                            np_open.set(true);
+                        }
+                    },
+                    "🆕"
+                }
             }
             if !is_collapsed {
                 {folder_els.iter().cloned()}
@@ -1146,6 +1270,229 @@ fn remote_cli_el(
                 }
                 div { class: "session-item-meta",
                     span { class: "session-date", "{meta}" }
+                }
+            }
+        }
+    }
+}
+
+/// "New project…" picker (Z2, D3/D4).
+///
+/// Local mode browses the filesystem (`api_browse_dirs` — not confined to the
+/// engine working directory, choosing a project means the whole disk); SSH
+/// mode takes a path on the remote host. Creating a session here is the only
+/// way to start one: a session always belongs to a project (D1).
+#[component]
+fn NewProjectModal(
+    /// Set to `false` to close the dialog.
+    open: Signal<bool>,
+    /// `(connection id, display name)` — `None` = local project.
+    remote: Option<(String, String)>,
+    /// Initial directory (local) or remote path.
+    start_path: String,
+) -> Element {
+    let state = use_context::<Signal<ClientState>>();
+    let lang = lang(&state);
+    let mut path = use_signal(|| start_path.clone());
+    let mut dirs = use_signal(Vec::<crate::fsgit::FileEntry>::new);
+    let name = use_signal(String::new);
+    let mut err = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let mut loaded = use_signal(|| false);
+    let is_remote = remote.is_some();
+
+    // Local: start in the session's project, else the home directory.
+    if !is_remote && !*loaded.read() {
+        loaded.set(true);
+        let initial = start_path.clone();
+        spawn(async move {
+            let base = if initial.is_empty() {
+                crate::fsgit::api_home_dir(token(&state)).await.unwrap_or_default()
+            } else {
+                initial
+            };
+            path.set(base.clone());
+            match crate::fsgit::api_browse_dirs(token(&state), base).await {
+                Ok(v) => dirs.set(v),
+                Err(e) => err.set(e.to_string()),
+            }
+        });
+    }
+
+    let parent = {
+        let p = path.read().clone();
+        let trimmed = p.trim_end_matches('/');
+        match trimmed.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(i) => trimmed[..i].to_string(),
+            None => String::new(),
+        }
+    };
+
+    let dir_rows: Vec<Element> = dirs
+        .read()
+        .iter()
+        .map(|e| {
+            let target = e.path.clone();
+            let label = e.name.clone();
+            rsx! {
+                button {
+                    key: "{target}",
+                    class: "np-dir-row",
+                    onclick: {
+                        let mut path = path;
+                        let mut dirs = dirs;
+                        let mut err = err;
+                        let state = state.clone();
+                        move |_| {
+                            let target = target.clone();
+                            path.set(target.clone());
+                            let state = state.clone();
+                            spawn(async move {
+                                match crate::fsgit::api_browse_dirs(token(&state), target).await {
+                                    Ok(v) => dirs.set(v),
+                                    Err(e) => err.set(e.to_string()),
+                                }
+                            });
+                        }
+                    },
+                    "📁 {label}"
+                }
+            }
+        })
+        .collect();
+
+    let remote_clone = remote.clone();
+    let create = {
+        let state = state.clone();
+        let remote = remote_clone.clone();
+        move |_| {
+            let state = state.clone();
+            let remote = remote.clone();
+            let base = path.read().trim().to_string();
+            let extra = name.read().trim().to_string();
+            busy.set(true);
+            spawn(async move {
+                let mut target = base;
+                if !extra.is_empty() {
+                    target = format!("{}/{}", target.trim_end_matches('/'), extra);
+                }
+                if target.is_empty() {
+                    err.set("…".to_string());
+                    busy.set(false);
+                    return;
+                }
+                let res = match remote.clone() {
+                    Some((conn_id, _)) => {
+                        // Remote: the engine creates the session over SSH; a
+                        // missing directory surfaces as an error here.
+                        crate::api::api_start_remote_session(token(&state), conn_id, target).await
+                    }
+                    None => {
+                        if extra.is_empty() {
+                            crate::api::api_create_session(token(&state), target).await
+                        } else {
+                            match crate::fsgit::api_create_dir(token(&state), target.clone()).await {
+                                Ok(()) => {
+                                    crate::api::api_create_session(token(&state), target).await
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                    }
+                };
+                match res {
+                    Ok(()) => {
+                        crate::state::refresh(state.clone()).await;
+                        crate::app::set_view(state, View::Chat);
+                        open.set(false);
+                    }
+                    Err(e) => err.set(e.to_string()),
+                }
+                busy.set(false);
+            });
+        }
+    };
+
+    let title = match &remote {
+        Some((_, n)) => format!("{} · {n}", tr(&lang, "newProjectTitle")),
+        None => tr(&lang, "newProjectTitle").to_string(),
+    };
+    let close = {
+        let mut open = open;
+        move |_| open.set(false)
+    };
+
+    rsx! {
+        div { class: "modal-overlay", onclick: close,
+            div { class: "modal-box np-modal", onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "{title}" }
+                div { class: "np-path-row",
+                    span { class: "np-path", title: "{path}", "{path}" }
+                    if !is_remote {
+                        button {
+                            class: "field-btn",
+                            disabled: parent.is_empty(),
+                            onclick: {
+                                let mut path = path;
+                                let mut dirs = dirs;
+                                let state = state.clone();
+                                let parent = parent.clone();
+                                move |_| {
+                                    let target = parent.clone();
+                                    path.set(target.clone());
+                                    let state = state.clone();
+                                    spawn(async move {
+                                        if let Ok(v) = crate::fsgit::api_browse_dirs(token(&state), target).await {
+                                            dirs.set(v);
+                                        }
+                                    });
+                                }
+                            },
+                            "↑ {tr(&lang, \"upLabel\")}"
+                        }
+                    }
+                }
+                if !is_remote {
+                    div { class: "np-dir-list", {dir_rows.iter().cloned()} }
+                }
+                div { class: "field",
+                    div { class: "field-label",
+                        if is_remote { "{tr(&lang, \"remotePathLabel\")}" } else { "{tr(&lang, \"newProjectName\")}" }
+                    }
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        value: if is_remote { path.read().clone() } else { name.read().clone() },
+                        oninput: {
+                            let mut name = name;
+                            let mut path = path;
+                            let remote_mode = is_remote;
+                            move |e| {
+                                if remote_mode {
+                                    path.set(e.value());
+                                } else {
+                                    name.set(e.value());
+                                }
+                            }
+                        },
+                    }
+                }
+                if !err.read().is_empty() {
+                    div { class: "git-error", "{err.read()}" }
+                }
+                div { class: "modal-actions",
+                    button {
+                        class: "modal-btn",
+                        onclick: { let mut open = open; move |_| open.set(false) },
+                        "{tr(&lang, \"cancelLabel\")}"
+                    }
+                    button {
+                        class: "modal-btn modal-btn-primary",
+                        disabled: *busy.read(),
+                        onclick: create,
+                        if *busy.read() { "…" } else { "{tr(&lang, \"newProjectUse\")}" }
+                    }
                 }
             }
         }

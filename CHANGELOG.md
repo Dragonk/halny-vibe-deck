@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.99.5 — user-reported defects round (2026-10-29)
+
+- **Chat works again (critical).** `session/start` reached the agent but the turn
+  never started: the `SessionReady` handler called `refresh_account()`, which
+  takes the engine state mutex the handler already holds — a self-deadlock that
+  froze the slot pump and left “Agent is working…” on screen forever. The account
+  re-read now goes straight to the slot; a regression test drives the real engine
+  against the stub agent (`crates/mistraldeck-engine/tests/chat_turn.rs`).
+- **Sessions belong to a project.** `New project…` sits next to the `SESSIONS`
+  label (right-aligned) and opens a folder picker (local browse, remote path over
+  SSH); every project group header gained a `＋` that starts a session there.
+  The old “New session” button (which hijacked an existing empty session) is gone.
+- **History is back in the sidebar.** Past sessions from the local store render
+  inside their project groups (lazy preview on click, no agent process); the
+  separate “CLI” bucket is gone.
+- **No agent at boot.** The startup prime only indexes history from disk; the
+  agent is contacted on the first prompt or when a session is resumed.
+- **Statistics** reduce to the requested scope (total cost, total tokens,
+  activity, tool calls, all sessions) with a single toolbar: title, range filters
+  and refresh in one row.
+- **Settings**: the agent connect/disconnect and account panels are gone; update
+  buttons appear only when a newer version exists; the server and SSH remotes are
+  separate tabs and remote project directories are edited as rows.
+- **HTTPS**: the headless/server build serves the local UI over HTTPS (self-signed);
+  the desktop webview keeps loopback HTTP because webview engines reject a
+  self-signed certificate — that listener never leaves 127.0.0.1 and every
+  network-exposed surface is HTTPS-only.
+- **Files**: the tree expands in place and remembers what is open; the preview
+  header shows the full path and gains “open externally” (desktop).
+- **Browser layout**: the title bar is selected by `/?desktop=1` instead of the
+  unreliable `window.ipc` probe, so the web client never shows one.
+- **Windows**: the agent process is spawned with `CREATE_NO_WINDOW` — no more
+  empty black console windows (one appeared per session).
+- The theme labels lost the “(click to change)” suffix in all six languages.
+
 ## 1.99.1 — stable parity pass (2026-10-28)
 
 - **Branding is now 1:1 with the stable edition.** The header mark, the chat

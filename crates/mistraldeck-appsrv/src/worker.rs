@@ -41,6 +41,14 @@ fn bool_field(v: &Value, keys: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Opt-in diagnostic trace (`VD_TRACE=1`): the RPC/slot lifecycle log used to
+/// debug "the agent never receives session/start" (issue Z29).
+pub fn trace(line: impl AsRef<str>) {
+    if std::env::var_os("VD_TRACE").is_some() {
+        eprintln!("[appsrv] {}", line.as_ref());
+    }
+}
+
 pub const CLIENT_NAME: &str = "Halny Vibe Deck";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -122,11 +130,18 @@ impl Worker {
     }
 
     fn run(mut self) {
+        trace("worker up");
         loop {
             match self.cmds.recv_timeout(Duration::from_millis(100)) {
-                Ok(cmd) => self.handle(cmd),
+                Ok(cmd) => {
+                    trace(format!("worker <- cmd {cmd:?}"));
+                    self.handle(cmd)
+                }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Disconnected) => {
+                    trace("worker down (commands closed)");
+                    return;
+                }
             }
             self.pump_inbound();
         }
@@ -320,7 +335,9 @@ impl Worker {
     /// when the vibe-app-server process dies, every waiter fails fast
     /// instead of hanging.
     fn call_res(&mut self, method: &str, params: Value, context: &str) -> Result<Value, (i64, String)> {
+        trace(format!("rpc -> {method}"));
         if self.conn.is_none() {
+            trace(format!("rpc !! {method}: not connected"));
             return Err((-32000, format!("{context}: not connected")));
         }
         let id = self

@@ -553,8 +553,6 @@ pub fn StatsView() -> Element {
 
     let s = state.read();
     let lang = lang(&state);
-    let usage = s.snapshot.usage.clone();
-    let sessions = s.snapshot.sessions.clone();
     let busy = s.snapshot.busy;
     drop(s);
 
@@ -799,11 +797,6 @@ pub fn StatsView() -> Element {
     // ---- Activity + tool usage cards ----
     let heatmap_el = heatmap(&lang, &sel);
     let donut_el = donut(&lang, tool_ok, tool_fail, tool_rej);
-
-    // ---- live cards data (engine snapshot) ----
-    let session_count = sessions.len();
-    let messages: usize = sessions.iter().map(|m| m.message_count).sum();
-    let hit_pct_live = (usage.cache_hit_rate() * 100.0).round() as u64;
 
     // ---- range buttons + custom date inputs ----
     let range_defs: Vec<(u8, String)> = vec![
@@ -1108,112 +1101,43 @@ pub fn StatsView() -> Element {
         VNode::empty()
     };
 
-    // live session rows (clickable, from the engine snapshot)
-    let mut sorted = sessions.clone();
-    sorted.sort_by(|a, b| b.last_active_ms.cmp(&a.last_active_ms));
-    sorted.truncate(20);
-    let live_rows: Vec<Element> = sorted
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let idx = sessions.iter().position(|x| x.id == m.id).unwrap_or(i);
-            let name = m.name.clone();
-            let date = {
-                let days = m.last_active_ms.div_euclid(86_400_000);
-                let (y, mm, d) = civil_from_days(days);
-                format!("{d:02}.{mm:02}.{y}")
-            };
-            let count = m.message_count;
-            rsx! {
-                div { key: "L{i}", class: "session-row",
+    rsx! {
+        div { class: "stats-view",
+            // Z8: one toolbar - title, range filters and refresh in a single
+            // row, exactly like the stable edition (StatsView stats-toolbar).
+            div { class: "stats-toolbar",
+                span { class: "stats-title", "{tr(&lang, \"statistics\")}" }
+                div { class: "time-range-btns",
+                    {range_btn_els.iter().cloned()}
+                    {custom_input_els.iter().cloned()}
+                }
+                if busy {
+                    span { class: "loading-indicator", "{tr(&lang, \"agentWorkingLabel\")}" }
+                }
+                button {
+                    class: "refresh-btn",
+                    title: "{tr(&lang, \"refresh\")}",
                     onclick: {
                         let state = state.clone();
                         move |_| {
                             let state = state.clone();
                             async move {
-                                let _ = crate::api::api_switch_session(token(&state), idx).await;
+                                let _ = crate::api::api_refresh_sessions(token(&state)).await;
+                                let st = state.clone();
+                                match crate::vibestats::api_vibe_stats(token(&st)).await {
+                                    Ok(r) => rows.set(r),
+                                    Err(e) => load_err.set(e.to_string()),
+                                }
                                 crate::state::refresh(state).await;
-                                crate::app::set_view(state, crate::state::View::Chat);
                             }
                         }
                     },
-                    div { class: "session-row-main",
-                        div { class: "session-row-title", "{name}" }
-                        div { class: "session-row-meta", "{date} · {count}" }
-                    }
+                    "⟳"
                 }
             }
-        })
-        .collect();
-
-    rsx! {
-        div { class: "stats-view",
             div { class: "stats-scroll",
-                h2 { class: "stats-title", "{tr(&lang, \"statistics\")}" }
-                div { class: "pill-row",
-                    if busy {
-                        span { class: "loading-indicator", "{tr(&lang, \"agentWorkingLabel\")}" }
-                    }
-                    button {
-                        class: "refresh-btn",
-                        onclick: {
-                            let state = state.clone();
-                            move |_| {
-                                let state = state.clone();
-                                async move {
-                                    let _ = crate::api::api_refresh_sessions(token(&state)).await;
-                                    let st = state.clone();
-                                    match crate::vibestats::api_vibe_stats(token(&st)).await {
-                                        Ok(r) => rows.set(r),
-                                        Err(e) => load_err.set(e.to_string()),
-                                    }
-                                    crate::state::refresh(state).await;
-                                }
-                            }
-                        },
-                        "⟳ {tr(&lang, \"refresh\")}"
-                    }
-                }
-                div { class: "time-range-btns",
-                    {range_btn_els.iter().cloned()}
-                    {custom_input_els.iter().cloned()}
-                }
                 if !err.is_empty() {
                     div { class: "git-error", "{err}" }
-                }
-                // live engine usage
-                div { class: "cards-row",
-                    div { class: "stat-card",
-                        div { class: "card-header",
-                            div { class: "card-subtitle", "{tr(&lang, \"totalTokens\")}" }
-                        }
-                        div { class: "card-value primary", "{fmt_tokens(usage.total_tokens)}" }
-                        div { class: "card-meta",
-                            "{tr(&lang, \"inputLabel\")} {fmt_tokens(usage.prompt_tokens)} · {tr(&lang, \"outputLabel\")} {fmt_tokens(usage.completion_tokens)}"
-                        }
-                    }
-                    div { class: "stat-card",
-                        div { class: "card-header",
-                            div { class: "card-subtitle", "{tr(&lang, \"cacheHitLabel\")}" }
-                        }
-                        div { class: "card-value success", "{hit_pct_live}%" }
-                        div { class: "card-meta", "{fmt_tokens(usage.cached_tokens)} / {fmt_tokens(usage.prompt_tokens)}" }
-                    }
-                    div { class: "stat-card",
-                        div { class: "card-header",
-                            div { class: "card-subtitle", "{tr(&lang, \"tokPerSecAvg\")}" }
-                        }
-                        div { class: "card-value accent", "{usage.tokens_per_second.round() as u64}" }
-                    }
-                    div { class: "stat-card",
-                        div { class: "card-header",
-                            div { class: "card-subtitle", "{tr(&lang, \"messagesLabel\")}" }
-                        }
-                        div { class: "card-value", "{messages}" }
-                        div { class: "card-meta",
-                            "{tr(&lang, \"recentSessions\")}: {session_count}"
-                        }
-                    }
                 }
                 // analytics cards (Nexus StatsView 1:1)
                 div { class: "cards-row",
@@ -1286,16 +1210,6 @@ pub fn StatsView() -> Element {
                         }
                         {analytics_rows.iter().cloned()}
                         {load_more_el}
-                    }
-                }
-                // live sessions (switch to chat)
-                div { class: "session-list-card",
-                    div { class: "section-label", "{tr(&lang, \"recentSessions\")}" }
-                    div { class: "session-rows",
-                        if live_rows.is_empty() {
-                            div { class: "empty-text", "{tr(&lang, \"noSessionsYet\")}" }
-                        }
-                        {live_rows.iter().cloned()}
                     }
                 }
             }

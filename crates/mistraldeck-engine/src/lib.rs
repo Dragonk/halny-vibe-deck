@@ -272,15 +272,56 @@ impl Engine {
         self.publish_structure();
     }
 
+    /// Index CLI sessions through the agent (`session/list`). Explicit user
+    /// actions only: this is the single place that starts the sessionless
+    /// lister worker, so a cold start never spawns an agent process (Z5).
     pub fn refresh_sessions(&self) {
+        self.ensure_lister();
         self.lister.send(AgentCommand::ListSessions);
     }
 
-    /// Warm start: connect the agent and index CLI sessions up front, so
-    /// the first snapshot request does not pay the discovery cost.
+    /// Boot warm-up without the agent: the sidebar history comes from the
+    /// on-disk unified store (`session/list` would need a live handshake).
     pub fn prime(&self) {
-        self.start_agent();
-        self.refresh_sessions();
+        self.refresh_sessions_from_disk();
+    }
+
+    /// Populate `backend_sessions` from the local session store. No agent
+    /// process, no handshake — the history list is readable before the user
+    /// sends anything.
+    pub fn refresh_sessions_from_disk(&self) {
+        let mut infos: Vec<mistraldeck_core::proto::AgentSessionInfo> =
+            mistraldeck_vibe::stats::load_sessions()
+                .into_iter()
+                .filter(|s| !s.session_id.is_empty())
+                .map(|s| mistraldeck_core::proto::AgentSessionInfo {
+                    session_id: s.session_id.clone(),
+                    name: s.title.clone().unwrap_or_default(),
+                    cwd: s
+                        .environment
+                        .as_ref()
+                        .and_then(|e| e.working_directory.clone())
+                        .unwrap_or_default(),
+                    start_time: s.start_time.clone(),
+                })
+                .collect();
+        // Newest first (ISO-8601 timestamps sort lexicographically).
+        infos.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+        if let Ok(mut st) = self.state.lock() {
+            st.backend_sessions = infos;
+        }
+        self.publish_structure();
+    }
+
+    /// Start the sessionless lister worker once (late, on demand).
+    fn ensure_lister(&self) {
+        let running = matches!(
+            *self.global_status.lock().unwrap(),
+            AgentStatus::Connected | AgentStatus::Connecting
+        );
+        if !running {
+            self.start_agent();
+        }
     }
 
     // ---------------- slots ----------------
@@ -290,6 +331,7 @@ impl Engine {
     /// connection's ssh command with `bash -lc "exec vibe-app-server"`
     /// (same JSON-RPC protocol).
     fn ensure_slot(&self, session_key: &str, purpose: SlotPurpose) -> Option<u64> {
+        mistraldeck_appsrv::trace(format!("ensure_slot key={session_key} purpose={purpose:?}"));
         let argv = match &purpose {
             SlotPurpose::NewLocal { .. } | SlotPurpose::LoadBackend { .. } => {
                 // Missing agent: no Start, publish the install state instead.
@@ -310,6 +352,7 @@ impl Engine {
         };
         let mut st = self.state.lock().unwrap();
         if let Some(slot_id) = reuse_slot_or_cleanup(&mut st, session_key) {
+            mistraldeck_appsrv::trace(format!("ensure_slot reused slot={slot_id} for {session_key}"));
             return Some(slot_id);
         }
         let slot_id = st.next_slot;
@@ -319,6 +362,7 @@ impl Engine {
         let _ = slot.cmd.send(AgentCommand::Start { argv });
         st.slots.insert(slot_id, slot);
         st.slot_of.insert(session_key.to_string(), slot_id);
+        mistraldeck_appsrv::trace(format!("ensure_slot spawned slot={slot_id} for {session_key}"));
         Some(slot_id)
     }
 
@@ -426,8 +470,21 @@ impl Engine {
             let st = self.state.lock().unwrap();
             st.current_session()
                 .map(|s| s.working_directory.clone())
-                .unwrap_or_else(|| self.config().working_directory.clone())
+                .filter(|wd| !wd.is_empty())
+                .unwrap_or_else(|| self.workdir())
         };
+        self.create_local_session_in(&cwd);
+    }
+
+    /// New local session **in a project** (D1/D2): the working directory is
+    /// mandatory, so a session can never exist without a project. Still a
+    /// cheap shell entry - the agent process spawns with the first prompt.
+    pub fn create_local_session_in(&self, cwd: &str) {
+        let cwd = cwd.trim();
+        if cwd.is_empty() {
+            return;
+        }
+        let cwd = cwd.to_string();
         self.note_recent_folder(&cwd);
         // Always create a fresh session: with parallel slots every local
         // session owns its agent process, so '+' must never silently reuse
@@ -774,6 +831,7 @@ impl Engine {
         if self.state.lock().unwrap().current.is_none() {
             self.create_local_session();
         }
+        mistraldeck_appsrv::trace("send_message_with start");
         let (key, agent_id, user_msg) = {
             let mut st = self.state.lock().unwrap();
             let Some(session) = st.current_session_mut() else { return };
@@ -914,6 +972,9 @@ impl Engine {
                         .current_session()
                         .map(|s| s.working_directory.clone())
                         .unwrap_or_else(|| self.workdir());
+                    mistraldeck_appsrv::trace(format!(
+                        "send_message_with: no slot for {key} (cwd={cwd}) -> spawn"
+                    ));
                     drop(st);
                     self.ensure_slot(&key, SlotPurpose::NewLocal { cwd });
                     let mut st = self.state.lock().unwrap();
@@ -1231,17 +1292,23 @@ impl Engine {
         });
     }
 
-    /// Re-read account state (`account/read` + `identity/read`).
-    /// Both require a session, so they are routed through the
-    /// current session's slot (or any connected slot) — never the
-    /// sessionless lister.
+    /// Re-read account state (`account/read` + `identity/read`) on the
+    /// current session's slot (or any connected slot — never the
+    /// sessionless lister: both methods are session-scoped).
+    ///
+    /// Callers must NOT already hold the engine state lock: `state` is a
+    /// plain `Mutex`, so taking it twice on one thread hangs the slot pump
+    /// (that was Z29). Code paths that run inside `apply_slot_event` send
+    /// the commands directly to their slot instead.
     pub fn refresh_account(&self) {
-        let st = self.state.lock().unwrap();
-        let target = st.current_session().and_then(|s| st.slot_of_session(&s.id))
-            .or_else(|| st.slots.iter().next().map(|(id, _)| *id))
-            .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()));
-        drop(st);
-        if let Some(cmd) = target {
+        let cmd = {
+            let st = self.state.lock().unwrap();
+            st.current_session()
+                .and_then(|s| st.slot_of_session(&s.id))
+                .or_else(|| st.slots.iter().next().map(|(id, _)| *id))
+                .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()))
+        };
+        if let Some(cmd) = cmd {
             let _ = cmd.send(AgentCommand::IdentityRead);
             let _ = cmd.send(AgentCommand::AccountRead);
         }
@@ -1505,6 +1572,7 @@ impl Engine {
 
     /// Apply one agent worker event to the owning slot + session.
     pub(crate) fn apply_slot_event(&'static self, slot_id: u64, event: AgentEvent) {
+        mistraldeck_appsrv::trace(format!("slot {slot_id} event {event:?}"));
         let event_out = event.clone();
         // Deduped replacement for streamed text events (None = unchanged);
         // a fully deduped (empty) chunk is suppressed entirely.
@@ -1615,7 +1683,11 @@ impl Engine {
                     slot.load_progress = None;
                     // L1: session up → re-read account state (the
                     // sessionId-scoped `account/read` is fresher now).
-                    self.refresh_account();
+                    // Sent straight to this slot: `apply_slot_event` holds the
+                    // engine state lock here, so a helper that takes it again
+                    // would self-deadlock (Z29 — "Agent is working…" forever).
+                    let _ = slot.cmd.send(AgentCommand::IdentityRead);
+                    let _ = slot.cmd.send(AgentCommand::AccountRead);
                     slot.modes = modes;
                     slot.config_options = config_options.clone();
                     if let Some(i) = slot_session {

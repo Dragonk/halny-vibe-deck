@@ -7079,3 +7079,102 @@ img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); b
    on top of a panel, and no reserved gap beside it (v1.0.31). */
 .web-fab-left.panel-open { display: none; }
 .web-fab-right.dock-open { display: none; }
+
+/* ---- "New project…" (Z2/D3): header button + folder picker ---- */
+.sidebar-sessions-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px 4px;
+}
+.sidebar-sessions-header .sidebar-sessions-label {
+    padding: 0;
+}
+.sidebar-np-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding: 2px 6px;
+    background: none;
+    border: none;
+    border-radius: 5px;
+    color: var(--text-dim);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.sidebar-np-btn:hover { background: var(--panel-hover); color: var(--text); }
+.sidebar-np-icon { font-size: 11px; line-height: 1; }
+.np-modal { width: min(560px, 92vw); display: flex; flex-direction: column; gap: 10px; }
+.np-path-row { display: flex; align-items: center; gap: 8px; }
+.np-path {
+    flex: 1;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.np-dir-list {
+    max-height: 40vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 4px;
+}
+.np-dir-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 5px 8px;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+.np-dir-row:hover { background: var(--panel-hover); }
+.modal-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.modal-btn-primary:hover { background: var(--accent-hover); }
+
+/* ---- Z21/Z22: preview header path + tree chevrons ---- */
+.file-preview-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 0 8px;
+}
+.filetree-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 10px;
+    flex-shrink: 0;
+    font-size: 9px;
+    color: var(--text-dim);
+}
+.stats-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.stats-toolbar .stats-title { margin: 0; flex-shrink: 0; }
+.stats-toolbar .time-range-btns { flex: 1; display: flex; gap: 4px; flex-wrap: wrap; }

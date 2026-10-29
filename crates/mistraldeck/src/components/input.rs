@@ -853,17 +853,12 @@ pub fn InputBar() -> Element {
                 }
                 div { class: "input-card-toolbar",
                     div { class: "input-card-left",
-                        button {
-                            class: "ic-folder-chip",
-                            title: "{cwd}",
-                            disabled: true,
-                            span { class: "ic-folder-name", "{project_label}" }
-                        }
-                        // --- attach menu (Nexus 📎) ---
+                        // --- attach menu (stable: one ＋ button) ---
                         div { class: "attach-menu-wrap",
                             button {
-                                class: "ic-folder-chip",
+                                class: "ic-btn",
                                 title: "{tr(&lang, \"attachments\")}",
+                                style: "display:flex;align-items:center;justify-content:center;",
                                 onclick: {
                                     let mut attach_open = attach_open.clone();
                                     move |_| {
