@@ -289,11 +289,40 @@ fn approval_el(
 const VISIBILITY_JS: &str = r#"
 (function () {
   if (window.__vdVisibilityInit) return; window.__vdVisibilityInit = 1;
-  document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState !== 'visible') return;
+  var last = 0;
+  function resync(why) {
+    var now = Date.now();
+    // One resync per 5 s is plenty: a focus + visibilitychange burst must
+    // not hammer the agent with resume calls.
+    if (now - last < 5000) return;
+    last = now;
+    window.__vdResyncWhy = why;
     var btn = document.getElementById('vd-visibility-resync');
     if (btn) btn.click();
+  }
+  // Stable v1.0.36: a frozen/half-open tab loses events in several ways —
+  // cover every "the user is back" signal, not only visibilitychange.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') resync('visibility');
   });
+  window.addEventListener('pageshow', function () { resync('pageshow'); });
+  window.addEventListener('online', function () { resync('online'); });
+  window.addEventListener('focus', function () { resync('focus'); });
+  // The events socket re-opening means the stream was broken: pull state.
+  (function () {
+    var opened = 0;
+    try {
+      var _ws = window.WebSocket;
+      window.WebSocket = function (url, protocols) {
+        var sock = protocols ? new _ws(url, protocols) : new _ws(url);
+        sock.addEventListener('open', function () {
+          if (opened++ > 0) resync('ws-open');
+        });
+        return sock;
+      };
+      window.WebSocket.prototype = _ws.prototype;
+    } catch (e) {}
+  })();
 })();
 "#;
 

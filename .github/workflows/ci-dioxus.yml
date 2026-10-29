@@ -166,6 +166,41 @@ jobs:
             exit 1
           fi
 
+      - name: Auth e2e (session survives restart, failure-only limiter)
+        run: |
+          export XDG_CONFIG_HOME="$PWD/.e2e-config"
+          B=https://127.0.0.1:8443
+          J="$PWD/.e2e-cookies.txt"
+          code() { curl -sk -o /dev/null -w '%{http_code}' "$@"; }
+          # Stable v1.0.36: repeated SUCCESSFUL logins must never trip the
+          # guard (it used to 429 after eight good sign-ins).
+          for i in $(seq 1 8); do
+            got=$(code -c "$J" -X POST "$B/api/auth/login" -H 'Content-Type: application/json' \
+              -d '{"username":"e2e","password":"e2e-secret"}')
+            [ "$got" = "200" ] || { echo "::error::successful login #$i returned $got"; exit 1; }
+          done
+          # A wrong password is 401 and must not lock the account out.
+          got=$(code -X POST "$B/api/auth/login" -H 'Content-Type: application/json' \
+            -d '{"username":"e2e","password":"wrong"}')
+          [ "$got" = "401" ] || { echo "::error::bad login returned $got (expected 401)"; exit 1; }
+          got=$(code -b "$J" "$B/")
+          [ "$got" = "200" ] || { echo "::error::authenticated GET returned $got"; exit 1; }
+          # Restart the server: a self-update or watchdog restart must not
+          # log every device out.
+          kill "$(cat .e2e-server.pid)" 2>/dev/null || true
+          sleep 2
+          ( cd .e2e-run && nohup ./halny-vibe-deck-appserver --mode headless --port 8080 \
+              > ../.e2e-server.log 2>&1 & echo $! > ../.e2e-server.pid )
+          for i in $(seq 1 60); do
+            if curl -skf "$B/login" >/dev/null; then break; fi
+            sleep 1
+          done
+          got=$(code -b "$J" "$B/")
+          if [ "$got" != "200" ]; then
+            echo "::error::session did not survive the restart (GET / -> $got)"
+            exit 1
+          fi
+
       - name: Run e2e
         working-directory: scripts/e2e
         env:

@@ -235,3 +235,21 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 12. **Tool-approval: long commands truncated (ellipsis), no mobile layout** (d551ecd) — **FIXED**: `.tool-approval-input` wraps (`pre-wrap` + `overflow-wrap:anywhere`) and scrolls inside the dialog. → §3.4.
 13. **Windows self-update: black terminal window** (v1.0.3) — **FIXED**: `creation_flags(0x0800_0008)` = DETACHED_PROCESS | CREATE_NO_WINDOW. → §3.14.
 14. **PWA manifest/SW details (512 icon, `id`, cache purge)** (v1.0.10) — **FIXED** (version-scoped cache; manifest `id` + 512 icon).
+
+---
+
+## 6. Stable 1.0.35–1.0.37 (newer fixes) — status in `next`
+
+| Stable fix | Status in `next` |
+|---|---|
+| v1.0.36 — session tokens are stateless signed blobs (restart no longer logs every device out), credentials-version invalidation, sliding window | **FIXED**: `mistraldeck-engine::session_token` (HMAC-SHA256 over `v1.<payload>.<mac>`, persistent `session-key` bound to the credential hash, 180-day sliding / 1-year cap, in-memory revoke on logout) |
+| v1.0.36 — rate limiter counts failed logins only, keyed on (ip, username), resets on success | **FIXED**: `login_blocked` / `note_failed_login` / `clear_failed_logins` in serve.rs |
+| v1.0.36 — `config:save` from a web client preserves `serve` + `remoteConnections` | **N/A by construction**: config lives in the server process and `EngineConfig::save` merges keys into the existing file, so a browser cannot wipe sections it never owned |
+| v1.0.36 — SSH registry in the main process (single-flight, TTL, per-connection error) | **PARTIALLY**: probing already runs server-side (`engine/remote.rs`), errors surface per connection; no separate registry cache |
+| v1.0.37 — one authoritative live transcript, `seq` + snapshot protocol, offset-checked deltas | **N/A by construction**: the engine owns the transcript; the reducer already tracks byte offsets (`emitted_len`) instead of prefix heuristics |
+| v1.0.37 — resync on visibilitychange/pageshow/online/focus/ws-open + watchdog | **FIXED**: `VISIBILITY_JS` fires the resync bridge for all five signals (throttled 5 s) and the resync now re-reads the agent state (`api_resync_current`) |
+| v1.0.37 — `session/load` replay seeds the same message ids | **N/A**: ids come from the agent's history entries |
+| v1.0.37 — live subagent/tool progress, elapsed counter on running tools | **OPEN**: running steps shimmer, but there is no per-call elapsed counter and no subagent child-session tracker |
+| v1.0.37 — server-owned queue with revision/promote/send-now/update | **PARTIAL**: "send now" exists, but the queue lives in the client state (a reload loses it) |
+| 445bd10 — resync falls back to the on-disk transcript when a session has no live state | **OPEN** (the agent `session/resume` covers the live case; no disk fallback yet) |
+

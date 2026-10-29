@@ -42,32 +42,44 @@ const ATTEMPT_WINDOW: Duration = Duration::from_secs(10 * 60);
 // sessions & brute-force guard
 // ---------------------------------------------------------------------------
 
-fn attempts() -> &'static std::sync::Mutex<HashMap<IpAddr, (u32, std::time::Instant)>> {
-    static S: OnceLock<std::sync::Mutex<HashMap<IpAddr, (u32, std::time::Instant)>>> =
+type LoginKey = (IpAddr, String);
+fn attempts() -> &'static std::sync::Mutex<HashMap<LoginKey, (u32, std::time::Instant)>> {
+    static S: OnceLock<std::sync::Mutex<HashMap<LoginKey, (u32, std::time::Instant)>>> =
         OnceLock::new();
     S.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }
 
 /// Returns true when the IP is currently rate-limited (and records the try).
-fn rate_limited(ip: IpAddr) -> bool {
+/// Stable v1.0.36: the guard counts FAILED logins only and is keyed on
+/// (ip, username), so a device that signs in repeatedly is never locked out
+/// and a single noisy IP cannot lock an unrelated account.
+fn login_blocked(ip: IpAddr, username: &str) -> bool {
     let mut map = attempts().lock().unwrap();
     let now = std::time::Instant::now();
-    match map.get_mut(&ip) {
-        Some(entry) if entry.1 + ATTEMPT_WINDOW > now => {
-            entry.0 += 1;
-            entry.0 > MAX_ATTEMPTS
-        }
+    map.retain(|_, e| e.1 + ATTEMPT_WINDOW > now);
+    let key = (ip, username.to_ascii_lowercase());
+    map.get(&key).map(|e| e.0 >= MAX_ATTEMPTS).unwrap_or(false)
+}
+
+/// Record one failed attempt for (ip, username).
+fn note_failed_login(ip: IpAddr, username: &str) {
+    let mut map = attempts().lock().unwrap();
+    let now = std::time::Instant::now();
+    let key = (ip, username.to_ascii_lowercase());
+    match map.get_mut(&key) {
+        Some(entry) if entry.1 + ATTEMPT_WINDOW > now => entry.0 += 1,
         _ => {
-            map.insert(ip, (1, now));
-            // opportunistically prune expired entries
-            map.retain(|_, e| e.1 + ATTEMPT_WINDOW > now);
-            false
+            map.insert(key, (1, now));
         }
     }
 }
 
-fn clear_attempts(ip: IpAddr) {
-    attempts().lock().unwrap().remove(&ip);
+/// Clear the counter after a successful sign-in.
+fn clear_failed_logins(ip: IpAddr, username: &str) {
+    attempts()
+        .lock()
+        .unwrap()
+        .remove(&(ip, username.to_ascii_lowercase()));
 }
 
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
@@ -241,12 +253,12 @@ async fn login_post(
     ConnectInfo(addr): ConnectInfo<RemoteConnectInfo>,
     axum::Json(body): axum::Json<LoginBody>,
 ) -> Response {
-    if rate_limited(addr.0.ip()) {
+    if login_blocked(addr.0.ip(), &body.username) {
         return json_status(StatusCode::TOO_MANY_REQUESTS, r#"{"ok":false,"error":"Too many attempts"}"#);
     }
     match mistraldeck_engine::Engine::global().login(&body.username, &body.password) {
         Some(token) => {
-            clear_attempts(addr.0.ip());
+            clear_failed_logins(addr.0.ip(), &body.username);
             let mut resp = json_status(StatusCode::OK, r#"{"ok":true}"#);
             resp.headers_mut().insert(
                 header::SET_COOKIE,
@@ -254,7 +266,10 @@ async fn login_post(
             );
             resp
         }
-        None => json_status(StatusCode::UNAUTHORIZED, r#"{"ok":false,"error":"Invalid credentials"}"#),
+        None => {
+            note_failed_login(addr.0.ip(), &body.username);
+            json_status(StatusCode::UNAUTHORIZED, r#"{"ok":false,"error":"Invalid credentials"}"#)
+        }
     }
 }
 
@@ -317,7 +332,26 @@ async fn remote_auth(req: Request, next: Next) -> Response {
     if let Ok(v) = HeaderValue::from_str("remote") {
         req.headers_mut().insert("x-vd-origin", v);
     }
-    next.run(req).await
+    // Sliding window (stable v1.0.36): re-issue the cookie once the token is
+    // past half of its lifetime, so an active device never has to log in
+    // again — and a restart does not invalidate anything either.
+    let refresh = token
+        .as_deref()
+        .map(|t| mistraldeck_engine::Engine::global().token_refresh_due(t))
+        .unwrap_or(false);
+    let mut resp = next.run(req).await;
+    if refresh {
+        if let Some(user) = token
+            .as_deref()
+            .and_then(|t| mistraldeck_engine::Engine::global().token_user(t))
+        {
+            if let Some(fresh) = mistraldeck_engine::Engine::global().login_token_for(&user) {
+                resp.headers_mut()
+                    .insert(header::SET_COOKIE, set_cookie_header(&fresh, COOKIE_MAX_AGE));
+            }
+        }
+    }
+    resp
 }
 
 // ---------------------------------------------------------------------------

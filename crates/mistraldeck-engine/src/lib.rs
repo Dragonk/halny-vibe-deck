@@ -10,6 +10,7 @@ pub mod auth_browser;
 pub mod config;
 pub mod remote;
 pub mod remote_vibe;
+pub mod session_token;
 pub mod systemd;
 pub mod updates;
 mod types;
@@ -23,7 +24,6 @@ pub use mistraldeck_core::snapshot::{
     Snapshot, UiConfig, UsageStats,
 };
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
@@ -40,7 +40,6 @@ use mistraldeck_core::types::{
 use crate::types::{spawn_slot, SlotPurpose};
 
 /// Sliding expiry of remote HTTPS session tokens (30 days, like Nexus).
-const TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
 
@@ -62,7 +61,6 @@ pub struct Engine {
     config: RwLock<EngineConfig>,
     /// auth token -> (username, expires) — remote HTTPS sessions
     /// minted by serve.rs; 30-day sliding expiry.
-    tokens: Mutex<HashMap<String, (String, std::time::Instant)>>,
     // --- L1: login & account (app-server global methods) ---
     /// Browser sign-in flow in progress (PKCE verifier lives here).
     signin_flow: Mutex<Option<auth_browser::BrowserSignInFlow>>,
@@ -91,7 +89,6 @@ impl Engine {
             state: Mutex::new(EngineState::default()),
             tx,
             config: RwLock::new(cfg),
-            tokens: Mutex::new(HashMap::new()),
             signin_flow: Mutex::new(None),
             last_setup: Mutex::new(None),
             last_account: Mutex::new(None),
@@ -1459,6 +1456,9 @@ impl Engine {
     /// Verify credentials and mint a remote session token (None on a bad
     /// login). Tokens live in memory only and expire after 30 days of
     /// inactivity.
+    /// Verify credentials and issue a stateless session token (stable
+    /// v1.0.36: tokens survive restarts instead of logging every browser
+    /// out on a self-update or a watchdog restart).
     pub fn login(&self, username: &str, password: &str) -> Option<String> {
         let ok = self
             .config()
@@ -1469,32 +1469,36 @@ impl Engine {
         if !ok {
             return None;
         }
-        let token = random_hex(32);
-        self.tokens.lock().unwrap().insert(
-            token.clone(),
-            (username.to_string(), std::time::Instant::now() + TOKEN_TTL),
-        );
-        Some(token)
+        Some(crate::session_token::issue(username))
     }
 
     /// Valid, non-expired token? Refreshes the sliding expiry window.
     pub fn check_token(&self, token: &str) -> bool {
-        let mut tokens = self.tokens.lock().unwrap();
-        match tokens.get_mut(token) {
-            Some(entry) if entry.1 > std::time::Instant::now() => {
-                entry.1 = std::time::Instant::now() + TOKEN_TTL;
-                true
-            }
-            Some(_) => {
-                tokens.remove(token);
-                false
-            }
-            None => false,
-        }
+        self.token_user(token).is_some()
+    }
+
+    /// Username behind a valid token (None when invalid/expired/revoked).
+    /// The sliding window needs no server state: the login handler
+    /// re-issues the cookie when it drops below half of its lifetime.
+    pub fn token_user(&self, token: &str) -> Option<String> {
+        crate::session_token::verify(token).map(|(user, _)| user)
+    }
+
+    /// Re-issue a token for an already authenticated user (sliding window).
+    pub fn login_token_for(&self, username: &str) -> Option<String> {
+        Some(crate::session_token::issue(username))
+    }
+
+    /// True when a valid token is past half of its sliding window and the
+    /// caller should re-issue it (stable v1.0.36 sliding 180-day window).
+    pub fn token_refresh_due(&self, token: &str) -> bool {
+        crate::session_token::verify(token)
+            .map(|(_, refresh)| refresh)
+            .unwrap_or(false)
     }
 
     pub fn logout(&self, token: &str) {
-        self.tokens.lock().unwrap().remove(token);
+        crate::session_token::revoke(token);
     }
 
     // ---------------- state machine (per-slot) ----------------
