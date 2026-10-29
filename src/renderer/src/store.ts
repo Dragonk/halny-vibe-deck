@@ -1039,10 +1039,13 @@ export const useStore = create<AppStore>((set, get) => ({
     );
     await Promise.allSettled(
       needsLive.map(async (s) => {
+        const before = get().snapshotSeqs[s.acpSessionId!];
         await get().requestSessionSnapshot(s.acpSessionId!, s.remoteId ?? null);
-        // a session the worker does not know (app restarted, worker stopped)
-        // still falls back to the on-disk transcript
-        if (typeof get().snapshotSeqs[s.acpSessionId!] !== 'number' && s.messages.length === 0) {
+        const applied = get().snapshotSeqs[s.acpSessionId!] !== before;
+        // The worker does not know this session (app restarted, worker stopped)
+        // -> fall back to the on-disk transcript so the view is not stale.
+        // Never while the turn is still running: the disk has no live tail.
+        if (!applied && !get().busySessions.includes(s.id) && !s.loading) {
           await get().previewSession(s.id);
         }
       }),

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useStore } from "../store";
 import { useTranslation, t } from "../i18n";
 
@@ -29,12 +29,21 @@ export default function MessageQueue({ config }: Props): React.JSX.Element | nul
   // v1.0.37: only THIS session's prompts. The server queue is global; showing
   // everything made prompts of other sessions look like they belonged here
   // (and "send now" then delivered them into the wrong chat).
-  const messageQueue = useStore((st) => st.messageQueue.filter((m) => {
-    const sess = st.sessions.find((x) => x.id === st.currentSessionId);
-    return !m.acpSessionId || !sess?.acpSessionId || m.acpSessionId === sess.acpSessionId;
-  }));
+  // NB: the selector must return a STABLE reference - filtering inside it
+  // creates a new array on every store read and useSyncExternalStore loops
+  // forever (React error #185).
+  const allQueued = useStore((st) => st.messageQueue);
+  const currentAcpId = useStore(
+    (st) => st.sessions.find((x) => x.id === st.currentSessionId)?.acpSessionId,
+  );
+  const messageQueue = useMemo(
+    () =>
+      allQueued.filter(
+        (m) => !m.acpSessionId || !currentAcpId || m.acpSessionId === currentAcpId,
+      ),
+    [allQueued, currentAcpId],
+  );
   const { removeFromMessageQueue, updateQueueMessage, clearMessageQueue, sendQueuedNow } = useStore();
-  const currentAcpId = useStore((st) => st.sessions.find((x) => x.id === st.currentSessionId)?.acpSessionId);
   const tr = useTranslation(config.language);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
