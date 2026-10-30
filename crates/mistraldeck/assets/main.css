@@ -7643,3 +7643,22 @@ img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); bo
     inset: 0;
     z-index: 999;
 }
+
+/* round 10: subagent shelf + rewind/branch picker modal */
+.subagent-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 10px; border-top: 1px solid var(--border-subtle); background: var(--panel); }
+.subagent-bar-title { font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.subagent-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 11px; background: var(--surface); color: var(--text); cursor: pointer; }
+.subagent-chip.running .subagent-status { color: var(--accent, #ff6a00); }
+.subagent-chip .subagent-status { color: var(--text-dim); }
+.subagent-lease-badge { font-size: 11px; color: var(--text-dim); border: 1px dashed var(--border); border-radius: 999px; padding: 2px 8px; }
+.rewind-modal { max-height: 70vh; display: flex; flex-direction: column; }
+.rewind-entry-list { overflow-y: auto; max-height: 40vh; margin-bottom: 8px; }
+.ctx-menu-item.active { background: var(--accent-dim); }
+.rewind-confirm { border-top: 1px solid var(--border-subtle); padding-top: 8px; }
+.rewind-restore { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.rewind-paths { font-size: 11px; color: var(--text-dim); margin: 6px 0; }
+.rewind-path { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.rewind-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+.session-item.archived { opacity: 0.55; }
+.session-badge { font-size: 10px; }
+.session-badge.unseen-dot { color: var(--accent, #ff6a00); }

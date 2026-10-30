@@ -51,6 +51,14 @@ impl Projection {
         Self::default()
     }
 
+    /// `apply_snapshot` from a raw `state` value (fork/rewind responses).
+    pub fn apply_snapshot_value(&mut self, v: Value) -> Vec<AgentEvent> {
+        match serde_json::from_value::<SessionState>(v) {
+            Ok(st) => self.apply_snapshot(st),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Apply an authoritative snapshot (session/start, session/resume,
     /// session/read, session/snapshot). Replaces the mirror.
     pub fn apply_snapshot(&mut self, state: SessionState) -> Vec<AgentEvent> {
@@ -60,12 +68,18 @@ impl Projection {
         self.emitted_len.clear();
         if let Some(s) = &state.session {
             self.session_id = s.id.clone();
+            let child_sessions = state
+                .child_sessions
+                .as_ref()
+                .map(|cs| cs.iter().map(|c| c.to_string()).collect())
+                .unwrap_or_default();
             events.push(AgentEvent::SessionReady {
                 session_id: s.id.clone(),
                 modes: Vec::new(),
                 config_options: Vec::new(),
                 title: s.title.clone(),
                 current_mode_id: None,
+                child_sessions,
             });
         }
         if let Some(entries) = &state.history {
@@ -355,6 +369,26 @@ impl Projection {
                 // TUI shows a "retrying" banner from the snapshot's
                 // retrying state — resync so the client sees it
                 self.resync_needed = true;
+            }
+            "session/childSessionUpdated" => {
+                // subagent (child session) status change — forward raw so the
+                // GUI's subagent panel stays live
+                if let Some(child) = params.get("childSession") {
+                    events.push(AgentEvent::ChildSessionUpdated {
+                        session_id: self.session_id.clone(),
+                        child_json: child.to_string(),
+                    });
+                }
+            }
+            "session/lease/updated" | "session/lease/ended" => {
+                // wire: SessionLeaseUpdate {sessionId, leaseHolder|null};
+                // "ended" carries no holder → released
+                let held = method == "session/lease/updated"
+                    && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false);
+                events.push(AgentEvent::LeaseUpdated {
+                    session_id: self.session_id.clone(),
+                    held_elsewhere: held,
+                });
             }
             "warning" => {
                 if let Some(m) = params.get("message").and_then(Value::as_str) {
@@ -1488,6 +1522,64 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].status, "in_progress");
         assert_eq!(entries[1].content, "step 2");
+    }
+
+    /// Round 10: `session/childSessionUpdated` forwards the raw child so the
+    /// GUI subagent shelf stays live.
+    #[test]
+    fn child_session_updated_event() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("session/childSessionUpdated", &json!({
+            "eventId": 6, "sessionId": "s1",
+            "childSession": {"id": "c1", "name": "explore", "agentType": "explore",
+                             "status": {"type": "running"}}
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e,
+            AgentEvent::ChildSessionUpdated { child_json, .. } if child_json.contains("\"c1\"")
+        )));
+    }
+
+    /// Round 10: lease notifications map to held_elsewhere (leaseHolder
+    /// present = held by another process; "ended" = released).
+    #[test]
+    fn lease_notifications() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("session/lease/updated", &json!({
+            "eventId": 6, "sessionId": "s1", "leaseHolder": {"processId": 42}
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e, AgentEvent::LeaseUpdated { held_elsewhere: true, .. }
+        )));
+        let evs = p.consume("session/lease/ended", &json!({
+            "eventId": 7, "sessionId": "s1"
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e, AgentEvent::LeaseUpdated { held_elsewhere: false, .. }
+        )));
+    }
+
+    /// Round 10: snapshots carry childSessions into the SessionReady event.
+    #[test]
+    fn snapshot_carries_child_sessions() {
+        let mut p = proj();
+        let evs = p.consume("session/snapshot", &json!({
+            "state": {
+                "eventId": 5,
+                "session": {"id": "s1", "title": "t", "status": {"type": "idle"}},
+                "history": [],
+                "activeCallbacks": [],
+                "childSessions": [{"id": "c9", "name": "lean", "agentType": "lean",
+                                   "status": {"type": "running"}}]
+            },
+            "lastEventId": 5
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e,
+            AgentEvent::SessionReady { child_sessions, .. } if child_sessions.len() == 1 && child_sessions[0].contains("c9")
+        )));
     }
 }
 

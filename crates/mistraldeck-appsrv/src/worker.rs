@@ -278,6 +278,76 @@ impl Worker {
                 command,
             } => self.shell_command(&session_id, &command),
             AgentCommand::ConfigReload => self.config_reload(),
+            AgentCommand::SessionFork {
+                source_session_id,
+                entry_id,
+            } => self.fork_session(&source_session_id, entry_id.as_deref()),
+            AgentCommand::SessionRewind {
+                session_id,
+                entry_id,
+                restore_files,
+            } => self.rewind_session(&session_id, &entry_id, restore_files),
+            AgentCommand::RewindRead {
+                session_id,
+                entry_id,
+            } => self.rewind_read(&session_id, &entry_id),
+            AgentCommand::PinSession { session_id, pinned } => {
+                let _ = self.call(
+                    "session/pin",
+                    json!({"sessionId": session_id, "pinned": pinned}),
+                    "session/pin",
+                );
+                self.list_sessions();
+            }
+            AgentCommand::ArchiveSession {
+                session_id,
+                archived,
+            } => {
+                let _ = self.call(
+                    "session/archive",
+                    json!({"sessionId": session_id, "archived": archived}),
+                    "session/archive",
+                );
+                self.list_sessions();
+            }
+            AgentCommand::MarkSessionSeen { session_id } => {
+                let _ = self.call(
+                    "session/markAsSeen",
+                    json!({"sessionId": session_id}),
+                    "session/markAsSeen",
+                );
+            }
+            AgentCommand::DeleteBackendSession { session_id } => {
+                let _ = self.call(
+                    "session/delete",
+                    json!({"sessionId": session_id}),
+                    "session/delete",
+                );
+                self.list_sessions();
+            }
+            AgentCommand::LeaseSubscribe { session_id } => {
+                match self.call(
+                    "session/lease/subscribe",
+                    json!({"sessionId": session_id}),
+                    "session/lease/subscribe",
+                ) {
+                    Ok(res) => {
+                        if let Some(held) = res.get("held").and_then(Value::as_array) {
+                            for h in held {
+                                let other = h
+                                    .get("leaseHolder")
+                                    .map(|l| !l.is_null())
+                                    .unwrap_or(false);
+                                self.emit(AgentEvent::LeaseUpdated {
+                                    session_id: session_id.clone(),
+                                    held_elsewhere: other,
+                                });
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
             // --- L1: setup / konto (metody globalne, idą przed sesją) ---
             AgentCommand::SetupStatus => self.setup_status(),
             AgentCommand::SetupStoreCredential {
@@ -427,7 +497,13 @@ impl Worker {
     }
 
     fn list_sessions(&mut self) {
-        let res = match self.call("session/list", json!({}), "session/list") {
+        // include archived so the GUI can show them dimmed (GUI extra —
+        // the TUI never asks for them)
+        let res = match self.call(
+            "session/list",
+            json!({"includeArchived": true, "limit": 500}),
+            "session/list",
+        ) {
             Ok(v) => v,
             Err(e) => {
                 self.error("session/list", format!("{e:#}"));
@@ -467,6 +543,12 @@ impl Worker {
                     name,
                     cwd: s.cwd.unwrap_or_default(),
                     start_time: value_to_string(s.updated_at),
+                    pinned_at: s.pinned_at,
+                    archived_at: s.archived_at,
+                    is_unseen: s.is_unseen,
+                    worktree: s
+                        .worktree
+                        .and_then(|w| w.get("name").and_then(Value::as_str).map(str::to_string)),
                 }
             })
             .collect();
@@ -624,6 +706,93 @@ impl Worker {
         });
         if let Err(e) = self.call("session/shellCommand", params, "session/shellCommand") {
             self.error("session/shellCommand", format!("{e:#}"));
+        }
+    }
+
+    /// TUI `/branch` → `session/fork` (attach=true). The response carries
+    /// the new session's state — apply it like a snapshot so the GUI
+    /// switches to the fork, then refresh the shelf.
+    fn fork_session(&mut self, source_session_id: &str, entry_id: Option<&str>) {
+        let mut params = json!({
+            "sourceSessionId": source_session_id,
+            "attach": true,
+            "historyLimit": 200,
+        });
+        if let Some(e) = entry_id {
+            params["entryId"] = json!(e);
+        }
+        match self.call("session/fork", params, "session/fork") {
+            Ok(res) => {
+                if let Some(state) = res.get("state") {
+                    let evs = self.proj.apply_snapshot_value(state.clone());
+                    for ev in evs {
+                        self.emit(ev);
+                    }
+                }
+                self.list_sessions();
+            }
+            Err(e) => self.error("session/fork", format!("{e:#}")),
+        }
+    }
+
+    /// TUI `/rewind` → `session/rewind`; the response state repaints chat.
+    fn rewind_session(&mut self, session_id: &str, entry_id: &str, restore_files: bool) {
+        let params = json!({
+            "sessionId": session_id,
+            "entryId": entry_id,
+            "restoreFiles": restore_files,
+        });
+        match self.call("session/rewind", params, "session/rewind") {
+            Ok(res) => {
+                let restored = res
+                    .get("restoredPaths")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if let Some(state) = res.get("state") {
+                    let evs = self.proj.apply_snapshot_value(state.clone());
+                    for ev in evs {
+                        self.emit(ev);
+                    }
+                }
+                if !restored.is_empty() {
+                    self.emit(AgentEvent::DebugLog(format!(
+                        "rewind restored {} file(s)",
+                        restored.len()
+                    )));
+                }
+            }
+            Err(e) => self.error("session/rewind", format!("{e:#}")),
+        }
+    }
+
+    /// `session/rewind/read` → RewindInfo (which files a rewind restores).
+    fn rewind_read(&mut self, session_id: &str, entry_id: &str) {
+        let params = json!({"sessionId": session_id, "entryId": entry_id});
+        match self.call("session/rewind/read", params, "session/rewind/read") {
+            Ok(res) => {
+                let has = res.get("hasFileChanges").and_then(Value::as_bool).unwrap_or(false);
+                let paths = res
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.emit(AgentEvent::RewindInfo {
+                    session_id: session_id.to_string(),
+                    entry_id: entry_id.to_string(),
+                    has_file_changes: has,
+                    paths,
+                });
+            }
+            Err(e) => self.error("session/rewind/read", format!("{e:#}")),
         }
     }
 

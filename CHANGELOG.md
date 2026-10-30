@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.99.16 — full TUI parity, verified against the installed CLI v3.0.4 (2026-10-30)
+
+Re-audited against the actual `vibe-rs` TUI binary and `vibe/app_server` 3.0.4
+sources (not just the v3.0.3 reports) — details in `docs/tui-parity-round10.md`.
+
+- **Fork & rewind**: `/branch` (`/fork`) and `/rewind` open a checkpoint
+  picker modal (history entries with wire ids); `session/fork` (attach) and
+  `session/rewind` + `session/rewind/read` (affected-files preview with a
+  restore-files checkbox) wired end-to-end; fork response state switches the
+  GUI to the new session.
+- **Subagents**: `childSessions` snapshots + `session/childSessionUpdated`
+  render as a live chip strip above the composer; click opens the child.
+- **Session shelf extras** (beyond the TUI): pin 📌 / archive 📦 / unread dot /
+  worktree badge via `session/pin|archive|markAsSeen`, permanent
+  `session/delete`, pinned-first + archived-last sorting,
+  `session/list {includeArchived:true}`; lease badge "open elsewhere" via
+  `session/lease/subscribe` + updated/ended.
+- **Slash command coverage**: the picker lists the full cli-rust command set;
+  additionally implemented client-side: `/status`, `/version`, `/delete`,
+  `/update`, `/diff`, `/theme`, `/config`, `/permissions`, `/connect`,
+  `/agents`, `/resume`, `/quit`/`/exit`.
+- `turn/queueUpdated`, `turn/retrying`, `runtime/updated` now resync.
+
 ## 1.99.15 — TUI parity round: slash commands executed client-side + attachment paste (2026-10-30)
 
 Re-audited the chat against the official Mistral Vibe CLI TUI (`docs/tui-capabilities-report.md`, `vibe` v3.x app-server sources) so the GUI can fully replace the terminal:

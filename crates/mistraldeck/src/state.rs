@@ -65,6 +65,30 @@ pub struct ClientState {
     /// L1: force the login wizard on top of the Shell ("Sign in
     /// again" in Settings / rate-limit CTA). Consumed by app.rs.
     pub login_requested: bool,
+    /// `/rewind` / `/branch` checkpoint picker modal (TUI parity).
+    pub rewind_pick: Option<RewindPick>,
+    /// Last `session/rewind/read` answer — files a rewind would restore.
+    pub rewind_info: Option<RewindInfoView>,
+}
+
+/// Checkpoint picker opened by `/rewind` or `/branch`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewindPick {
+    /// "rewind" | "branch"
+    pub mode: String,
+    /// (entry_id, label) — one per rewindable history entry.
+    pub entries: Vec<(String, String)>,
+    /// selected entry + restore-files checkbox (rewind confirm state)
+    pub selected: Option<String>,
+    pub restore_files: bool,
+}
+
+/// `session/rewind/read` answer for the pending picker selection.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RewindInfoView {
+    pub entry_id: String,
+    pub has_file_changes: bool,
+    pub paths: Vec<String>,
 }
 
 /// A pending dock navigation triggered by a clickable chat path
@@ -331,6 +355,20 @@ fn apply_agent_event(mut state: Signal<ClientState>, e: AgentEvent) -> bool {
             }
             false
         }
+        // rewind preview answer — the /rewind picker shows affected files
+        AgentEvent::RewindInfo {
+            entry_id,
+            has_file_changes,
+            paths,
+            ..
+        } => {
+            state.write().rewind_info = Some(RewindInfoView {
+                entry_id,
+                has_file_changes,
+                paths,
+            });
+            false
+        }
         // L1: turn failed (wire `turn.error`, e.g. rate_limit) —
         // kept client-side (an event, not snapshot state) and
         // rendered by the chat banner until the next submit.
@@ -587,6 +625,129 @@ pub async fn submit(mut state: Signal<ClientState>, text: String) {
                         let _ = crate::api::api_local_notice(tok, usage.to_string()).await;
                     } else {
                         let _ = crate::api::api_set_config_option(tok, key.to_string(), args).await;
+                    }
+                    return;
+                }
+                "rewind" | "branch" | "fork" => {
+                    // TUI parity: pick a checkpoint entry, then rewind/fork
+                    let entries: Vec<(String, String)> = state
+                        .read()
+                        .snapshot
+                        .current_messages
+                        .iter()
+                        .filter(|m| !m.id.is_empty() && m.id != "current")
+                        .map(|m| {
+                            let label = m
+                                .content
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .chars()
+                                .take(60)
+                                .collect::<String>();
+                            let role = match m.sender {
+                                mistraldeck_core::types::MessageSender::User => "you",
+                                mistraldeck_core::types::MessageSender::Ai => "agent",
+                                _ => "sys",
+                            };
+                            (m.id.clone(), format!("{role}: {label}"))
+                        })
+                        .collect();
+                    if entries.is_empty() {
+                        let _ = crate::api::api_local_notice(
+                            tok,
+                            "No rewindable entries in this session yet.".to_string(),
+                        )
+                        .await;
+                    } else {
+                        let mode = if lower == "fork" { "branch".to_string() } else { lower };
+                        state.write().rewind_pick = Some(RewindPick {
+                            mode,
+                            entries,
+                            selected: None,
+                            restore_files: true,
+                        });
+                    }
+                    return;
+                }
+                "update" => {
+                    match crate::api::api_check_app_update(tok.clone()).await {
+                        Ok(info) if info.update_available => {
+                            let _ = crate::api::api_local_notice(
+                                tok,
+                                format!(
+                                    "Update available: {} → {} — use the update button in the header.",
+                                    info.current_version,
+                                    info.latest_version.unwrap_or_default()
+                                ),
+                            )
+                            .await;
+                        }
+                        Ok(_) => {
+                            let _ = crate::api::api_local_notice(tok, "App is up to date.".to_string()).await;
+                        }
+                        Err(e) => {
+                            let _ = crate::api::api_local_notice(tok, format!("Update check failed: {e}")).await;
+                        }
+                    }
+                    return;
+                }
+                "diff" => {
+                    // open the dock on the Git tab
+                    let (l, t, lim) = {
+                        let s = state.read();
+                        (
+                            s.snapshot.config.language.clone(),
+                            s.snapshot.config.theme.clone(),
+                            s.snapshot.config.sidebar_sessions_limit.unwrap_or(0),
+                        )
+                    };
+                    save_prefs(state.clone(), l, t, true, lim).await;
+                    let _ = crate::api::api_local_notice(tok, "Opened the Git tab in the dock.".to_string()).await;
+                    return;
+                }
+                "theme" => {
+                    // cycle light → dark → auto
+                    let cur = state.read().snapshot.config.theme.clone();
+                    let next = match cur.as_str() {
+                        "dark" => "auto",
+                        "auto" => "light",
+                        _ => "dark",
+                    }
+                    .to_string();
+                    let (l, lim) = {
+                        let s = state.read();
+                        (
+                            s.snapshot.config.language.clone(),
+                            s.snapshot.config.sidebar_sessions_limit.unwrap_or(0),
+                        )
+                    };
+                    let dock = state.read().snapshot.config.dock_open;
+                    save_prefs(state.clone(), l, next.clone(), dock, lim).await;
+                    let _ = crate::api::api_local_notice(tok, format!("Theme: {next}")).await;
+                    return;
+                }
+                "config" | "permissions" | "connect" | "plugins" | "mcp" | "agents" => {
+                    state.write().view = View::Settings;
+                    let _ = crate::api::api_local_notice(
+                        tok,
+                        "Opened Settings — see the corresponding tab there.".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+                "resume" => {
+                    let _ = crate::api::api_local_notice(
+                        tok,
+                        "Pick a session in the sidebar to resume it.".to_string(),
+                    )
+                    .await;
+                    return;
+                }
+                "quit" | "exit" => {
+                    #[cfg(any(feature = "web", feature = "desktop"))]
+                    {
+                        dioxus::document::eval("window.close();").await;
                     }
                     return;
                 }

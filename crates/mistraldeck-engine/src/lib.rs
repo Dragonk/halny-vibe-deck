@@ -27,6 +27,11 @@ pub const SLASH_HELP: &str = "\
 - `/thinking <level>` — set the thinking level (off/low/medium/high/xhigh)
 - `/agent <name>` — switch the agent/mode for this session
 - `/retry [instructions]` — continue the last interrupted response
+- `/rewind <entry>` — rewind the session to a checkpoint (restores files)
+- `/branch [entry]` — fork the session at a checkpoint into a new session
+- `/status` — session statistics
+- `/version` — app + CLI versions
+- `/delete` — delete the current session
 - `/help` — show this list
 - `!<command>` — run a shell command in the session and show its output
 - `/<skill>` — invoke a skill (resolved by the agent)
@@ -384,6 +389,10 @@ impl Engine {
                             .and_then(|e| e.working_directory.clone())
                             .unwrap_or_default(),
                         start_time: s.start_time.clone(),
+                        pinned_at: None,
+                        archived_at: None,
+                        is_unseen: false,
+                        worktree: None,
                     }
                 })
                 .collect();
@@ -1372,7 +1381,147 @@ impl Engine {
                 self.local_notice(crate::SLASH_HELP);
                 true
             }
+            "status" => {
+                self.local_notice(&self.status_text());
+                true
+            }
+            "version" => {
+                let cli = crate::updates::local_cli_version()
+                    .unwrap_or_else(|| "unknown".to_string());
+                self.local_notice(&format!(
+                    "Halny Vibe Deck {} · Mistral Vibe CLI {cli}",
+                    crate::updates::app_version()
+                ));
+                true
+            }
+            "delete" => {
+                // TUI /delete: delete the CURRENT backend session
+                let st = self.state.lock().unwrap();
+                let agent = st
+                    .current_session()
+                    .and_then(|s| s.agent_session_id.clone());
+                drop(st);
+                if let Some(sid) = agent {
+                    self.delete_backend_session(&sid);
+                    self.local_notice("Session deleted.");
+                } else {
+                    self.local_notice("No backend session to delete.");
+                }
+                true
+            }
             _ => false,
+        }
+    }
+
+    /// `/status` — TUI renders AgentStatsSnapshot locally; we have the same
+    /// data on the session usage mirror.
+    fn status_text(&self) -> String {
+        let st = self.state.lock().unwrap();
+        let Some(s) = st.current_session() else {
+            return "No active session.".to_string();
+        };
+        let u = &s.usage;
+        let msgs = s.messages.len();
+        let turns = s.messages.iter().filter(|m| m.sender == MessageSender::User).count();
+        format!(
+            "**Session status**\n\n- messages: {msgs} ({turns} turns)\n- prompt tokens: {:.0}\n- completion tokens: {:.0}\n- total tokens: {:.0} (cached {:.0})\n- cost: ${:.4}\n- context: {:.0} / {:.0} tokens",
+            u.prompt_tokens,
+            u.completion_tokens,
+            u.total_tokens,
+            u.cached_tokens,
+            u.cost,
+            u.context_used,
+            u.context_size
+        )
+    }
+
+    /// TUI `/branch` → `session/fork` at `entry_id` (None = end of history).
+    pub fn fork_session(&self, entry_id: Option<String>) {
+        let Some((key, agent)) = self.current_agent_pair() else { return };
+        let sent = {
+            let st = self.state.lock().unwrap();
+            st.slot_of_session(&key)
+                .and_then(|id| st.slots.get(&id))
+                .map(|slot| {
+                    slot.cmd.send(AgentCommand::SessionFork {
+                        source_session_id: agent,
+                        entry_id,
+                    })
+                })
+                .is_some()
+        };
+        if sent {
+            self.local_notice("Forking session…");
+        }
+    }
+
+    /// TUI `/rewind` → `session/rewind` to `entry_id`.
+    pub fn rewind_session(&self, entry_id: String, restore_files: bool) {
+        if self.agent_cmd_slot(|sid| AgentCommand::SessionRewind {
+            session_id: sid.to_string(),
+            entry_id,
+            restore_files,
+        }) {
+            self.local_notice("Rewinding session…");
+        }
+    }
+
+    /// `session/rewind/read` — which files would a rewind restore.
+    pub fn rewind_read(&self, entry_id: String) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::RewindRead {
+            session_id: sid.to_string(),
+            entry_id,
+        })
+    }
+
+    /// `session/pin` (GUI extra — the TUI has no pin UI).
+    pub fn pin_session(&self, session_id: &str, pinned: bool) {
+        self.any_slot_cmd(|slot| {
+            let _ = slot.cmd.send(AgentCommand::PinSession {
+                session_id: session_id.to_string(),
+                pinned,
+            });
+        });
+    }
+
+    /// `session/archive` (GUI extra).
+    pub fn archive_session(&self, session_id: &str, archived: bool) {
+        self.any_slot_cmd(|slot| {
+            let _ = slot.cmd.send(AgentCommand::ArchiveSession {
+                session_id: session_id.to_string(),
+                archived,
+            });
+        });
+    }
+
+    pub fn mark_session_seen(&self, session_id: &str) {
+        self.any_slot_cmd(|slot| {
+            let _ = slot.cmd.send(AgentCommand::MarkSessionSeen {
+                session_id: session_id.to_string(),
+            });
+        });
+    }
+
+    /// `session/delete` — remove a backend session from disk.
+    pub fn delete_backend_session(&self, session_id: &str) {
+        self.any_slot_cmd(|slot| {
+            let _ = slot.cmd.send(AgentCommand::DeleteBackendSession {
+                session_id: session_id.to_string(),
+            });
+        });
+    }
+
+    fn current_agent_pair(&self) -> Option<(String, String)> {
+        let st = self.state.lock().unwrap();
+        let s = st.current_session()?;
+        Some((s.id.clone(), s.agent_session_id.clone()?))
+    }
+
+    /// Send a command through any live slot (global/list-level ops).
+    fn any_slot_cmd(&self, f: impl FnOnce(&crate::types::SlotState)) {
+        let st = self.state.lock().unwrap();
+        if let Some((_, slot)) = st.slots.iter().next() {
+            f(slot);
         }
     }
 
@@ -2066,11 +2215,25 @@ fn agent_session_idx(
                     config_options,
                     title,
                     current_mode_id,
+                    child_sessions,
                 } => {
                     slot.status = AgentStatus::Connected;
                     slot.error.clear();
                     // The wake finished: the resuming overlay disappears.
                     slot.load_progress = None;
+                    // subagent shelf from the snapshot + "open elsewhere" lease
+                    if let Some(i) = slot_session {
+                        if let Some(session) = st.sessions.get_mut(i) {
+                            session.subagents = child_sessions
+                                .iter()
+                                .filter_map(|c| parse_subagent(c))
+                                .collect();
+                        }
+                    }
+                    {
+                        let sid = session_id.clone();
+                        let _ = slot.cmd.send(AgentCommand::LeaseSubscribe { session_id: sid });
+                    }
                     // L1: session up → re-read account state (the
                     // sessionId-scoped `account/read` is fresher now).
                     // Sent straight to this slot: `apply_slot_event` holds the
@@ -2629,6 +2792,44 @@ fn agent_session_idx(
                 AgentEvent::AvailableCommands { commands, .. } => {
                     slot.commands = commands;
                 }
+                AgentEvent::ChildSessionUpdated {
+                    session_id,
+                    child_json,
+                } => {
+                    // subagent shelf: upsert the child in the session's list
+                    if let Some(child) = parse_subagent(&child_json) {
+                        let target = Self::agent_session_idx(&st.sessions, st.current, &session_id)
+                            .or(slot_session);
+                        if let Some(i) = target {
+                            if let Some(session) = st.sessions.get_mut(i) {
+                                match session
+                                    .subagents
+                                    .iter_mut()
+                                    .find(|s| s.id == child.id)
+                                {
+                                    Some(ex) => *ex = child,
+                                    None => session.subagents.push(child),
+                                }
+                                session.last_active_ms = now_ms();
+                            }
+                        }
+                    }
+                }
+                AgentEvent::LeaseUpdated {
+                    session_id,
+                    held_elsewhere,
+                } => {
+                    let target = Self::agent_session_idx(&st.sessions, st.current, &session_id)
+                        .or(slot_session);
+                    if let Some(i) = target {
+                        if let Some(session) = st.sessions.get_mut(i) {
+                            session.leased_elsewhere = held_elsewhere;
+                        }
+                    }
+                }
+                AgentEvent::RewindInfo { .. } => {
+                    // forwarded to clients as-is (the rewind picker reads it)
+                }
                 AgentEvent::PromptCompleted { session_id, .. } => {
                     slot.busy = false;
                     slot.last_activity = std::time::Instant::now();
@@ -2819,6 +3020,43 @@ pub fn complete_session_tool_calls(session: &mut ChatSession) {
 }
 
 /// Ensure the session ends with an open AI message and return it.
+/// Parse one `PublicChildSession` wire object into a SubagentView.
+pub fn parse_subagent(json: &str) -> Option<mistraldeck_core::types::SubagentView> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    Some(mistraldeck_core::types::SubagentView {
+        id: v.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+        name: v
+            .get("name")
+            .and_then(|x| x.as_str())
+            .unwrap_or("subagent")
+            .to_string(),
+        agent_type: v
+            .get("agentType")
+            .or_else(|| v.get("agent_type"))
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        status: status_of(v.get("status")),
+        updated_at: v
+            .get("updatedAt")
+            .and_then(|x| x.as_i64())
+            .unwrap_or(0),
+    })
+}
+
+fn status_of(v: Option<&serde_json::Value>) -> String {
+    match v {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Object(m)) => m
+            .get("type")
+            .or_else(|| m.get("status"))
+            .and_then(|x| x.as_str())
+            .unwrap_or("idle")
+            .to_string(),
+        _ => "idle".to_string(),
+    }
+}
+
 pub fn ensure_ai_message(session: &mut ChatSession) -> &mut Message {
     let needs_new = !matches!(
         session.messages.last(),

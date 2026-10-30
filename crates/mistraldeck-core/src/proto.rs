@@ -15,6 +15,14 @@ pub struct AgentSessionInfo {
     pub name: String,
     pub cwd: String,
     pub start_time: String,
+    #[serde(default)]
+    pub pinned_at: Option<i64>,
+    #[serde(default)]
+    pub archived_at: Option<i64>,
+    #[serde(default)]
+    pub is_unseen: bool,
+    #[serde(default)]
+    pub worktree: Option<String>,
 }
 
 /// One image attached to a prompt — sent as an agent-transport `image` content
@@ -97,6 +105,9 @@ pub enum AgentEvent {
         /// back to the first mode) — updates the mode chip display.
         #[serde(default)]
         current_mode_id: Option<String>,
+        /// `PublicSessionState.childSessions` — raw wire JSON per child.
+        #[serde(default)]
+        child_sessions: Vec<String>,
     },
     /// Live token usage for a turn (`session/update` → `usage_update`).
     UsageUpdate {
@@ -187,6 +198,25 @@ pub enum AgentEvent {
     PlanUpdate {
         session_id: String,
         entries_json: String,
+    },
+    /// A child (subagent) session changed — `session/childSessionUpdated`
+    /// or `PublicSessionState.childSessions` in a snapshot. Raw wire JSON.
+    ChildSessionUpdated {
+        session_id: String,
+        child_json: String,
+    },
+    /// `session/rewind/read` answer — does rewinding to this entry touch
+    /// files on disk (and which).
+    RewindInfo {
+        session_id: String,
+        entry_id: String,
+        has_file_changes: bool,
+        paths: Vec<String>,
+    },
+    /// `session/lease/updated|ended` — another process holds this session.
+    LeaseUpdated {
+        session_id: String,
+        held_elsewhere: bool,
     },
     /// Slash commands offered by the agent for this session.
     AvailableCommands {
@@ -313,6 +343,46 @@ pub enum AgentCommand {
     },
     /// `config/reload` — TUI `/reload`.
     ConfigReload,
+    /// `session/fork` — TUI `/branch`: fork this session at `entry_id`
+    /// (None = end of history); `attach` semantics handled engine-side.
+    SessionFork {
+        source_session_id: String,
+        entry_id: Option<String>,
+    },
+    /// `session/rewind` — TUI `/rewind`: rewind the session to `entry_id`.
+    SessionRewind {
+        session_id: String,
+        entry_id: String,
+        restore_files: bool,
+    },
+    /// `session/rewind/read` — preview which files a rewind would restore.
+    RewindRead {
+        session_id: String,
+        entry_id: String,
+    },
+    /// `session/pin` — pin/unpin a session on the shelf (GUI extra).
+    PinSession {
+        session_id: String,
+        pinned: bool,
+    },
+    /// `session/archive` — archive/unarchive (GUI extra).
+    ArchiveSession {
+        session_id: String,
+        archived: bool,
+    },
+    /// `session/markAsSeen` — clear the unread dot.
+    MarkSessionSeen {
+        session_id: String,
+    },
+    /// `session/delete` — delete a backend session from disk.
+    DeleteBackendSession {
+        session_id: String,
+    },
+    /// `session/lease/subscribe` — learn when another process opens this
+    /// session ("open elsewhere" badge).
+    LeaseSubscribe {
+        session_id: String,
+    },
 
     // --- L1: setup / konto (metody globalne app-servera, nie sesyjne) ---
     /// setup/status — seed wizarda (supportsBrowserSignIn, hasApiKey, browserAuth*).

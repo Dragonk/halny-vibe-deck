@@ -32,6 +32,9 @@ pub struct SessionState {
     pub active_callbacks: Option<Vec<CallbackEntry>>,
     #[serde(default, rename = "turnQueue")]
     pub turn_queue: Option<Value>,
+    /// `PublicSessionState.childSessions` — subagent list (raw).
+    #[serde(default, rename = "childSessions")]
+    pub child_sessions: Option<Vec<Value>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -205,6 +208,18 @@ pub struct SessionListItem {
     pub updated_at: Option<Value>,
     #[serde(default, rename = "status")]
     pub status: Option<Value>,
+    /// `PublicSession.pinnedAt` (epoch ms) — pinned sessions sort first.
+    #[serde(default, rename = "pinnedAt")]
+    pub pinned_at: Option<i64>,
+    /// `PublicSession.archivedAt` — archived sessions.
+    #[serde(default, rename = "archivedAt")]
+    pub archived_at: Option<i64>,
+    /// `PublicSession.isUnseen` — unread-activity dot.
+    #[serde(default, rename = "isUnseen")]
+    pub is_unseen: bool,
+    /// `PublicSession.worktree.name` badge.
+    #[serde(default)]
+    pub worktree: Option<Value>,
 }
 
 /// Extract a string field from a possibly-tagged status object

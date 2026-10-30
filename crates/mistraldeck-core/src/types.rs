@@ -298,6 +298,26 @@ pub struct ChatSession {
     /// texts of one turn no longer merge into a single giant message.
     #[serde(default)]
     pub stream_msg_id: Option<String>,
+    /// Live child sessions (subagents) of this session — from
+    /// `PublicSessionState.childSessions` and `session/childSessionUpdated`.
+    #[serde(default)]
+    pub subagents: Vec<SubagentView>,
+    /// A lease says another process holds this session — surfaced as an
+    /// "open elsewhere" badge (`session/lease/updated|ended`).
+    #[serde(default)]
+    pub leased_elsewhere: bool,
+}
+
+/// One child (subagent) session — `PublicChildSession` on the wire.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubagentView {
+    pub id: String,
+    pub name: String,
+    pub agent_type: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 impl ChatSession {
@@ -319,6 +339,8 @@ impl ChatSession {
             last_thinking: None,
             usage: crate::snapshot::UsageStats::default(),
             stream_msg_id: None,
+            subagents: Vec::new(),
+            leased_elsewhere: false,
         }
     }
 

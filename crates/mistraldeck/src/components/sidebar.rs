@@ -597,6 +597,25 @@ fn ctx_menu_el(
     } else {
         tr(&lang, "hideSession")
     };
+    // GUI extras for backend sessions: pin / archive / mark-read / delete.
+    // Look the session up in the snapshot to label the toggles correctly.
+    let sess = if c.target.is_project {
+        None
+    } else {
+        let s = state.read();
+        s.snapshot
+            .backend_sessions
+            .iter()
+            .find(|i| i.session_id == c.target.key)
+            .map(|i| {
+                (
+                    i.pinned_at.is_some(),
+                    i.archived_at.is_some(),
+                    i.is_unseen,
+                )
+            })
+    };
+    let key = c.target.key.clone();
     rsx! {
         div {
             class: "ctx-overlay",
@@ -612,6 +631,82 @@ fn ctx_menu_el(
                 class: "ctx-menu",
                 style: "left:{c.x}px; top:{c.y}px;",
                 onclick: move |e| e.stop_propagation(),
+                if let Some((pinned, archived, unseen)) = sess {
+                    button {
+                        class: "ctx-menu-item",
+                        onclick: {
+                            let state = state.clone();
+                            let mut ctx = ctx.clone();
+                            let key = key.clone();
+                            move |_| {
+                                ctx.set(None);
+                                let state = state.clone();
+                                let key = key.clone();
+                                spawn(async move {
+                                    let _ = crate::api::api_pin_session(token(&state), key, !pinned).await;
+                                    crate::state::refresh(state).await;
+                                });
+                            }
+                        },
+                        if pinned { "📌 Unpin session" } else { "📌 Pin session" }
+                    }
+                    button {
+                        class: "ctx-menu-item",
+                        onclick: {
+                            let state = state.clone();
+                            let mut ctx = ctx.clone();
+                            let key = key.clone();
+                            move |_| {
+                                ctx.set(None);
+                                let state = state.clone();
+                                let key = key.clone();
+                                spawn(async move {
+                                    let _ = crate::api::api_archive_session(token(&state), key, !archived).await;
+                                    crate::state::refresh(state).await;
+                                });
+                            }
+                        },
+                        if archived { "📦 Unarchive session" } else { "📦 Archive session" }
+                    }
+                    if unseen {
+                        button {
+                            class: "ctx-menu-item",
+                            onclick: {
+                                let state = state.clone();
+                                let mut ctx = ctx.clone();
+                                let key = key.clone();
+                                move |_| {
+                                    ctx.set(None);
+                                    let state = state.clone();
+                                    let key = key.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_mark_session_seen(token(&state), key).await;
+                                        crate::state::refresh(state).await;
+                                    });
+                                }
+                            },
+                            "👁 Mark as read"
+                        }
+                    }
+                    button {
+                        class: "ctx-menu-item danger",
+                        onclick: {
+                            let state = state.clone();
+                            let mut ctx = ctx.clone();
+                            let key = key.clone();
+                            move |_| {
+                                ctx.set(None);
+                                let state = state.clone();
+                                let key = key.clone();
+                                spawn(async move {
+                                    let _ = crate::api::api_delete_backend_session(token(&state), key).await;
+                                    crate::state::refresh(state).await;
+                                });
+                            }
+                        },
+                        "🗑 Delete session from disk"
+                    }
+                }
                 button {
                     class: "ctx-menu-item danger",
                     onclick: {
@@ -651,10 +746,22 @@ fn group_el(
         .map(|(idx, m)| session_row(state.clone(), lang.clone(), *idx, m, current, confirm.clone(), ctx.clone()))
         .collect();
     // Z6: past sessions of this project, opened as a lazy preview.
-    let mut hist_rows: Vec<Element> = g
-        .history
+    // Pinned first, archived last (GUI extra sorting).
+    let mut hist = g.history.clone();
+    hist.sort_by(|a, b| {
+        let pa = a.pinned_at.is_some();
+        let pb = b.pinned_at.is_some();
+        pa.cmp(&pb).then_with(|| {
+            let aa = a.archived_at.is_some();
+            let ab = b.archived_at.is_some();
+            aa.cmp(&ab)
+        }).then_with(|| {
+            ms_from_iso(&b.start_time).cmp(&ms_from_iso(&a.start_time))
+        })
+    });
+    let mut hist_rows: Vec<Element> = hist
         .iter()
-        .map(|info| backend_el(state.clone(), &lang, info, confirm.clone(), false))
+        .map(|info| backend_el(state.clone(), &lang, info, confirm.clone(), ctx.clone(), false))
         .collect();
     let total = rows.len() + hist_rows.len();
     let more_el: Element = if total > GROUP_LIMIT && !all_expanded {
@@ -908,6 +1015,7 @@ fn backend_el(
     lang: &str,
     info: &mistraldeck_core::proto::AgentSessionInfo,
     confirm: Signal<Option<ConfirmTarget>>,
+    ctx: Signal<Option<CtxMenu>>,
     show_dir: bool,
 ) -> Element {
     let sid = info.session_id.clone();
@@ -924,10 +1032,20 @@ fn backend_el(
     } else {
         String::new()
     };
+    // GUI extras beyond the TUI: pinned/archive/unseen/worktree badges
+    let pinned = info.pinned_at.is_some();
+    let archived = info.archived_at.is_some();
+    let unseen = info.is_unseen;
+    let worktree = info.worktree.clone().unwrap_or_default();
+    let cls = if archived {
+        "session-item archived"
+    } else {
+        "session-item"
+    };
 
     rsx! {
         button {
-            class: "session-item",
+            class: "{cls}",
             onclick: {
                 let state = state.clone();
                 let sid = sid.clone();
@@ -942,8 +1060,35 @@ fn backend_el(
                     }
                 }
             },
+            oncontextmenu: {
+                let mut ctx = ctx.clone();
+                let sid = sid.clone();
+                let name = name.clone();
+                move |e| {
+                    e.prevent_default();
+                    let p = e.data().client_coordinates();
+                    ctx.set(Some(CtxMenu {
+                        x: p.x,
+                        y: p.y,
+                        target: ConfirmTarget {
+                            is_project: false,
+                            label: name.clone(),
+                            key: sid.clone(),
+                        },
+                    }));
+                }
+            },
             div { class: "session-item-content",
                 div { class: "session-item-row",
+                    if pinned {
+                        span { class: "session-badge", title: "pinned", "📌" }
+                    }
+                    if unseen {
+                        span { class: "session-badge unseen-dot", title: "unread activity", "●" }
+                    }
+                    if !worktree.is_empty() {
+                        span { class: "session-badge worktree-badge", title: "{worktree}", "🌿 {worktree}" }
+                    }
                     span { class: "session-name", "{name}" }
                 }
                 div { class: "session-item-meta",
@@ -951,6 +1096,9 @@ fn backend_el(
                         span { class: "session-date", "{date} · {dir}" }
                     } else {
                         span { class: "session-date", "{date}" }
+                    }
+                    if archived {
+                        span { class: "session-badge", title: "archived", "📦" }
                     }
                 }
             }

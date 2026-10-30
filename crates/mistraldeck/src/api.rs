@@ -228,6 +228,65 @@ pub async fn api_local_notice(token: String, text: String) -> Result<(), ServerF
     Ok(())
 }
 
+/// `/branch [entryId]` → `session/fork` of the current session.
+#[server]
+pub async fn api_fork_session(token: String, entry_id: Option<String>) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().fork_session(entry_id);
+    Ok(())
+}
+
+/// `/rewind <entryId>` → `session/rewind` on the current session.
+#[server]
+pub async fn api_rewind_session(
+    token: String,
+    entry_id: String,
+    restore_files: bool,
+) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().rewind_session(entry_id, restore_files);
+    Ok(())
+}
+
+/// `session/rewind/read` — which files a rewind to `entry_id` would restore.
+#[server]
+pub async fn api_rewind_read(token: String, entry_id: String) -> Result<bool, ServerFnError> {
+    check(&token)?;
+    Ok(mistraldeck_engine::Engine::global().rewind_read(entry_id))
+}
+
+/// `session/pin` — pin/unpin a backend session (GUI extra).
+#[server]
+pub async fn api_pin_session(token: String, session_id: String, pinned: bool) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().pin_session(&session_id, pinned);
+    Ok(())
+}
+
+/// `session/archive` — archive/unarchive (GUI extra).
+#[server]
+pub async fn api_archive_session(token: String, session_id: String, archived: bool) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().archive_session(&session_id, archived);
+    Ok(())
+}
+
+/// `session/markAsSeen` — clear the unread dot.
+#[server]
+pub async fn api_mark_session_seen(token: String, session_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().mark_session_seen(&session_id);
+    Ok(())
+}
+
+/// `session/delete` — delete a backend session from disk.
+#[server]
+pub async fn api_delete_backend_session(token: String, session_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().delete_backend_session(&session_id);
+    Ok(())
+}
+
 #[server]
 pub async fn api_set_config_option(token: String, key: String, value: String) -> Result<(), ServerFnError> {
     check(&token)?;

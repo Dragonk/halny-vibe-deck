@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use mistraldeck_core::types::{Attachment, Message, MessageSender, PlanEntry, ToolStatus};
 
 use crate::i18n::{tr, tf};
-use crate::state::{lang, ClientState};
+use crate::state::{lang, token, ClientState};
 use crate::vibestats::{PreviewMessageView, SubagentSessionView};
 
 pub fn ChatView() -> Element {
@@ -221,6 +221,9 @@ pub fn ChatView() -> Element {
                     if !plan.is_empty() {
                         PlanCard { entries: plan.clone() }
                     }
+                    // Subagent shelf (TUI subagent_list parity): live child
+                    // sessions of the current session — click opens the child.
+                    {subagent_bar(state, lang.clone())}
                     // v0.13.1: the error banner renders also when the chat
                     // already has messages (Nexus ChatView), not only in the
                     // empty state.
@@ -243,6 +246,202 @@ pub fn ChatView() -> Element {
                 }
             }
             crate::components::input::InputBar {}
+            // `/rewind` / `/branch` checkpoint picker modal
+            {rewind_modal(state)}
+        }
+    }
+}
+
+/// Live subagent (child session) strip above the input — TUI
+/// `ui/subagent_list.rs` parity: name + status, click opens the child.
+fn subagent_bar(state: Signal<ClientState>, lang: String) -> Element {
+    let s = state.read();
+    let (subagents, leased) = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| (m.subagents.clone(), m.leased_elsewhere))
+        .unwrap_or_default();
+    drop(s);
+    if subagents.is_empty() && !leased {
+        return VNode::empty();
+    }
+    let n = subagents.len();
+    rsx! {
+        div { class: "subagent-bar",
+            if leased {
+                span { class: "subagent-lease-badge", title: "{tr(&lang, \"openElsewhereHint\")}", "👁 open elsewhere" }
+            }
+            if !subagents.is_empty() {
+                span { class: "subagent-bar-title", "{tr(&lang, \"subagentsLabel\")} ({n})" }
+                for sa in subagents.iter() {
+                    {
+                        let state = state.clone();
+                        let id = sa.id.clone();
+                        let status_cls = if sa.status == "running" { "running" } else { "done" };
+                        rsx! {
+                            button {
+                                class: "subagent-chip {status_cls}",
+                                title: "{sa.agent_type}",
+                                onclick: move |_| {
+                                    let state = state.clone();
+                                    let id = id.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_open_backend_session(token(&state), id).await;
+                                        crate::state::refresh(state).await;
+                                    });
+                                },
+                                span { class: "subagent-name", "{sa.name}" }
+                                span { class: "subagent-status", "{sa.status}" }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `/rewind` / `/branch` checkpoint picker modal (TUI rewind picker parity).
+fn rewind_modal(state: Signal<ClientState>) -> Element {
+    let (pick, info) = {
+        let s = state.read();
+        (s.rewind_pick.clone(), s.rewind_info.clone())
+    };
+    let Some(pick) = pick else { return VNode::empty() };
+    let is_branch = pick.mode == "branch";
+    let title = if is_branch {
+        "Fork session at…"
+    } else {
+        "Rewind session to…"
+    };
+    let sel = pick.selected.clone();
+    rsx! {
+        div {
+            class: "modal-overlay",
+            onclick: {
+                let mut st = state.clone();
+                move |_| { st.write().rewind_pick = None; st.write().rewind_info = None; }
+            },
+            div {
+                class: "modal-box rewind-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "{title}" }
+                div { class: "rewind-entry-list",
+                    for (id, label) in pick.entries.iter() {
+                        {
+                            let state = state.clone();
+                            let id = id.clone();
+                            let label = label.clone();
+                            let selected = sel.clone().unwrap_or_default() == *id;
+                            let cls = if selected { "ctx-menu-item active" } else { "ctx-menu-item" };
+                            rsx! {
+                                button {
+                                    class: "{cls}",
+                                    onclick: {
+                                        let mut st = state.clone();
+                                        move |_| {
+                                            let mode = st.read().rewind_pick.as_ref().map(|p| p.mode.clone()).unwrap_or_default();
+                                            {
+                                                let mut w = st.write();
+                                                if let Some(p) = w.rewind_pick.as_mut() {
+                                                    p.selected = Some(id.clone());
+                                                }
+                                            }
+                                            // ask the server which files a rewind restores
+                                            if mode == "rewind" {
+                                                let st2 = st.clone();
+                                                let id2 = id.clone();
+                                                spawn(async move {
+                                                    let _ = crate::api::api_rewind_read(token(&st2), id2).await;
+                                                });
+                                            }
+                                        }
+                                    },
+                                    "{label}"
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(sel_id) = &sel {
+                    {
+                        let info = info.clone();
+                        let paths_match = info.as_ref().map(|i| i.entry_id == *sel_id).unwrap_or(false);
+                        rsx! {
+                            div { class: "rewind-confirm",
+                                if !is_branch {
+                                    label {
+                                        class: "rewind-restore",
+                                        input {
+                                            r#type: "checkbox",
+                                            checked: pick.restore_files,
+                                            onchange: {
+                                                let mut st = state.clone();
+                                                move |e| {
+                                                    let v = e.value() == "true";
+                                                    let mut w = st.write();
+                                                    if let Some(p) = w.rewind_pick.as_mut() {
+                                                        p.restore_files = v;
+                                                    }
+                                                }
+                                            },
+                                        }
+                                        " restore file changes"
+                                    }
+                                }
+                                if !is_branch && paths_match {
+                                    if let Some(i) = &info {
+                                        if i.has_file_changes && !i.paths.is_empty() {
+                                            div { class: "rewind-paths",
+                                                "{i.paths.len()} file(s) affected:"
+                                                for p in i.paths.iter().take(5) {
+                                                    div { class: "rewind-path", "{p}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                div { class: "rewind-actions",
+                                    button {
+                                        class: "field-btn primary",
+                                        onclick: {
+                                            let state = state.clone();
+                                            let id = sel_id.clone();
+                                            let mode = pick.mode.clone();
+                                            let restore = pick.restore_files;
+                                            move |_| {
+                                                let state = state.clone();
+                                                let id = id.clone();
+                                                let mode = mode.clone();
+                                                spawn(async move {
+                                                    let tok = token(&state);
+                                                    if mode == "branch" {
+                                                        let _ = crate::api::api_fork_session(tok, Some(id)).await;
+                                                    } else {
+                                                        let _ = crate::api::api_rewind_session(tok, id, restore).await;
+                                                    }
+                                                    { let mut st = state.clone(); st.write().rewind_pick = None; st.write().rewind_info = None; }
+                                                    crate::state::refresh(state).await;
+                                                });
+                                            }
+                                        },
+                                        if is_branch { "Fork" } else { "Rewind" }
+                                    }
+                                    button {
+                                        class: "field-btn",
+                                        onclick: {
+                                            let mut st = state.clone();
+                                            move |_| { st.write().rewind_pick = None; st.write().rewind_info = None; }
+                                        },
+                                        "Cancel"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

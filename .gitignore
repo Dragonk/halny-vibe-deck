@@ -8,3 +8,4 @@ Cargo.lock.bak
 scripts/e2e/node_modules/
 scripts/e2e/test-results/
 scripts/e2e/package-lock.json
+*.tar.gz

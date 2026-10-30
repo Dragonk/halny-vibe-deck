@@ -153,6 +153,26 @@ pub struct SessionMeta {
     /// really ends.
     #[serde(default)]
     pub stopping: bool,
+    /// `PublicSession.pinnedAt` — pinned sessions sort on top of the shelf.
+    #[serde(default)]
+    pub pinned_at: Option<i64>,
+    /// `PublicSession.archivedAt` — archived sessions render dimmed at the
+    /// bottom (GUI extra — the TUI never lists them).
+    #[serde(default)]
+    pub archived_at: Option<i64>,
+    /// `PublicSession.isUnseen` — unread-activity dot.
+    #[serde(default)]
+    pub is_unseen: bool,
+    /// `PublicSession.worktree.name` badge, when the session runs in a
+    /// managed worktree.
+    #[serde(default)]
+    pub worktree: Option<String>,
+    /// Live subagent (child session) list of this session.
+    #[serde(default)]
+    pub subagents: Vec<crate::types::SubagentView>,
+    /// Another process holds a lease on this session ("open elsewhere").
+    #[serde(default)]
+    pub leased_elsewhere: bool,
 }
 
 impl SessionMeta {
@@ -169,6 +189,12 @@ impl SessionMeta {
             status: status.to_string(),
             remote_id: s.remote_id.clone(),
             stopping: false,
+            pinned_at: None,
+            archived_at: None,
+            is_unseen: false,
+            worktree: None,
+            subagents: s.subagents.clone(),
+            leased_elsewhere: s.leased_elsewhere,
         }
     }
 }
