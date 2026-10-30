@@ -27,6 +27,21 @@ const BUILTIN_SLASH_COMMANDS: &[(&str, &str, &str)] = &[
     ("leanstall", "Install the Lean 4 agent (leanstral)", ""),
     ("unleanstall", "Uninstall the Lean 4 agent", ""),
     ("data-retention", "Show data retention information", ""),
+    // executed client-side by the GUI (like the cli-rust TUI), not sent to
+    // the model — round 9
+    ("clear", "Clear the conversation context", ""),
+    ("new", "Start a new conversation (clears context)", ""),
+    ("rename", "Rename this session", "new title"),
+    ("model", "Switch the model for this session", "model name"),
+    ("thinking", "Set the thinking level", "off | low | medium | high | xhigh"),
+    ("agent", "Switch the agent (mode) for this session", "agent name"),
+    ("retry", "Continue the last interrupted response", "optional extra instructions"),
+    ("status", "Show session statistics", ""),
+    ("whoami", "Show the logged-in account", ""),
+    ("plugins", "List loaded plugins", ""),
+    ("rewind", "Rewind the session to a checkpoint", ""),
+    ("branch", "Fork the session at a checkpoint", ""),
+    ("loop", "Schedule a recurring prompt", "schedule and prompt"),
 ];
 
 /// One `/` picker entry (Nexus SlashItem).
@@ -172,6 +187,47 @@ const DROP_JS: &str = r#"
 })();
 "#;
 
+/// Clipboard paste (TUI paste_image parity): an image pasted into the chat
+/// is read as base64, parked on `window.__vdPaste`, and the hidden
+/// `#vd-paste-bridge` button is clicked — the Rust handler uploads it into
+/// the session root (`.halny-attachments/`, local or over SSH) and inserts
+/// an `@path` marker, exactly like a dropped file. Non-image pastes pass
+/// through untouched.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const PASTE_JS: &str = r#"
+(function () {
+  if (window.__vdPasteInit) return; window.__vdPasteInit = 1;
+  document.addEventListener('paste', function (e) {
+    try {
+      var items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      var imgs = Array.from(items).filter(function (it) {
+        return it.kind === 'file' && it.type && it.type.startsWith('image/');
+      });
+      if (!imgs.length) return;
+      var t = e.target;
+      if (!(t && t.closest && t.closest('.input-card-editor'))) return;
+      e.preventDefault();
+      window.__vdPaste = [];
+      var pending = imgs.length;
+      imgs.forEach(function (it) {
+        var f = it.getAsFile();
+        if (!f) { if (--pending === 0) { var b = document.getElementById('vd-paste-bridge'); if (b) b.click(); } return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+          var url = String(reader.result || '');
+          var ext = (f.type.split('/')[1] || 'png').replace(/[^a-z0-9]/g, '');
+          window.__vdPaste.push({ name: f.name || ('paste-' + Date.now() + '.' + ext), b64: url.split(',')[1] || '' });
+          if (--pending === 0) { var b = document.getElementById('vd-paste-bridge'); if (b) b.click(); }
+        };
+        reader.onerror = function () { if (--pending === 0) { var b = document.getElementById('vd-paste-bridge'); if (b) b.click(); } };
+        reader.readAsDataURL(f);
+      });
+    } catch (err) {}
+  });
+})();
+"#;
+
 /// Injected once (client only): the chat textarea grows with its content
 /// (one line at a time) up to the CSS max-height (160px), and never offers
 /// a manual resize handle (`resize: none` in main.css). Also installs the
@@ -231,6 +287,7 @@ pub fn InputBar() -> Element {
             spawn(async move {
                 dioxus::document::eval(INPUT_JS);
                 dioxus::document::eval(DROP_JS);
+                dioxus::document::eval(PASTE_JS);
             });
         }
     }
@@ -796,6 +853,47 @@ pub fn InputBar() -> Element {
                                 let tok = token(&state);
                                 for f in files {
                                     let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("file").to_string();
+                                    let b64 = f.get("b64").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    if b64.is_empty() { continue; }
+                                    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect();
+                                    let target = format!(".halny-attachments/{}-{}", mistraldeck_core::types::now_ms(), safe);
+                                    if crate::fsgit::api_write_binary(tok.clone(), target.clone(), b64, rid.clone(), root.clone()).await.is_ok() {
+                                        let d = format!("{}@{}", draft.read(), target);
+                                        draft.set(d);
+                                        fit_input_now();
+                                    }
+                                }
+                            }
+                        });
+                    }
+                },
+            }
+            // hidden bridge: PASTE_JS parks pasted images on window.__vdPaste
+            // and clicks this — the handler uploads them and inserts @path
+            // (same flow as the drop bridge above)
+            button {
+                id: "vd-paste-bridge",
+                style: "display:none",
+                onclick: {
+                    let state = state.clone();
+                    let mut draft = draft.clone();
+                    move |_| {
+                        let state = state.clone();
+                        let mut draft = draft.clone();
+                        spawn(async move {
+                            #[cfg(any(feature = "web", feature = "desktop"))]
+                            {
+                                let files: Vec<serde_json::Value> = dioxus::document::eval("return window.__vdPaste || [];")
+                                    .join::<serde_json::Value>()
+                                    .await
+                                    .ok()
+                                    .and_then(|v| v.as_array().cloned())
+                                    .unwrap_or_default();
+                                let _ = dioxus::document::eval("window.__vdPaste = [];").await;
+                                let (root, rid) = crate::state::session_git_ctx(&state);
+                                let tok = token(&state);
+                                for f in files {
+                                    let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("paste.png").to_string();
                                     let b64 = f.get("b64").and_then(|v| v.as_str()).unwrap_or("").to_string();
                                     if b64.is_empty() { continue; }
                                     let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect();

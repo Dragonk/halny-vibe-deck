@@ -292,6 +292,27 @@ pub enum AgentCommand {
         request_id: String,
         answer: String,
     },
+    /// `session/compact` — TUI `/compact [instructions]`.
+    SessionCompact {
+        session_id: String,
+        extra_instructions: String,
+    },
+    /// `session/history/clear` — TUI `/clear`, `/new`.
+    HistoryClear {
+        session_id: String,
+    },
+    /// `session/rename` — TUI `/rename <title>`.
+    SessionRename {
+        session_id: String,
+        title: String,
+    },
+    /// `session/shellCommand` — TUI `!cmd` inline shell.
+    ShellCommand {
+        session_id: String,
+        command: String,
+    },
+    /// `config/reload` — TUI `/reload`.
+    ConfigReload,
 
     // --- L1: setup / konto (metody globalne app-servera, nie sesyjne) ---
     /// setup/status — seed wizarda (supportsBrowserSignIn, hasApiKey, browserAuth*).

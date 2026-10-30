@@ -13,6 +13,25 @@ pub mod remote_vibe;
 pub mod session_token;
 pub mod systemd;
 pub mod updates;
+
+/// `/help` output (TUI parity): the slash commands this GUI executes
+/// client-side, exactly like the official cli-rust does.
+pub const SLASH_HELP: &str = "\
+**Available commands** (executed locally, like the terminal UI):
+
+- `/compact [instructions]` — summarize and compact the history
+- `/clear`, `/new` — clear the conversation context
+- `/rename <title>` — rename this session
+- `/reload` — reload config, agents and skills from disk
+- `/model <name>` — switch the model for this session
+- `/thinking <level>` — set the thinking level (off/low/medium/high/xhigh)
+- `/agent <name>` — switch the agent/mode for this session
+- `/retry [instructions]` — continue the last interrupted response
+- `/help` — show this list
+- `!<command>` — run a shell command in the session and show its output
+- `/<skill>` — invoke a skill (resolved by the agent)
+- `@<path>` — attach a file or folder to the prompt
+";
 mod types;
 
 pub use auth_browser::{BrowserSignInFlow, PollOutcome};
@@ -1234,6 +1253,139 @@ impl Engine {
                 return;
             }
         }
+    }
+
+    /// Send a session-scoped command to the current session's agent slot.
+    /// Returns false when no agent process is live for the session.
+    fn agent_cmd_slot(&self, f: impl FnOnce(&str) -> AgentCommand) -> bool {
+        let st = self.state.lock().unwrap();
+        let Some(session) = st.current_session() else {
+            return false;
+        };
+        let key = session.id.clone();
+        let Some(agent_id) = session.agent_session_id.clone() else {
+            return false;
+        };
+        let Some(slot_id) = st.slot_of_session(&key) else {
+            return false;
+        };
+        let Some(slot) = st.slots.get(&slot_id) else {
+            return false;
+        };
+        let _ = slot.cmd.send(f(&agent_id));
+        true
+    }
+
+    /// TUI `/compact [instructions]` → `session/compact`.
+    pub fn session_compact(&self, extra: String) {
+        if self.agent_cmd_slot(|sid| AgentCommand::SessionCompact {
+            session_id: sid.to_string(),
+            extra_instructions: extra,
+        }) {
+            self.local_notice("Compacting conversation…");
+        }
+    }
+
+    /// TUI `/clear`, `/new` → `session/history/clear`.
+    pub fn history_clear(&self) {
+        if self.agent_cmd_slot(|sid| AgentCommand::HistoryClear {
+            session_id: sid.to_string(),
+        }) {
+            self.local_notice("Clearing conversation history…");
+        }
+    }
+
+    /// TUI `/rename <title>` → `session/rename`.
+    pub fn rename_session(&self, title: String) {
+        if self.agent_cmd_slot(|sid| AgentCommand::SessionRename {
+            session_id: sid.to_string(),
+            title: title.clone(),
+        }) {
+            self.local_notice(&format!("Renaming session to “{title}”…"));
+        }
+    }
+
+    /// TUI `!cmd` → `session/shellCommand` (the output streams back as
+    /// history entries).
+    pub fn shell_command(&self, command: String) {
+        if self.agent_cmd_slot(|sid| AgentCommand::ShellCommand {
+            session_id: sid.to_string(),
+            command: command.clone(),
+        }) {
+            self.local_notice(&format!("Running `!{command}`…"));
+        }
+    }
+
+    /// TUI `/reload` → `config/reload` (global method — any live slot).
+    pub fn config_reload(&self) {
+        let st = self.state.lock().unwrap();
+        let sent = if let Some(session) = st.current_session() {
+            let key = session.id.clone();
+            st.slot_of_session(&key)
+                .and_then(|slot_id| st.slots.get(&slot_id))
+                .map(|slot| slot.cmd.send(AgentCommand::ConfigReload))
+                .is_some()
+        } else {
+            false
+        };
+        let sent = sent
+            || st
+                .slots
+                .values()
+                .next()
+                .map(|slot| slot.cmd.send(AgentCommand::ConfigReload).is_ok())
+                .unwrap_or(false);
+        drop(st);
+        if sent {
+            self.local_notice("Reloading configuration from disk…");
+        }
+    }
+
+    /// Execute a TUI-style slash command against the current session.
+    /// Returns true when the command was recognized (and must NOT be sent
+    /// as a prompt — unknown `/name` stays a prompt so server-side skill
+    /// invocation keeps working).
+    pub fn slash_command(&self, command: &str, args: &str) -> bool {
+        let args = args.trim();
+        match command.to_ascii_lowercase().as_str() {
+            "compact" => {
+                self.session_compact(args.to_string());
+                true
+            }
+            "clear" | "new" => {
+                self.history_clear();
+                true
+            }
+            "rename" => {
+                if args.is_empty() {
+                    self.local_notice("Usage: /rename <new title>");
+                } else {
+                    self.rename_session(args.to_string());
+                }
+                true
+            }
+            "reload" => {
+                self.config_reload();
+                true
+            }
+            "help" => {
+                self.local_notice(crate::SLASH_HELP);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Push a local system notice into the current session's transcript
+    /// (survives resyncs — the merge keeps System messages at the tail).
+    pub fn local_notice(&self, text: &str) {
+        let mut st = self.state.lock().unwrap();
+        if let Some(s) = st.current_session_mut() {
+            s.messages.push(Message::new_system(text));
+            s.last_active_ms = now_ms();
+        }
+        drop(st);
+        self.publish_structure();
     }
 
     /// Select a config option locally + on the session's agent. The value

@@ -556,6 +556,76 @@ pub async fn submit(mut state: Signal<ClientState>, text: String) {
     if text.is_empty() {
         return;
     }
+    let tok = token(&state);
+    // TUI parity (cli-rust): `!cmd` runs an inline shell command via
+    // `session/shellCommand` — it is NOT sent to the model as a prompt.
+    if let Some(cmd) = text.strip_prefix('!') {
+        let cmd = cmd.trim();
+        if !cmd.is_empty() {
+            let _ = crate::api::api_shell_command(tok, cmd.to_string()).await;
+            return;
+        }
+    }
+    // TUI parity (cli-rust commands/*): a leading `/command` is executed
+    // CLIENT-side and translated to JSON-RPC methods — only unknown `/name`
+    // goes to the server as a prompt (skill invocation, server-side).
+    if text.starts_with('/') {
+        let mut parts = text[1..].splitn(2, |c: char| c.is_whitespace());
+        let cmd = parts.next().unwrap_or("").to_string();
+        let args = parts.next().unwrap_or("").trim().to_string();
+        if !cmd.is_empty() && !cmd.contains(['/', '@']) {
+            let lower = cmd.to_ascii_lowercase();
+            match lower.as_str() {
+                "model" | "thinking" | "agent" | "mode" => {
+                    let key = if lower == "agent" { "mode" } else { lower.as_str() };
+                    if args.is_empty() {
+                        let usage = match key {
+                            "model" => "Usage: /model <name> — pick a model with the chip below, or type /model mistral-large-latest",
+                            "thinking" => "Usage: /thinking <off|low|medium|high|xhigh>",
+                            _ => "Usage: /agent <name> — pick an agent with the chip below",
+                        };
+                        let _ = crate::api::api_local_notice(tok, usage.to_string()).await;
+                    } else {
+                        let _ = crate::api::api_set_config_option(tok, key.to_string(), args).await;
+                    }
+                    return;
+                }
+                "retry" => {
+                    // TUI /retry: resend the last user prompt (optionally
+                    // with extra instructions appended).
+                    let last_user = state
+                        .read()
+                        .snapshot
+                        .current_messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.sender == mistraldeck_core::types::MessageSender::User)
+                        .map(|m| m.content.clone());
+                    if let Some(last) = last_user {
+                        let text = if args.is_empty() {
+                            last
+                        } else {
+                            format!("{last}\n\n{args}")
+                        };
+                        let _ = crate::api::api_send_message(tok, text).await;
+                    } else {
+                        let _ = crate::api::api_local_notice(
+                            tok,
+                            "Nothing to retry — no previous prompt.".to_string(),
+                        )
+                        .await;
+                    }
+                    return;
+                }
+                _ => {
+                    match crate::api::api_slash_command(tok.clone(), lower, args).await {
+                        Ok(true) => return,
+                        _ => {} // unknown /name → skill invocation as a prompt
+                    }
+                }
+            }
+        }
+    }
     if state.read().snapshot.busy {
         state.write().queue.push(text);
         return;

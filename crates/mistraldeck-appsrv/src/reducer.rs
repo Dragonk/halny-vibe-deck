@@ -338,16 +338,23 @@ impl Projection {
                 }
             }
             "turn/queueUpdated" => {
-                // native queue — the GUI gets prompts queued while
-                // busy for free; v1 logs it (queue UI arrives with F5)
+                // native queue — the GUI queues locally and drains on turn
+                // end, so just make sure the next resync picks up the
+                // authoritative queue state
                 events.push(AgentEvent::DebugLog(
                     "app-server: turn queue updated".into(),
                 ));
+                self.resync_needed = true;
             }
             "runtime/updated" => {
-                events.push(AgentEvent::DebugLog(
-                    "app-server: runtime updated".into(),
-                ));
+                // runtime snapshot changed (models/agents/skills/commands) —
+                // pull it so the chips and the / picker stay current
+                self.resync_needed = true;
+            }
+            "turn/retrying" => {
+                // TUI shows a "retrying" banner from the snapshot's
+                // retrying state — resync so the client sees it
+                self.resync_needed = true;
             }
             "warning" => {
                 if let Some(m) = params.get("message").and_then(Value::as_str) {

@@ -203,6 +203,31 @@ pub async fn api_answer_question(token: String, request_id: String, answer: Stri
     Ok(())
 }
 
+/// Execute a TUI-style slash command client-side (compact/clear/rename/
+/// reload/help). Returns true when the command was recognized and must NOT
+/// be forwarded as a prompt (unknown `/name` = skill invocation).
+#[server]
+pub async fn api_slash_command(token: String, command: String, args: String) -> Result<bool, ServerFnError> {
+    check(&token)?;
+    Ok(mistraldeck_engine::Engine::global().slash_command(&command, &args))
+}
+
+/// `!<command>` → `session/shellCommand` on the current session's agent.
+#[server]
+pub async fn api_shell_command(token: String, command: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().shell_command(command);
+    Ok(())
+}
+
+/// Local system notice in the current transcript (e.g. `/help` output).
+#[server]
+pub async fn api_local_notice(token: String, text: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().local_notice(&text);
+    Ok(())
+}
+
 #[server]
 pub async fn api_set_config_option(token: String, key: String, value: String) -> Result<(), ServerFnError> {
     check(&token)?;

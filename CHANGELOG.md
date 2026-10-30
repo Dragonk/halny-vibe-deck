@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.99.15 — TUI parity round: slash commands executed client-side + attachment paste (2026-10-30)
+
+Re-audited the chat against the official Mistral Vibe CLI TUI (`docs/tui-capabilities-report.md`, `vibe` v3.x app-server sources) so the GUI can fully replace the terminal:
+
+- **Slash commands work like the TUI**: in cli-rust `/compact`, `/clear`, `/rename`, `/reload`, `/model`, `/thinking`, `/agent`, `/retry`, `/help` are intercepted CLIENT-side and translated to JSON-RPC (`session/compact`, `session/history/clear`, `session/rename`, `config/reload`, `config/model/write`/`session/agent/update`, resend, local help). The deck sent them as plain prompts before (the server only knows `/name` as a SKILL invocation). Now `submit()` dispatches: `/compact [instr]`, `/clear`/`/new`, `/rename <title>`, `/reload`, `/model <name>`, `/thinking <level>`, `/agent <name>`, `/retry [instr]` (resends the last user prompt), `/help` (renders the command list in the chat); unknown `/name` still goes to the server as a skill invocation. New `AgentCommand` variants (`SessionCompact`/`HistoryClear`/`SessionRename`/`ShellCommand`/`ConfigReload`) + worker wire calls with the exact v3 param shapes; `!cmd` runs `session/shellCommand`. The `/` picker lists all of them.
+- **Attachments**: `@` picker, drag&drop onto the chat, and the ＋ menu already existed; added **clipboard paste of images** into the composer (PASTE_JS bridge → upload to `.halny-attachments/` → `@path` marker, same flow as drop; the server inlines images as base64 content blocks, text files as attach blocks). Images already travel as `image` content blocks in `session/turn/enqueue`.
+- **Notifications**: `runtime/updated`, `turn/queueUpdated` and `turn/retrying` now trigger a resync so chips, the `/` picker and the retry banner track the server instead of being logged only.
+
 ## 1.99.14 — user-reported defects round 8 (2026-10-30)
 
 Round 7 areas re-reported; each row re-audited, real root causes fixed. Root cause + fix per row in `docs/next-bugs-round8.md`.

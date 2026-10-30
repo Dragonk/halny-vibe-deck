@@ -264,6 +264,20 @@ impl Worker {
                 request_id,
                 answer,
             } => self.answer(&request_id, &answer),
+            // TUI slash commands, executed client-side like cli-rust does
+            AgentCommand::SessionCompact {
+                session_id,
+                extra_instructions,
+            } => self.compact(&session_id, &extra_instructions),
+            AgentCommand::HistoryClear { session_id } => self.history_clear(&session_id),
+            AgentCommand::SessionRename { session_id, title } => {
+                self.rename(&session_id, &title)
+            }
+            AgentCommand::ShellCommand {
+                session_id,
+                command,
+            } => self.shell_command(&session_id, &command),
+            AgentCommand::ConfigReload => self.config_reload(),
             // --- L1: setup / konto (metody globalne, idą przed sesją) ---
             AgentCommand::SetupStatus => self.setup_status(),
             AgentCommand::SetupStoreCredential {
@@ -562,6 +576,67 @@ impl Worker {
         ) {
             self.error("session/turn/enqueue", format!("{e:#}"));
         }
+    }
+
+    /// TUI `/compact [instructions]` → `session/compact`; the handoff
+    /// arrives via `session/compacted` + a fresh snapshot.
+    fn compact(&mut self, session_id: &str, extra_instructions: &str) {
+        let params = json!({
+            "sessionId": session_id,
+            "extraInstructions": extra_instructions,
+        });
+        if let Err(e) = self.call("session/compact", params, "session/compact") {
+            self.error("session/compact", format!("{e:#}"));
+            return;
+        }
+        self.resync();
+    }
+
+    /// TUI `/clear`, `/new` → `session/history/clear`, then resync so the
+    /// transcript repaints from the authoritative state.
+    fn history_clear(&mut self, session_id: &str) {
+        let params = json!({"sessionId": session_id});
+        if let Err(e) = self.call("session/history/clear", params, "session/history/clear") {
+            self.error("session/history/clear", format!("{e:#}"));
+            return;
+        }
+        self.resync();
+    }
+
+    /// TUI `/rename <title>` → `session/rename`.
+    fn rename(&mut self, session_id: &str, title: &str) {
+        let params = json!({"sessionId": session_id, "title": title});
+        if let Err(e) = self.call("session/rename", params, "session/rename") {
+            self.error("session/rename", format!("{e:#}"));
+            return;
+        }
+        self.resync();
+    }
+
+    /// TUI `!cmd` → `session/shellCommand` (action "run"); the output
+    /// streams back as history entries.
+    fn shell_command(&mut self, session_id: &str, command: &str) {
+        let params = json!({
+            "sessionId": session_id,
+            "command": command,
+            "action": "run",
+            "timeoutSeconds": 600,
+        });
+        if let Err(e) = self.call("session/shellCommand", params, "session/shellCommand") {
+            self.error("session/shellCommand", format!("{e:#}"));
+        }
+    }
+
+    /// TUI `/reload` → `config/reload`, then resync the runtime snapshot.
+    fn config_reload(&mut self) {
+        if let Err(e) = self.call("config/reload", json!({}), "config/reload") {
+            // method_not_found = older server — not fatal
+            self.emit(AgentEvent::DebugLog(format!(
+                "config/reload: {e:#}"
+            )));
+            return;
+        }
+        self.resync();
     }
 
     /// W9: interrupt with expected_turn validation (STALE_TURN).

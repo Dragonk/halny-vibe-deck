@@ -1,4 +1,5 @@
 /target
+/dist
 Cargo.lock.bak
 *.log
 .DS_Store
