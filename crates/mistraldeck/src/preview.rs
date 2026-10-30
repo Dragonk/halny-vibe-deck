@@ -151,7 +151,9 @@ pub fn docx_to_html(path: &Path) -> Result<String, String> {
     // heading levels, and TOC-entry paragraphs are replaced by the
     // generated TOC.
     let style_info = docx_style_info(path);
-    Ok(docx_xml_full(&xml, |rid| rels.get(rid).cloned(), &style_info, |target| {
+    // round 12: localize the generated TOC title from the document language
+    let doc_lang = docx_doc_lang(path);
+    Ok(docx_xml_full(&xml, |rid| rels.get(rid).cloned(), &style_info, &doc_lang, |target| {
         // media targets are relative to word/
         let inner = if target.starts_with('/') {
             target.trim_start_matches('/').to_string()
@@ -455,6 +457,7 @@ fn docx_xml_full(
     xml: &str,
     resolve_rel: impl Fn(&str) -> Option<(String, String)>,
     style_info: &std::collections::HashMap<String, (Option<u32>, bool)>,
+    doc_lang: &str,
     resolve_media: impl Fn(&str) -> Option<(String, Vec<u8>)>,
 ) -> String {
     let page_style = docx_page_style(xml);
@@ -1006,8 +1009,9 @@ fn docx_xml_full(
     // a field that only updates inside Word — render it ourselves), and
     // insert it at the TOP of the first page (it used to land at the very
     // end of the document, where nobody ever saw it).
-    if toc_marker && headings.len() >= 2 {
-        let mut toc = String::from("<div class=\"doc-toc\"><div class=\"doc-toc-title\">Table of contents</div><ul>");
+    if toc_marker && !headings.is_empty() {
+        let toc_title = if doc_lang.starts_with("pl") { "Spis treści" } else { "Table of contents" };
+        let mut toc = String::from(&format!("<div class=\"doc-toc\"><div class=\"doc-toc-title\">{toc_title}</div><ul>"));
         let mut last_level = 1u32;
         for (i, (level, text)) in headings.iter().enumerate() {
             let lvl = *level;
@@ -1045,7 +1049,26 @@ fn strip_tags(html: &str) -> String {
 
 /// Backward-compatible wrapper used by the unit tests (no rels/media).
 fn docx_xml(xml: &str) -> String {
-    docx_xml_full(xml, |_| None, &std::collections::HashMap::new(), |_| None)
+    docx_xml_full(xml, |_| None, &std::collections::HashMap::new(), "en", |_| None)
+}
+
+/// Document language from `w:lang` in styles.xml/document.xml (TOC title).
+fn docx_doc_lang(path: &Path) -> String {
+    for entry in ["word/styles.xml", "word/document.xml"] {
+        if let Ok(xml) = read_zip_entry(path, entry) {
+            let xml = String::from_utf8_lossy(&xml).into_owned();
+            let mut rest = xml.as_str();
+            while let Some(pos) = rest.find("<w:lang") {
+                let end = rest[pos..].find('>').map(|e| pos + e).unwrap_or(rest.len());
+                let tag = &rest[pos..end];
+                if let Some(v) = attr_str(tag, "w:val") {
+                    return v;
+                }
+                rest = &rest[end..];
+            }
+        }
+    }
+    String::new()
 }
 
 /// `word/styles.xml` → styleId → (outline level 1-based, is TOC style).

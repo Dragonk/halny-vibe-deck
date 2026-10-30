@@ -7705,3 +7705,13 @@ img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); bo
 .markdown-content ol ul { margin: 2px 0; padding-left: 1.3em; }
 .markdown-content li { margin: 2px 0; }
 .markdown-content blockquote { margin: 6px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--text-muted); }
+
+/* round 12: active-session green dot (stable parity) */
+.session-active-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex-shrink: 0; box-shadow: 0 0 6px rgba(34, 197, 94, 0.7); }
+
+/* round 12: docx/pdf pages wider than the preview get a persistent
+   horizontal scrollbar at the bottom */
+.preview-doc { overflow-x: auto; overflow-y: auto; }
+.doc-pages { min-width: max-content; }
+.pdf-pages { overflow-x: auto; }
+.pdf-pages img.pdf-page { flex-shrink: 0; }

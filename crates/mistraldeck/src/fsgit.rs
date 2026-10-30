@@ -345,6 +345,18 @@ mod imp {
         confine_abs(&root, path)
     }
 
+
+    /// Resolve `path` inside the session root (`remote_root`) when provided,
+    /// else inside the engine workdir. Round 12: read/save used the engine
+    /// workdir even when the dock was rooted at the session cwd — files then
+    /// resolved to a non-existent path (os error 3, worst with spaces).
+    fn confine_scoped(path: &str, remote_root: &str) -> Result<PathBuf, ServerFnError> {
+        if !remote_root.trim().is_empty() {
+            return confine_in(remote_root, path);
+        }
+        confine(path)
+    }
+
     /// Resolve `path` inside the engine working directory. Rejects escapes.
     pub fn confine(path: &str) -> Result<PathBuf, ServerFnError> {
         let root_raw = Engine::global().workdir();
@@ -479,7 +491,7 @@ mod imp {
             };
             return remote_read_file(&conn, remote_root, path, name);
         }
-        let full = match confine(path) {
+        let full = match confine_scoped(path, remote_root) {
             Ok(p) => p,
             Err(e) => {
                 return PreviewData {
@@ -670,7 +682,7 @@ mod imp {
                 .ok_or_else(|| ServerFnError::new("remote connection not found"))?;
             return remote_save_file(&conn, remote_root, path, content);
         }
-        let full = confine(path)?;
+        let full = confine_scoped(path, remote_root)?;
         if content.len() > 1024 * 1024 {
             return Err(ServerFnError::new("content too large (limit 1 MB)".to_string()));
         }

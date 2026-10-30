@@ -160,8 +160,11 @@ pub fn CodeEditor(
             let js_id = id_dep.clone();
             spawn(async move {
                 let _ = dioxus::document::eval(EDITOR_JS).await;
+                // round 12: coalesce per-frame — the wrap-mode gutter
+                // measurement walks every line, so one eval per keystroke
+                // froze the page on large files
                 let _ = dioxus::document::eval(&format!(
-                    "window.vdEdSync && window.vdEdSync('{js_id}');"
+                    "requestAnimationFrame(function(){{window.vdEdSync && window.vdEdSync('{js_id}');}});"
                 ))
                 .await;
             });

@@ -1363,6 +1363,10 @@ fn FilePreviewTab(
     // component body re-rendered forever (signal set -> render -> spawn)
     // and froze the app the moment edit mode opened.
     let mut wrap = use_signal(|| false);
+    // round 12: render caches — recomputing md html / syntax highlight on
+    // every parent re-render made md previews slow and edit-mode entry freeze
+    let md_html_cache = use_signal(|| (String::new(), String::new()));
+    let code_html_cache = use_signal(|| (String::new(), String::new()));
     let mut wrap_init = use_signal(|| false);
     if !*wrap_init.read() {
         wrap_init.set(true);
@@ -1465,7 +1469,21 @@ fn FilePreviewTab(
                     }
 
                     "markdown" => {
-                        let html = crate::md::to_html(&data.text);
+                        // round 12: cache the rendered html per source text —
+                        // re-rendering the whole markdown on every parent
+                        // render made opening/switching md previews crawl
+                        let html = {
+                            let mut cache = md_html_cache.clone();
+                            let c = cache.read();
+                            if c.0 == data.text {
+                                c.1.clone()
+                            } else {
+                                drop(c);
+                                let h = crate::md::to_html(&data.text);
+                                cache.set((data.text.clone(), h.clone()));
+                                h
+                            }
+                        };
                         rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
                     }
                     "csv" => sheet_table(&crate::fsgit::SheetData { name: String::new(), rows: parse_csv(&data.text), styles: Vec::new(), merges: Vec::new(), col_widths: Vec::new() }),
@@ -1524,7 +1542,18 @@ fn FilePreviewTab(
                         }
                     }
                     _ => {
-                        let html = crate::highlight::highlight_auto(&name, &data.text);
+                        let html = {
+                            let mut cache = code_html_cache.clone();
+                            let c = cache.read();
+                            if c.0 == data.text {
+                                c.1.clone()
+                            } else {
+                                drop(c);
+                                let h = crate::highlight::highlight_auto(&name, &data.text);
+                                cache.set((data.text.clone(), h.clone()));
+                                h
+                            }
+                        };
                         // round 7 (R1): the preview honours the same wrap toggle
                         let cv_cls = if *wrap.read() { "preview-text code-view wrap" } else { "preview-text code-view" };
                         rsx! { pre { class: "{cv_cls}", dangerous_inner_html: html } }
@@ -1662,8 +1691,9 @@ fn FilePreviewTab(
                         span { class: "file-preview-path", title: "{path_lbl}", "{path_lbl}" }
                         div { class: "file-preview-actions",
                             {save_status}
-                            // Round 7 (R1): icon-only wrap toggle, available in
-                            // both preview and edit mode.
+                            // Round 12: the wrap toggle belongs to the EDITOR —
+                            // hidden in plain preview mode.
+                            if is_editing_c {
                             button {
                                 class: if *wrap.read() { "file-preview-btn active" } else { "file-preview-btn" },
                                 title: "{loc2(&lang, \"Zawijaj wiersze\", \"Word wrap\")}",
@@ -1693,6 +1723,7 @@ fn FilePreviewTab(
                                     path { d: "M4 18h7" }
                                     path { d: "M17 15l3 3-3 3" }
                                 }
+                            }
                             }
                             {edit_btn}
                             {save_btn}

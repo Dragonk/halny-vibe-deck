@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.99.19 — user-reported defects round 12 (2026-10-30)
+
+Root cause + fix per row in `docs/next-bugs-round12.md`.
+
+- **Latency fixed**: streaming events no longer trigger a full snapshot
+  refetch per token (time-to-first-token back to terminal levels).
+- **md preview/edit performance**: rendered markdown + syntax highlight are
+  cached per source text; editor gutter sync is rAF-coalesced (no more freeze
+  on entering edit).
+- **Lease badge**: "open elsewhere" only when the lease holder PID is known
+  and is not our own agent child.
+- **Session list**: green active-session dot; ✕ only on running sessions and
+  stops the whole session (cancel + kill agent slot); menus under right-click.
+- **File preview paths**: reads/saves confine inside the session root (not the
+  engine workdir) and `open_path` normalizes separators/drive case — no more
+  os error 2/3 on paths with spaces.
+- **Busy marker during resume** shows like on live turns.
+- **Wrap toggle only in edit mode**; docx/pdf get a persistent horizontal
+  scrollbar when the page is wider than the preview; docx TOC localized
+  ("Spis treści") and generated for ≥1 heading at the field's position.
+- **Attach menu opens the real system file picker** (files/images) and uploads
+  to `.halny-attachments/` with `@path` markers.
+
 ## 1.99.18 — user-reported defects round 11 (2026-10-30)
 
 Root cause + fix per row in `docs/next-bugs-round11.md`.

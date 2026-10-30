@@ -1183,6 +1183,36 @@ impl Engine {
         self.publish(BusEvent::StructureChanged);
     }
 
+    /// Stop a session completely: cancel the running turn AND kill the
+    /// agent slot (the whole subprocess tree) — the sidebar ✕ on a running
+    /// session. `key` is the local session id.
+    pub fn stop_session(&self, key: &str) {
+        let mut st = self.state.lock().unwrap();
+        let agent_id = st
+            .sessions
+            .iter()
+            .find(|s| s.id == key)
+            .and_then(|s| s.agent_session_id.clone());
+        let slot_id = st.slot_of_session(key);
+        if let (Some(slot_id), Some(agent_id)) = (slot_id, agent_id) {
+            if let Some(slot) = st.slots.get(&slot_id) {
+                let _ = slot.cmd.send(AgentCommand::Cancel { session_id: agent_id });
+            }
+        }
+        if let Some(slot_id) = slot_id {
+            if let Some(slot) = st.slots.remove(&slot_id) {
+                let _ = slot.cmd.send(AgentCommand::Stop);
+            }
+            st.slot_of.remove(key);
+        }
+        if let Some(s) = st.sessions.iter_mut().find(|s| s.id == key) {
+            s.last_active_ms = now_ms();
+        }
+        st.stopping.remove(key);
+        drop(st);
+        self.publish_structure();
+    }
+
     pub fn cancel(&self) {
         let mut st = self.state.lock().unwrap();
         let (key, agent_id) = {
@@ -3059,11 +3089,32 @@ fn agent_session_idx(
         // Forward the event so streaming clients update in place — the
         // deduped variant for streamed text; fully deduped (empty) chunks
         // are dropped (nothing new to show).
+        let ev_ref = publish_override.as_ref().unwrap_or(&event_out);
         if !suppress {
-            self.publish(BusEvent::Agent(publish_override.unwrap_or(event_out)));
+            self.publish(BusEvent::Agent(ev_ref.clone()));
         }
         // Anything structural (status, approvals, ready) -> refetch hint.
-        self.publish(BusEvent::StructureChanged);
+        // Round 12: streaming events (chunks/tool calls/usage/plan) are
+        // applied in place by the clients — publishing StructureChanged for
+        // EVERY chunk made each websocket client re-fetch the WHOLE snapshot
+        // per token, which is what made time-to-first-token crawl.
+        let streaming = matches!(
+            ev_ref,
+            AgentEvent::MessageChunk { .. }
+                | AgentEvent::ThinkingChunk { .. }
+                | AgentEvent::ThinkingComplete { .. }
+                | AgentEvent::ToolCallStarted { .. }
+                | AgentEvent::ToolCallUpdated { .. }
+                | AgentEvent::UserMessageChunk { .. }
+                | AgentEvent::SessionLoadProgress { .. }
+                | AgentEvent::UsageUpdate { .. }
+                | AgentEvent::PlanUpdate { .. }
+                | AgentEvent::RewindInfo { .. }
+                | AgentEvent::DebugLog { .. }
+        );
+        if !streaming {
+            self.publish(BusEvent::StructureChanged);
+        }
     }
 }
 

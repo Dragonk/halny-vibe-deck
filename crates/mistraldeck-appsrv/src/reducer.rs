@@ -409,11 +409,16 @@ impl Projection {
                     .get("leaseHolder")
                     .and_then(|h| h.get("processId").or_else(|| h.get("process_id")))
                     .and_then(Value::as_u64);
+                // show "open elsewhere" ONLY when the holder PID is known and
+                // differs from our own agent child — a null/unknown PID can't
+                // be proven to be another process (round 12: the badge lit up
+                // on every session start because of this)
                 let held = method == "session/lease/updated"
                     && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false)
                     && match (holder_pid, self.own_pid) {
                         (Some(hp), Some(own)) => hp != own as u64,
-                        _ => true,
+                        (Some(_), None) => true,
+                        _ => false,
                     };
                 events.push(AgentEvent::LeaseUpdated {
                     session_id: self.session_id.clone(),

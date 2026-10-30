@@ -208,7 +208,11 @@ pub fn ChatView() -> Element {
                             for (idx, msg) in messages.iter().enumerate() {
                                 MessageBubble { msg: msg.clone(), streaming: !msg.is_complete && busy && idx == messages.len() - 1, lang: lang.clone(), model_names: model_names.clone() }
                             }
-                            if busy && !is_resuming {
+                            // round 12: the busy marker must also show while a
+                            // session is being resumed/woken (red stop button
+                            // in the input + "agent working" row), not only on
+                            // steady-state turns
+                            if busy {
                                 div { class: "agent-busy-row",
                                     span { class: "agent-busy-dots", span {}, span {}, span {} }
                                     "{busy_label}"

@@ -960,6 +960,10 @@ fn session_row(
             },
             div { class: "session-item-content",
                 div { class: "session-item-row",
+                    // round 12: green dot marks the ACTIVE session (stable parity)
+                    if active {
+                        span { class: "session-active-dot", title: "{tr(&lang, \"activeSession\")}" }
+                    }
                     span { class: "session-name", "{name}" }
                     {busy_el}
                 }
@@ -967,42 +971,29 @@ fn session_row(
                     span { class: "session-date", "{date}" }
                 }
             }
-            span {
-                class: "session-cancel-btn",
-                title: if busy { "{tr(&lang, \"cancelLabel\")}" } else { "{tr(&lang, \"deleteSessionLabel\")}" },
-                onclick: {
-                    let state = state.clone();
-                    let mut confirm = confirm.clone();
-                    let mut ctx = ctx.clone();
-                    let key = key.clone();
-                    let name = name.clone();
-                    let busy = busy;
-                    move |e| {
-                        e.stop_propagation();
-                        if busy {
-                            // streaming: ✕ = cancel the running prompt
+            // round 12: ✕ is visible ONLY on a running session and stops it
+            // completely (cancel + kill the agent slot with subprocesses);
+            // the menu itself lives under right-click (PPM)
+            if busy {
+                span {
+                    class: "session-cancel-btn",
+                    title: "{tr(&lang, \"stopSessionLabel\")}",
+                    onclick: {
+                        let state = state.clone();
+                        let key = key.clone();
+                        move |e| {
+                            e.stop_propagation();
                             let state = state.clone();
+                            let key = key.clone();
                             spawn(async move {
                                 let _ = crate::api::api_cancel(token(&state)).await;
+                                let _ = crate::api::api_stop_session(token(&state), key).await;
                                 crate::state::refresh(state).await;
                             });
-                        } else {
-                            // idle: open the context menu (hide -> confirm)
-                            let p = e.data().client_coordinates();
-                            ctx.set(Some(CtxMenu {
-                                x: p.x,
-                                y: p.y,
-                                target: ConfirmTarget {
-                                    is_project: false,
-                                    label: name.clone(),
-                                    key: key.clone(),
-                                },
-                            }));
-                            confirm.set(None);
                         }
-                    }
-                },
-                "✕"
+                    },
+                    "✕"
+                }
             }
         }
     }
@@ -1102,23 +1093,7 @@ fn backend_el(
                     }
                 }
             }
-            span {
-                class: "session-cancel-btn",
-                onclick: {
-                    let mut confirm = confirm.clone();
-                    let sid = sid.clone();
-                    let name = name.clone();
-                    move |e| {
-                        e.stop_propagation();
-                        confirm.set(Some(ConfirmTarget {
-                            is_project: false,
-                            label: name.clone(),
-                            key: sid.clone(),
-                        }));
-                    }
-                },
-                "✕"
-            }
+            // round 12: history rows have no ✕ — hide/delete live under PPM
         }
     }
 }

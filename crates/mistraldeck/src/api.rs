@@ -189,6 +189,15 @@ pub async fn api_cancel(token: String) -> Result<(), ServerFnError> {
     Ok(())
 }
 
+/// Stop a session completely (cancel turn + kill the agent slot with all
+/// subprocesses) — the ✕ button on a RUNNING session row.
+#[server]
+pub async fn api_stop_session(token: String, key: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().stop_session(&key);
+    Ok(())
+}
+
 #[server]
 pub async fn api_approve(token: String, request_id: String, option_id: String) -> Result<(), ServerFnError> {
     check(&token)?;

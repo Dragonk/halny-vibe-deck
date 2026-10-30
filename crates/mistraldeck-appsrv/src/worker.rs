@@ -522,7 +522,8 @@ impl Worker {
                                     .unwrap_or(false)
                                     && match (holder_pid, self.proj.own_pid) {
                                         (Some(hp), Some(own)) => hp != own as u64,
-                                        _ => true,
+                                        (Some(_), None) => true,
+                                        _ => false,
                                     };
                                 self.emit(AgentEvent::LeaseUpdated {
                                     session_id: session_id.clone(),

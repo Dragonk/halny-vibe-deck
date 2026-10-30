@@ -262,6 +262,39 @@ const PASTE_JS: &str = r#"
 })();
 "#;
 
+/// Round 12: read files chosen in the hidden `<input type=file>` into
+/// `window.__vdAttachPick` (JSON [{name, data(base64)}]) and click the
+/// bridge so the Rust handler uploads them and inserts `@path` markers.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const ATTACH_PICK_JS: &str = r#"
+(function () {
+  if (window.__vdAttachPickInit) return;
+  window.__vdAttachPickInit = true;
+  window.__vdAttachPick = '';
+  window.__vdReadAttachFiles = function (inputId) {
+    var inp = document.getElementById(inputId);
+    if (!inp || !inp.files || !inp.files.length) return;
+    var files = Array.prototype.slice.call(inp.files);
+    var pending = files.length;
+    var out = [];
+    files.forEach(function (f) {
+      var r = new FileReader();
+      r.onload = function () {
+        var data = String(r.result || '').split(',')[1] || '';
+        out.push({ name: f.name, data: data });
+        if (--pending === 0) {
+          window.__vdAttachPick = JSON.stringify(out);
+          var b = document.getElementById('vd-attach-bridge');
+          if (b) b.click();
+        }
+      };
+      r.onerror = function () { if (--pending === 0) { var b = document.getElementById('vd-attach-bridge'); if (b) b.click(); } };
+      r.readAsDataURL(f);
+    });
+  };
+})();
+"#;
+
 /// Injected once (client only): the chat textarea grows with its content
 /// (one line at a time) up to the CSS max-height (160px), and never offers
 /// a manual resize handle (`resize: none` in main.css). Also installs the
@@ -322,6 +355,7 @@ pub fn InputBar() -> Element {
                 dioxus::document::eval(INPUT_JS);
                 dioxus::document::eval(DROP_JS);
                 dioxus::document::eval(PASTE_JS);
+                dioxus::document::eval(ATTACH_PICK_JS);
             });
         }
     }
@@ -990,6 +1024,60 @@ pub fn InputBar() -> Element {
                     }
                 },
             }
+            // hidden system file picker for the attach menu (round 12)
+            input {
+                r#type: "file",
+                id: "vd-attach-input",
+                multiple: true,
+                style: "display:none;",
+                onchange: move |_| {
+                    #[cfg(any(feature = "web", feature = "desktop"))]
+                    spawn(async move {
+                        let _ = dioxus::document::eval(
+                            "window.__vdReadAttachFiles && window.__vdReadAttachFiles('vd-attach-input');",
+                        ).await;
+                    });
+                },
+            }
+            // bridge: ATTACH_PICK_JS parks picked files on window.__vdAttachPick
+            // and clicks this — the handler uploads them and inserts @path
+            button {
+                id: "vd-attach-bridge",
+                style: "display:none",
+                onclick: {
+                    let state = state.clone();
+                    let mut draft = draft.clone();
+                    move |_| {
+                        let state = state.clone();
+                        let mut draft = draft.clone();
+                        spawn(async move {
+                            #[cfg(any(feature = "web", feature = "desktop"))]
+                            {
+                                let raw = dioxus::document::eval("return window.__vdAttachPick || '';")
+                                    .join::<String>()
+                                    .await
+                                    .unwrap_or_default();
+                                let _ = dioxus::document::eval("window.__vdAttachPick='';").await;
+                                let Ok(files) = serde_json::from_str::<Vec<serde_json::Value>>(&raw) else { return };
+                                let (root, rid) = crate::state::session_git_ctx(&state);
+                                let tok = token(&state);
+                                for f in files {
+                                    let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("file").to_string();
+                                    let b64 = f.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    if b64.is_empty() { continue; }
+                                    let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect();
+                                    let target = format!(".halny-attachments/{}-{}", mistraldeck_core::types::now_ms(), safe);
+                                    if crate::fsgit::api_write_binary(tok.clone(), target.clone(), b64, rid.clone(), root.clone()).await.is_ok() {
+                                        let d = format!("{}@{}", draft.read(), target);
+                                        draft.set(d);
+                                        fit_input_now();
+                                    }
+                                }
+                            }
+                        });
+                    }
+                },
+            }
             button {
                 id: "vd-close-pickers",
                 style: "display:none",
@@ -1281,18 +1369,37 @@ pub fn InputBar() -> Element {
                                     button {
                                         class: "folder-picker-item",
                                         onclick: {
-                                            let mut draft = draft.clone();
                                             let mut attach_open = attach_open.clone();
-                                            let mut at_open = at_open.clone();
                                             move |_| {
                                                 attach_open.set(false);
-                                                let d = format!("{}@", draft.read().clone());
-                                                draft.set(d);
-                                                crate::components::input::fit_input_now();
-                                                at_open.set(true);
+                                                // round 12: open the REAL system file
+                                                // picker (was: bare @ insert)
+                                                #[cfg(any(feature = "web", feature = "desktop"))]
+                                                spawn(async move {
+                                                    let _ = dioxus::document::eval(
+                                                        "var i=document.getElementById('vd-attach-input');if(i){i.accept='';i.multiple=true;i.value='';i.click();}",
+                                                    ).await;
+                                                });
                                             }
                                         },
                                         "📄 {loc(&lang, \"Plik\", \"File\")}"
+                                    }
+                                    button {
+                                        class: "folder-picker-item",
+                                        onclick: {
+                                            let mut attach_open = attach_open.clone();
+                                            move |_| {
+                                                attach_open.set(false);
+                                                // round 12: system picker filtered to images
+                                                #[cfg(any(feature = "web", feature = "desktop"))]
+                                                spawn(async move {
+                                                    let _ = dioxus::document::eval(
+                                                        "var i=document.getElementById('vd-attach-input');if(i){i.accept='image/*';i.multiple=true;i.value='';i.click();}",
+                                                    ).await;
+                                                });
+                                            }
+                                        },
+                                        "🖼 {loc(&lang, \"Zdjęcie\", \"Image\")}"
                                     }
                                     button {
                                         class: "folder-picker-item",
@@ -1302,16 +1409,13 @@ pub fn InputBar() -> Element {
                                             let mut at_open = at_open.clone();
                                             move |_| {
                                                 attach_open.set(false);
-                                                // image: same @ picker, the
-                                                // server inlines image files as
-                                                // base64 blocks (image_mime)
                                                 let d = format!("{}@", draft.read().clone());
                                                 draft.set(d);
                                                 crate::components::input::fit_input_now();
                                                 at_open.set(true);
                                             }
                                         },
-                                        "🖼 {loc(&lang, \"Zdjęcie\", \"Image\")}"
+                                        "🔍 @ {loc(&lang, \"Szukaj plik\", \"Search file\")}"
                                     }
                                 }
                             }
