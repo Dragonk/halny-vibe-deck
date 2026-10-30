@@ -460,12 +460,28 @@ impl Engine {
             modes: current_slot.map(|s| s.modes.clone()).unwrap_or_default(),
             // Per-session config wins (survives switching without a slot);
             // the live slot fills in for sessions that never went ready.
+            // Round 7 (R13): a brand-new session (no agent process yet) must
+            // still show enabled chips with the agent defaults — derive them
+            // from the config files so model/mode/thinking can be changed
+            // BEFORE the first prompt.
             config_options: st
                 .current_session()
                 .map(|s| s.config_options.clone())
                 .filter(|o| !o.is_empty())
                 .or_else(|| current_slot.map(|s| s.config_options.clone()))
-                .unwrap_or_default(),
+                .filter(|o| !o.is_empty())
+                .unwrap_or_else(|| {
+                    let (wd, model, mode, thinking) = match st.current_session() {
+                        Some(s) => (
+                            s.working_directory.clone(),
+                            s.last_model.clone().or_else(|| cfg.preferred_model.clone()),
+                            s.last_mode.clone(),
+                            s.last_thinking.clone(),
+                        ),
+                        None => (cfg.working_directory.clone(), cfg.preferred_model.clone(), None, None),
+                    };
+                    build_chip_options(&wd, model, mode, thinking).0
+                }),
             commands: current_slot.map(|s| s.commands.clone()).unwrap_or_default(),
             backend_sessions: st.backend_sessions.clone(),
             // The live slot wins; a lazy-resumed session (no slot yet,
@@ -543,6 +559,20 @@ impl Engine {
             let mut st = self.state.lock().unwrap();
             let mut session = ChatSession::new("New session", &cwd);
             session.working_directory = cwd;
+            // Round 7 (R13): config chosen on a fresh chat (no session yet)
+            // applies to this new session once its agent is ready.
+            if let Some(pending) = st.pending_options.remove("") {
+                let key = session.id.clone();
+                for (k, v) in &pending {
+                    match k.as_str() {
+                        "model" => session.last_model = Some(v.clone()),
+                        "mode" => session.last_mode = Some(v.clone()),
+                        "thinking" => session.last_thinking = Some(v.clone()),
+                        _ => {}
+                    }
+                }
+                st.pending_options.insert(key, pending);
+            }
             st.sessions.insert(0, session);
             st.current = Some(0);
             // A fresh session must offer the model/mode/thinking pickers
@@ -1059,15 +1089,23 @@ impl Engine {
                 }
                 None => {
                     // Lazily spawn this session's own agent process.
-                    let cwd = st
-                        .current_session()
+                    let cur = st.current_session().cloned();
+                    let cwd = cur
+                        .as_ref()
                         .map(|s| s.working_directory.clone())
                         .unwrap_or_else(|| self.workdir());
+                    // Round 7 (R14): a remote session mirror (SSH) must wake
+                    // its agent OVER SSH — never spawn a local process in a
+                    // remote path.
+                    let purpose = match cur.as_ref().and_then(|s| s.remote_id.clone()) {
+                        Some(conn_id) => SlotPurpose::NewRemote { conn_id, cwd: cwd.clone() },
+                        None => SlotPurpose::NewLocal { cwd: cwd.clone() },
+                    };
                     mistraldeck_appsrv::trace(format!(
-                        "send_message_with: no slot for {key} (cwd={cwd}) -> spawn"
+                        "send_message_with: no slot for {key} (cwd={cwd}) -> spawn {purpose:?}"
                     ));
                     drop(st);
-                    self.ensure_slot(&key, SlotPurpose::NewLocal { cwd });
+                    self.ensure_slot(&key, purpose);
                     let mut st = self.state.lock().unwrap();
                     if let Some(slot_id) = st.slot_of_session(&key) {
                         if let Some(slot) = st.slots.get_mut(&slot_id) {
@@ -1177,7 +1215,20 @@ impl Engine {
             self.update_config(|c| c.preferred_model = Some(value.clone()));
         }
         let mut st = self.state.lock().unwrap();
-        let Some(session) = st.current_session() else { return };
+        let Some(session) = st.current_session() else {
+            // Round 7 (R13): no session yet (fresh chat before the first
+            // prompt) — remember the choice globally and apply it to the
+            // session that the first prompt creates.
+            if !value.trim().is_empty() {
+                st.pending_options
+                    .entry(String::new())
+                    .or_default()
+                    .push((id.to_string(), value));
+            }
+            drop(st);
+            self.publish_structure();
+            return;
+        };
         let key = session.id.clone();
         let agent_id = session.agent_session_id.clone();
         // Mirror on the session first (works with no agent process).
@@ -2002,35 +2053,78 @@ fn agent_session_idx(
                                         .filter(|m| m.sender == MessageSender::User)
                                         .map(|m| m.content.clone())
                                         .collect();
+                                // Round 7 (R10): mid-turn resyncs used to
+                                // reorder the chat — unpersisted user prompts
+                                // were re-inserted after the last SERVER user
+                                // message (i.e. before the in-flight AI
+                                // answer), and in-flight AI messages (thinking,
+                                // tool calls) were dropped entirely. Now:
+                                // server messages win, live state merges into
+                                // entries with the same id, and local-only
+                                // messages keep their order at the tail.
+                                let server_msg_ids: std::collections::HashSet<String> =
+                                    messages
+                                        .iter()
+                                        .filter(|m| m.sender == MessageSender::Ai)
+                                        .filter(|m| !m.id.is_empty())
+                                        .map(|m| m.id.clone())
+                                        .collect();
+                                let local_ai: Vec<Message> = session
+                                    .messages
+                                    .iter()
+                                    .filter(|m| m.sender == MessageSender::Ai)
+                                    .cloned()
+                                    .collect();
                                 let mut merged = messages;
-                                let mut missing_user: Vec<Message> = Vec::new();
-                                let mut missing_system: Vec<Message> = Vec::new();
+                                for m in merged.iter_mut() {
+                                    if m.sender == MessageSender::Ai && !m.id.is_empty() {
+                                        if let Some(local) =
+                                            local_ai.iter().find(|l| l.id == m.id)
+                                        {
+                                            if local.content.len() > m.content.len() {
+                                                m.content = local.content.clone();
+                                            }
+                                            for tc in &local.tool_calls {
+                                                match m
+                                                    .tool_calls
+                                                    .iter_mut()
+                                                    .find(|t| t.id == tc.id)
+                                                {
+                                                    Some(ex) => {
+                                                        if tc.status == ToolStatus::Running
+                                                            || ex.status != ToolStatus::Running
+                                                        {
+                                                            *ex = tc.clone();
+                                                        }
+                                                    }
+                                                    None => m.tool_calls.push(tc.clone()),
+                                                }
+                                            }
+                                            if local.thinking.len() > m.thinking.len() {
+                                                m.thinking = local.thinking.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                                let mut tail: Vec<Message> = Vec::new();
                                 for old in &session.messages {
                                     match old.sender {
-                                        MessageSender::System => {
-                                            missing_system.push(old.clone())
-                                        }
+                                        MessageSender::System => tail.push(old.clone()),
                                         MessageSender::User
-                                            if !new_user_texts.contains(&old.content) =>
+                                            if !new_user_texts.contains(old.content.as_str()) =>
                                         {
-                                            missing_user.push(old.clone())
+                                            tail.push(old.clone())
+                                        }
+                                        MessageSender::Ai
+                                            if old.id.is_empty()
+                                                || !server_msg_ids.contains(&old.id) =>
+                                        {
+                                            tail.push(old.clone())
                                         }
                                         _ => {}
                                     }
                                 }
-                                // unpersisted user prompts belong before the
-                                // trailing AI answer (the turn is in flight)
-                                if !missing_user.is_empty() {
-                                    let insert_at = merged
-                                        .iter()
-                                        .rposition(|m| m.sender == MessageSender::User)
-                                        .map(|p| p + 1)
-                                        .unwrap_or(merged.len());
-                                    for (k, m) in missing_user.into_iter().enumerate() {
-                                        merged.insert(insert_at + k, m);
-                                    }
-                                }
-                                merged.extend(missing_system);
+                                merged.extend(tail);
                                 session.messages = merged;
                                 session.plan = plan;
                                 session.last_active_ms = now_ms();

@@ -496,17 +496,45 @@ pub fn Dock() -> Element {
                     } else {
                         req.path.clone()
                     };
-                    cwd_w.set(target_rel.clone());
+                    // Round 7 (R12): reveal = the tree from the root with the
+                    // target folder (and every ancestor) expanded, its files
+                    // listed — not a flat replacement of the listing.
+                    cwd_w.set(String::new());
+                    let mut ancestors: Vec<String> = Vec::new();
+                    let mut acc = String::new();
+                    for part in target_rel.split('/').filter(|p| !p.is_empty()) {
+                        if !acc.is_empty() {
+                            acc.push('/');
+                        }
+                        acc.push_str(part);
+                        ancestors.push(acc.clone());
+                    }
+                    {
+                        let mut ex_sig = expanded.clone();
+                        let mut ex = ex_sig.write();
+                        for a in &ancestors {
+                            if !ex.iter().any(|p| p == a) {
+                                ex.push(a.clone());
+                            }
+                        }
+                    }
                     let st = state.clone();
                     let mut entries_w = entries.clone();
                     let mut files_msg_w = files_msg.clone();
-                    let target = target_rel;
+                    let mut children_w = children.clone();
                     let rid = fs_rid.clone();
                     let root = fs_root.clone();
                     spawn(async move {
-                        match api_list_dir(token(&st), target, rid, root).await {
+                        // root listing drives the tree
+                        match api_list_dir(token(&st), String::new(), rid.clone(), root.clone()).await {
                             Ok(v) => entries_w.set(v),
                             Err(e) => files_msg_w.set(e.to_string()),
+                        }
+                        // every ancestor (incl. the target) gets its children
+                        for a in &ancestors {
+                            if let Ok(v) = api_list_dir(token(&st), a.clone(), rid.clone(), root.clone()).await {
+                                children_w.write().insert(a.clone(), v);
+                            }
                         }
                     });
                 } else {
@@ -1492,7 +1520,9 @@ fn FilePreviewTab(
                     }
                     _ => {
                         let html = crate::highlight::highlight_auto(&name, &data.text);
-                        rsx! { pre { class: "preview-text code-view", dangerous_inner_html: html } }
+                        // round 7 (R1): the preview honours the same wrap toggle
+                        let cv_cls = if *wrap.read() { "preview-text code-view wrap" } else { "preview-text code-view" };
+                        rsx! { pre { class: "{cv_cls}", dangerous_inner_html: html } }
                     }
                 }
             };
@@ -1501,13 +1531,21 @@ fn FilePreviewTab(
             let data_text = data.text.clone();
             let edit_btn: Element = if data.editable {
                 if is_editing_c {
+                    // Round 7 (R2): in edit mode the button becomes
+                    // "back to preview" with its own icon.
                     let mut editing = editing.clone();
                     rsx! {
                         button {
                             class: "file-preview-btn",
-                            title: "{tr(&lang, \"previewEdit\")}",
+                            title: "{tr(&lang, \"previewBack\")}",
                             onclick: move |_| editing.set(false),
-                            "✎"
+                            svg {
+                                width: "14", height: "14", view_box: "0 0 24 24",
+                                fill: "none", stroke: "currentColor",
+                                "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
+                                path { d: "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" }
+                                circle { cx: "12", cy: "12", r: "3" }
+                            }
                         }
                     }
                 } else {
@@ -1619,22 +1657,30 @@ fn FilePreviewTab(
                         span { class: "file-preview-path", title: "{path_lbl}", "{path_lbl}" }
                         div { class: "file-preview-actions",
                             {save_status}
-                            if is_editing_c {
-                                button {
-                                    class: if *wrap.read() { "file-preview-btn active" } else { "file-preview-btn" },
-                                    title: "{loc2(&lang, \"Zawijaj wiersze\", \"Word wrap\")}",
-                                    onclick: move |_| {
-                                        let next = !*wrap.read();
-                                        wrap.set(next);
-                                        #[cfg(any(feature = "web", feature = "desktop"))]
-                                        spawn(async move {
-                                            let _ = dioxus::document::eval(&format!(
-                                                "try{{localStorage.setItem('vdEditorWrap','{}');}}catch(e){{}}",
-                                                if next { "1" } else { "0" }
-                                            )).await;
-                                        });
-                                    },
-                                    "↵ {loc2(&lang, \"Zawijanie\", \"Wrap\")}"
+                            // Round 7 (R1): icon-only wrap toggle, available in
+                            // both preview and edit mode.
+                            button {
+                                class: if *wrap.read() { "file-preview-btn active" } else { "file-preview-btn" },
+                                title: "{loc2(&lang, \"Zawijaj wiersze\", \"Word wrap\")}",
+                                onclick: move |_| {
+                                    let next = !*wrap.read();
+                                    wrap.set(next);
+                                    #[cfg(any(feature = "web", feature = "desktop"))]
+                                    spawn(async move {
+                                        let _ = dioxus::document::eval(&format!(
+                                            "try{{localStorage.setItem('vdEditorWrap','{}');}}catch(e){{}}",
+                                            if next { "1" } else { "0" }
+                                        )).await;
+                                    });
+                                },
+                                svg {
+                                    width: "14", height: "14", view_box: "0 0 24 24",
+                                    fill: "none", stroke: "currentColor",
+                                    "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
+                                    path { d: "M4 6h16" }
+                                    path { d: "M4 12h10" }
+                                    path { d: "M4 18h7" }
+                                    path { d: "M17 15l3 3-3 3" }
                                 }
                             }
                             {edit_btn}

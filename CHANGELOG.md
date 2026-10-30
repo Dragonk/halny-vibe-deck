@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.99.13 — user-reported defects round 7 (2026-10-30)
+
+All 14 reported defects fixed; root cause + fix per row in `docs/next-bugs-round7.md`.
+
+- **Preview/editor**: word-wrap toggle is an icon-only button (in preview AND edit); in wrap mode the line-number gutter counts LOGICAL lines (`vdEdSync` positions each number at its logical line's pixel offset); entering edit turns the edit button into an eye-icon "back to preview" button; the editor highlights Markdown (headings, bold/italic, code, links, lists, quotes, fences).
+- **Window chrome**: hovering a scrollbar no longer shows the window-resize cursor.
+- **DOCX/PDF preview**: the generated table of contents is inserted at the TOP of the first page (it used to land at the end of the document); DOCX renders as real `.doc-page` sheets split at `w:br w:type="page"` / `w:lastRenderedPageBreak` with page size/margins from `w:sectPr`; PDF pages get the same page-card styling.
+- **Settings → Skills**: import/open button labels live inside the buttons; skills can be renamed (`api_rename_skill` renames the folder + SKILL.md frontmatter `name:`); the available-tools collapse in the Agents tab is now 1:1 with the Tools tab (slim header stays when collapsed).
+- **Chat**: tool-call bodies never dump raw JSON (readable text extracted from output JSON, pretty-printed otherwise; detail-shaped `state.output` rejected); mid-turn resyncs no longer reorder messages or drop in-flight thinking/tool calls (server history wins, live state merges by entry id, local-only messages append in order); path-like prose tokens and relative `[text](path)` links in agent messages are clickable and open the preview resolved against the session cwd; clicking a directory reveals it in the file tree with every ancestor expanded.
+- **New session**: model/mode/thinking chips are enabled before the first prompt with config-file defaults and apply to the new session (pending options applied at SessionReady before the prompt).
+- **SSH new session**: a prompt sent to a remote session mirror with no slot now spawns the agent over SSH (`NewRemote`) instead of a local process in a remote path; approvals/questions and streaming render through the same slot event path as local sessions.
+
 ## 1.99.12 — user-reported defects round 6 (2026-10-30)
 
 All 11 reported defects fixed; root cause + fix per row in `docs/next-bugs-round6.md`.

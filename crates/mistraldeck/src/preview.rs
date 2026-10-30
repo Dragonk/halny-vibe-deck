@@ -325,16 +325,85 @@ fn highlight_color(name: &str) -> String {
     }
 }
 
+/// Page geometry from the document's last `w:sectPr` (twips → px at 96dpi).
+/// Used to render the preview as real pages (round 7, R5). Defaults to A4
+/// with Word's default 1"/1.25" margins.
+fn docx_page_style(xml: &str) -> String {
+    let twip = 96.0 / 1440.0;
+    let mut w = 11906.0f64;
+    let mut h = 16838.0f64;
+    let mut mar = (1440.0f64, 1800.0f64, 1440.0f64, 1800.0f64); // t r b l
+    // scan every sectPr block; the last one wins (body-level section)
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<w:sectPr") {
+        let end = rest[pos..]
+            .find("</w:sectPr>")
+            .map(|e| pos + e + "</w:sectPr>".len())
+            .or_else(|| rest[pos..].find("/>").map(|e| pos + e + 2))
+            .unwrap_or(rest.len());
+        let block = &rest[pos..end.min(rest.len())];
+        if let Some(p) = block.find("<w:pgSz") {
+            let tag_end = block[p..].find('>').map(|e| p + e).unwrap_or(block.len());
+            let tag = &block[p..tag_end];
+            if let Some(v) = attr_str(tag, "w:w") {
+                w = v.parse().unwrap_or(w);
+            }
+            if let Some(v) = attr_str(tag, "w:h") {
+                h = v.parse().unwrap_or(h);
+            }
+        }
+        if let Some(p) = block.find("<w:pgMar") {
+            let tag_end = block[p..].find('>').map(|e| p + e).unwrap_or(block.len());
+            let tag = &block[p..tag_end];
+            let g = |k: &str, d: f64| attr_str(tag, k).and_then(|v| v.parse().ok()).unwrap_or(d);
+            mar = (
+                g("w:top", mar.0),
+                g("w:right", mar.1),
+                g("w:bottom", mar.2),
+                g("w:left", mar.3),
+            );
+        }
+        rest = &rest[end.min(rest.len())..];
+    }
+    let _ = h;
+    format!(
+        "width:{:.0}px;padding:{:.0}px {:.0}px {:.0}px {:.0}px;",
+        w * twip,
+        mar.0 * twip,
+        mar.1 * twip,
+        mar.2 * twip,
+        mar.3 * twip
+    )
+}
+
+/// Read `w:key="value"` from a raw XML tag string.
+fn attr_str(tag: &str, key: &str) -> Option<String> {
+    let pat = format!("{key}=\"");
+    let start = tag.find(&pat)? + pat.len();
+    let end = tag[start..].find('"')? + start;
+    Some(tag[start..end].to_string())
+}
+
 /// docx parser with images, TOC, and full run/paragraph formatting
 /// (round 4, C3). `resolve_rel(rId) -> Option<(target, kind)>`,
 /// `resolve_media(target) -> Option<(mime, bytes)>`.
+/// Round 7 (R5): the body renders as `.doc-page` sheets (real page breaks
+/// from `w:br w:type="page"` / `w:lastRenderedPageBreak` split the sheets;
+/// page size/margins come from `w:sectPr`), and the generated TOC is
+/// inserted at the TOP of the first page.
 fn docx_xml_full(
     xml: &str,
     resolve_rel: impl Fn(&str) -> Option<(String, String)>,
     style_info: &std::collections::HashMap<String, (Option<u32>, bool)>,
     resolve_media: impl Fn(&str) -> Option<(String, Vec<u8>)>,
 ) -> String {
-    let mut out = String::from("<div class=\"doc-render\">");
+    let page_style = docx_page_style(xml);
+    let page_open_tag = format!("<div class=\"doc-page\" style=\"{page_style}\">");
+    let mut out = String::from("<div class=\"doc-render doc-paged\"><div class=\"doc-pages\">");
+    out.push_str(&page_open_tag);
+    // insertion point for the generated TOC (top of the first page)
+    let first_page_start = out.len();
+    let mut page_break_pending = false;
     let mut list_open = false;
     let mut list_num = false;
 
@@ -440,6 +509,14 @@ fn docx_xml_full(
                     }
                 }
                 in_para = false;
+                // round 7 (R5): an explicit page break at the end of this
+                // paragraph closes the current sheet; the next content
+                // opens a fresh one
+                if page_break_pending && !in_cell {
+                    out.push_str("</div>");
+                    out.push_str(&page_open_tag);
+                    page_break_pending = false;
+                }
             }
         };
     }
@@ -621,7 +698,17 @@ fn docx_xml_full(
                     }
                     "t" => {}
                     "instrText" => capture_instr = true,
-                    "br" if in_run => run.text.push('\n'),
+                    "br" if in_run => {
+                        // round 7 (R5): explicit page break starts a new sheet
+                        if attr(&e, "type").as_deref() == Some("page") {
+                            page_break_pending = true;
+                        }
+                        run.text.push('\n');
+                    }
+                    "lastRenderedPageBreak" if in_run => {
+                        // Word's soft page break marker — render as a page too
+                        page_break_pending = true;
+                    }
                     "tab" if in_run => run.text.push('\t'),
                     "b" if in_run => {
                         if !attr(&e, "val").map(|v| is_zero_val(&v)).unwrap_or(false) {
@@ -786,9 +873,14 @@ fn docx_xml_full(
         out.push_str(if list_num { "</ol>" } else { "</ul>" });
     }
 
-    // Round 4 (C3): generate a real table of contents from the headings
-    // when the document carries a TOC field/SDT (Word stores it as a field
-    // that only updates inside Word — render it ourselves).
+    // Round 7 (R5): close the last sheet and the page stack.
+    out.push_str("</div></div></div>");
+
+    // Round 4 (C3) + round 7 (R5): generate a real table of contents from the
+    // headings when the document carries a TOC field/SDT (Word stores it as
+    // a field that only updates inside Word — render it ourselves), and
+    // insert it at the TOP of the first page (it used to land at the very
+    // end of the document, where nobody ever saw it).
     if toc_marker && headings.len() >= 2 {
         let mut toc = String::from("<div class=\"doc-toc\"><div class=\"doc-toc-title\">Table of contents</div><ul>");
         let mut last_level = 1u32;
@@ -805,9 +897,8 @@ fn docx_xml_full(
             last_level = lvl;
         }
         toc.push_str("</ul></div>");
-        out.push_str(&toc);
+        out.insert_str(first_page_start, &toc);
     }
-    out.push_str("</div>");
     out
 }
 

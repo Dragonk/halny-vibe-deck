@@ -181,6 +181,9 @@ const BOOT_JS: &str = r#"
     document.addEventListener('mousemove', function (e) {
       var over = e.target.closest ? e.target.closest('.app-root') : true;
       armDir = (over || !e.target.closest) ? dirAt(e) : null;
+      // round 7 (R4): hovering a scrollbar (which sits inside the window
+      // edge zone) must show the normal cursor, never the resize cursor.
+      if (armDir && onScrollbar(e)) armDir = null;
       document.body.style.cursor = armDir ? cursors[armDir] : '';
     });
     // round 6 (R10): a click in a scrollable element's scrollbar zone must

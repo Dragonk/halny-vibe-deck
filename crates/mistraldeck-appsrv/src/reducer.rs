@@ -610,11 +610,19 @@ fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
         .get("input")
         .filter(|v| !v.is_null())
         .and_then(|v| serde_json::to_string(v).ok());
-    // output: structured `state.output` when present, else the text fields
+    // output: structured `state.output` when present, else the text fields.
+    // Round 7 (R9): some servers mirror the whole effect DETAIL into
+    // `state.output` (keys toolName/kind/input/display) — that is not tool
+    // output; fall back to the plain text fields instead of rendering it.
     let state = entry.state.clone().unwrap_or(Value::Null);
     let output = state
         .get("output")
         .filter(|v| !v.is_null())
+        .filter(|v| {
+            !(v.get("toolName").is_some()
+                && v.get("input").is_some()
+                && v.get("display").is_some())
+        })
         .and_then(|v| serde_json::to_string(v).ok())
         .or_else(|| {
             let t = str_field(&state, &["outputText", "output_text"]);
@@ -1255,3 +1263,4 @@ mod tests {
         assert_eq!(usage, Some((100.0, 20.0, 40.0, 120.0, 120.0)), "{evs:?}");
     }
 }
+

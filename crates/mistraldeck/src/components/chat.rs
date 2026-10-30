@@ -2462,13 +2462,76 @@ fn ToolCallBlock(tc: mistraldeck_core::types::ToolCall) -> Element {
     }
 }
 
+/// Human-readable text out of a tool output that is actually a JSON blob
+/// (round 7, R9): prefer the common text fields over dumping raw JSON into
+/// the chat. Returns None when nothing readable is found.
+fn extract_readable_text(v: &serde_json::Value) -> Option<String> {
+    for k in [
+        "stdout",
+        "stderr",
+        "message",
+        "text",
+        "content",
+        "summary",
+        "settledMessage",
+        "statusText",
+        "output",
+    ] {
+        if let Some(s) = v.get(k).and_then(|x| x.as_str()) {
+            if !s.trim().is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    if let Some(m) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+        return Some(m.to_string());
+    }
+    if let Some(d) = v.get("display") {
+        for k in ["settledMessage", "summary", "message", "statusText"] {
+            if let Some(s) = d.get(k).and_then(|x| x.as_str()) {
+                if !s.trim().is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    // {"stdout": "…", "stderr": "…"} — combine
+    let so = v.get("stdout").and_then(|x| x.as_str()).unwrap_or("");
+    let se = v.get("stderr").and_then(|x| x.as_str()).unwrap_or("");
+    let combined = format!("{so}{}{se}", if !so.is_empty() && !se.is_empty() { "\n" } else { "" });
+    if !combined.trim().is_empty() {
+        return Some(combined);
+    }
+    None
+}
+
+/// Display form of a tool output/input string: readable text when the value
+/// is a JSON blob, pretty-printed JSON when it is structured but has no
+/// text field, the raw string otherwise.
+fn readable_json(raw: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) {
+        if v.is_object() || v.is_array() {
+            if let Some(t) = extract_readable_text(&v) {
+                return t;
+            }
+            if let Ok(p) = serde_json::to_string_pretty(&v) {
+                return p;
+            }
+        }
+    }
+    raw.to_string()
+}
+
 /// The expanded body of a tool call (kind chip, input, file changes, output) —
 /// shared by the legacy ToolCallBlock and the StepsTimeline step content.
 #[component]
 fn ToolCallBody(tc: mistraldeck_core::types::ToolCall) -> Element {
-    let input = tc.input_json.clone().unwrap_or_default();
+    let input_raw = tc.input_json.clone().unwrap_or_default();
+    // round 7 (R9): never dump compact raw JSON — pretty-print or extract text
+    let input = readable_json(&input_raw);
     let kind = tc.kind.clone();
-    let output = tc.output.clone().unwrap_or_default();
+    let output_raw = tc.output.clone().unwrap_or_default();
+    let output = readable_json(&output_raw);
     let has_changes = !tc.file_changes.is_empty();
     // Nexus `extractToolCallPath`: the fallback path chip shown before the
     // input/output in the generic block (file changes already render their

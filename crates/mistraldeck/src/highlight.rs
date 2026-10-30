@@ -34,13 +34,17 @@ fn span(class: &str, text: &str, out: &mut String) {
     out.push_str("</span>");
 }
 
-/// Line-number gutter HTML (one number per line, newline-separated).
+/// Line-number gutter HTML: one `<div class="gl">` per LOGICAL line. In
+/// wrap mode the sync JS (`vdEdSync`, code_editor.rs) repositions these
+/// absolutely at each logical line's real offset, so a wrapped line never
+/// gets its own number.
 pub fn gutter_html(src: &str) -> String {
     let lines = src.bytes().filter(|&c| c == b'\n').count() + 1;
-    let mut out = String::new();
+    let mut out = String::with_capacity(lines * 16);
     for i in 1..=lines {
+        out.push_str("<div class=\"gl\">");
         out.push_str(&i.to_string());
-        out.push('\n');
+        out.push_str("</div>");
     }
     out
 }
@@ -360,12 +364,181 @@ pub fn highlight_code(src: &str, ext: &str) -> String {
     out
 }
 
-/// Highlight by file name: `.toml` uses the TOML highlighter, everything
-/// else is dispatched by extension.
+/// Inline markdown spans (code, bold, italic, links/images) on one line.
+/// `plain` is accumulated as byte slices so multi-byte UTF-8 stays intact.
+fn md_inline(s: &str, out: &mut String) {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    let mut plain = 0usize;
+    macro_rules! flush {
+        ($p:expr) => {
+            if $p < i {
+                out.push_str(&escape_html(&s[$p..i]));
+            }
+        };
+    }
+    while i < b.len() {
+        if b[i] == b'`' {
+            if let Some(e) = s[i + 1..].find('`') {
+                flush!(plain);
+                span("str", &s[i + 1..i + 1 + e], out);
+                i += e + 2;
+                plain = i;
+                continue;
+            }
+        }
+        if s[i..].starts_with("**") || s[i..].starts_with("__") {
+            let m = &s[i..i + 2];
+            if let Some(e) = s[i + 2..].find(m) {
+                flush!(plain);
+                out.push_str("<span class=\"tok-md-b\">");
+                md_inline(&s[i + 2..i + 2 + e], out);
+                out.push_str("</span>");
+                i += e + 4;
+                plain = i;
+                continue;
+            }
+        }
+        if b[i] == b'*' || b[i] == b'_' {
+            if let Some(e) = s[i + 1..].find(b[i] as char) {
+                let inner = &s[i + 1..i + 1 + e];
+                if !inner.is_empty() && !inner.contains('\n') {
+                    flush!(plain);
+                    out.push_str("<span class=\"tok-md-i\">");
+                    md_inline(inner, out);
+                    out.push_str("</span>");
+                    i += e + 2;
+                    plain = i;
+                    continue;
+                }
+            }
+        }
+        if s[i..].starts_with("![") || b[i] == b'[' {
+            let open = if b[i] == b'!' { 2 } else { 1 };
+            if let Some(cb) = s[i + open..].find("](") {
+                let cb_abs = i + open + cb;
+                if let Some(cp) = s[cb_abs..].find(')') {
+                    let text = &s[i + open..cb_abs];
+                    let url = &s[cb_abs + 2..cb_abs + cp];
+                    flush!(plain);
+                    out.push_str("<span class=\"tok-md-link\">");
+                    if open == 2 {
+                        out.push_str("![");
+                    } else {
+                        out.push('[');
+                    }
+                    out.push_str(&escape_html(text));
+                    out.push_str(&format!("]({})</span>", escape_html(url)));
+                    i = cb_abs + cp + 1;
+                    plain = i;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    if plain < i {
+        out.push_str(&escape_html(&s[plain..i]));
+    }
+}
+
+/// Markdown highlighter (round 7, R3): block constructs per line (headings,
+/// code fences, quotes, lists, hr, table rows) + inline spans. Keeps the
+/// editor readable for .md documents.
+pub fn highlight_md(src: &str) -> String {
+    if src.len() > MAX_HIGHLIGHT_BYTES {
+        return escape_html(src);
+    }
+    let mut out = String::with_capacity(src.len() * 2);
+    let mut in_fence = false;
+    for line in src.split_inclusive('\n') {
+        let (body, nl) = match line.strip_suffix('\n') {
+            Some(b) => (b, "\n"),
+            None => (line, ""),
+        };
+        let t = body.trim_start();
+        if in_fence {
+            span("str", body, &mut out);
+            out.push_str(nl);
+            if t.starts_with("```") || t.starts_with("~~~") {
+                in_fence = false;
+            }
+            continue;
+        }
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = true;
+            span("com", body, &mut out);
+            out.push_str(nl);
+            continue;
+        }
+        if !t.is_empty() && t.chars().all(|c| c == '#') {
+            // blank-ish "###" line: treat as plain
+        }
+        if t.starts_with('#') {
+            let hashes = t.chars().take_while(|c| *c == '#').count();
+            if hashes <= 6 && t[hashes..].starts_with(' ') {
+                let lvl = hashes;
+                let text = t[hashes..].trim_start();
+                out.push_str(&format!("<span class=\"tok-md-h{lvl}\">"));
+                md_inline(text, &mut out);
+                out.push_str("</span>");
+                out.push_str(nl);
+                continue;
+            }
+        }
+        if t == "---" || t == "***" || t == "___" || t == "- - -" {
+            span("md-hr", body, &mut out);
+            out.push_str(nl);
+            continue;
+        }
+        if t.starts_with('>') {
+            out.push_str("<span class=\"tok-md-quote\">");
+            md_inline(t.trim_start_matches('>').trim_start(), &mut out);
+            out.push_str("</span>");
+            out.push_str(nl);
+            continue;
+        }
+        // list item: "- ", "* ", "+ ", "1. "
+        let list_marker = if let Some(rest) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")).or_else(|| t.strip_prefix("+ ")) {
+            Some((&t[..2], rest))
+        } else {
+            let mut j = 0;
+            while j < t.len() && t[j..].chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                j += 1;
+            }
+            if j > 0 && t[j..].starts_with(". ") {
+                Some((&t[..j + 2], &t[j + 2..]))
+            } else {
+                None
+            }
+        };
+        if let Some((marker, rest)) = list_marker {
+            span("md-li", marker, &mut out);
+            md_inline(rest, &mut out);
+            out.push_str(nl);
+            continue;
+        }
+        if t.starts_with('|') {
+            // table row: color the pipes, keep cell text inline
+            out.push_str("<span class=\"tok-md-cell\">");
+            md_inline(body, &mut out);
+            out.push_str("</span>");
+            out.push_str(nl);
+            continue;
+        }
+        md_inline(body, &mut out);
+        out.push_str(nl);
+    }
+    out
+}
+
+/// Highlight by file name: `.toml` uses the TOML highlighter, `.md` the
+/// markdown one, everything else is dispatched by extension.
 pub fn highlight_auto(name: &str, src: &str) -> String {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
         "toml" => highlight_toml(src),
+        "md" | "markdown" => highlight_md(src),
         _ => highlight_code(src, &ext),
     }
 }
@@ -420,7 +593,25 @@ mod tests {
     }
 
     #[test]
+    fn markdown_blocks_and_inline() {
+        let src = "# Title\n\nSome **bold** and *it* and `code`.\n\n- item one\n- item two\n\n> quote here\n\n```rs\nfn main() {}\n```\n";
+        let html = highlight_auto("doc.md", src);
+        assert!(html.contains("tok-md-h1"));
+        assert!(html.contains("tok-md-b"));
+        assert!(html.contains("tok-md-i"));
+        assert!(html.contains("tok-str"));
+        assert!(html.contains("tok-md-li"));
+        assert!(html.contains("tok-md-quote"));
+        // fence content is highlighted as string, not parsed as heading
+        assert!(html.contains("tok-str"));
+        assert!(!html.contains("<span class=\"tok-md-h1\">```"));
+        // escaping still holds inside markdown
+        let esc = highlight_auto("a.md", "# <b>not bold</b>");
+        assert!(esc.contains("&lt;b&gt;"));
+    }
+
+    #[test]
     fn gutter_counts_lines() {
-        assert_eq!(gutter_html("a\nb"), "1\n2\n");
+        assert_eq!(gutter_html("a\nb"), "<div class=\"gl\">1</div><div class=\"gl\">2</div>");
     }
 }

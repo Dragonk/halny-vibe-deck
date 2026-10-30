@@ -1164,6 +1164,72 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
         Ok(())
     }
 
+    /// Rename a skill folder (round 7, R8): `skills/<old>` → `skills/<new>`,
+    /// and the `name:` field in SKILL.md's frontmatter is updated to match.
+    pub fn rename_skill(
+        scope: &str,
+        cwd: &str,
+        conn: Option<&RemoteConnection>,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), ServerFnError> {
+        let old = safe_skill_name(old_name)?;
+        let new = safe_skill_name(new_name)?;
+        if old == new {
+            return Ok(());
+        }
+        let ctx = resolve_ctx(scope, cwd, conn)?;
+        let Ctx::Local(base) = ctx else {
+            return Err(ServerFnError::new(
+                "renaming skills on an SSH host is not supported yet",
+            ));
+        };
+        let src = base.join("skills").join(&old);
+        let dst = base.join("skills").join(&new);
+        if !src.is_dir() {
+            return Err(ServerFnError::new("skill not found"));
+        }
+        if dst.exists() {
+            return Err(ServerFnError::new("a skill with that name already exists"));
+        }
+        fs::rename(&src, &dst).map_err(|e| ServerFnError::new(e.to_string()))?;
+        // keep SKILL.md frontmatter in sync with the folder name
+        let md = dst.join("SKILL.md");
+        if let Ok(text) = fs::read_to_string(&md) {
+            let updated = if text.starts_with("---\n") {
+                if let Some(end) = text[4..].find("\n---") {
+                    let fm = &text[..end + 4];
+                    let body = &text[end + 4..];
+                    let mut replaced = false;
+                    let new_fm = fm
+                        .lines()
+                        .map(|l| {
+                            if l.starts_with("name:") && !replaced {
+                                replaced = true;
+                                format!("name: {new}")
+                            } else {
+                                l.to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let new_fm = if !replaced {
+                        format!("{new_fm}\nname: {new}")
+                    } else {
+                        new_fm
+                    };
+                    format!("{new_fm}{body}")
+                } else {
+                    text
+                }
+            } else {
+                text
+            };
+            let _ = fs::write(&md, updated);
+        }
+        Ok(())
+    }
+
     /// Delete a whole skill folder (Z16).
     pub fn delete_skill(
         scope: &str,
@@ -1636,6 +1702,24 @@ pub async fn api_create_skill(
     tokio::task::spawn_blocking(move || imp::create_skill(&scope, &cwd, conn.as_ref(), &name))
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Rename a skill (round 7, R8).
+#[server]
+pub async fn api_rename_skill(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    old_name: String,
+    new_name: String,
+) -> Result<(), ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        imp::rename_skill(&scope, &cwd, conn.as_ref(), &old_name, &new_name)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
 }
 
 #[server]

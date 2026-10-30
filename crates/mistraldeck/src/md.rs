@@ -166,9 +166,64 @@ pub fn to_html(md: &str) -> String {
 }
 
 /// Render inline markdown (bold, italic, strike, code, links, images, autolinks).
+///
+/// Round 7 (R11): path-looking prose tokens (e.g. `Dokumentacja/QUICK_START.md`
+/// written without backticks) become clickable path links too. They are
+/// protected behind private-use placeholders while the marker scan runs, so
+/// markers inside a path (like `_` in `QUICK_START`) cannot split it.
 pub fn inline(s: &str) -> String {
+    let mut links: Vec<String> = Vec::new();
+    let mut work = String::with_capacity(s.len());
+    for tok in s.split_inclusive(|c: char| c.is_whitespace()) {
+        let ws_len = tok.len() - tok.trim_end().len();
+        let (body, ws) = tok.split_at(tok.len() - ws_len);
+        let lead_len = body
+            .find(|c: char| {
+                c.is_alphanumeric() || matches!(c, '/' | '\\' | '@' | '.' | '_' | '-' | '~')
+            })
+            .unwrap_or(body.len());
+        let lead = &body[..lead_len];
+        let rest = &body[lead_len..];
+        // trailing punctuation (`,`, `.`, `)`, …) is not part of the path
+        let mut trail_len = 0usize;
+        for (i, c) in rest.char_indices().rev() {
+            if matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '`') {
+                trail_len = rest.len() - i;
+            } else {
+                break;
+            }
+        }
+        let core = &rest[..rest.len() - trail_len];
+        let trail = &rest[rest.len() - trail_len..];
+        work.push_str(lead);
+        // a quote/backtick/angle lead means this token is quoted markup or a
+        // code span — Nexus keeps those literal, and so do we
+        let ok_lead = !lead.contains(['"', '\'', '`', '<', '>']);
+        if ok_lead
+            && !core.is_empty()
+            && crate::state::looks_like_inline_path(core)
+            // never linkify markup-looking fragments (`<script>…</script>`)
+            && !core.contains(['<', '>', '"', '\'', '`', '(', ')', '{', '}', '[', ']', '='])
+        {
+            let idx = links.len();
+            links.push(format!(
+                "<code class=\"markdown-path-link\" role=\"button\" tabindex=\"0\" title=\"{}\" data-path=\"{}\">{}</code>",
+                esc_attr(core),
+                esc_attr(core),
+                esc(core)
+            ));
+            work.push('\u{E000}');
+            work.push_str(&idx.to_string());
+            work.push('\u{E001}');
+        } else {
+            work.push_str(core);
+        }
+        work.push_str(trail);
+        work.push_str(ws);
+    }
+
     let mut out = String::new();
-    let mut rest = s;
+    let mut rest = work.as_str();
     while !rest.is_empty() {
         let mut best: Option<(usize, &str)> = None;
         for m in ["**", "__", "~~", "`", "*", "_", "![", "[", "http://", "https://"] {
@@ -195,6 +250,9 @@ pub fn inline(s: &str) -> String {
                 rest = handle_marker(m, rest, &mut out);
             }
         }
+    }
+    for (i, l) in links.iter().enumerate() {
+        out = out.replace(&format!("\u{E000}{i}\u{E001}"), l);
     }
     out
 }
@@ -285,6 +343,25 @@ fn handle_marker<'a>(m: &str, rest: &'a str, out: &mut String) -> &'a str {
                 if let Some(cp) = rest[cb..].find(')') {
                     let text = &rest[1..cb];
                     let url = &rest[cb + 2..cb + cp];
+                    // Round 7 (R11): a relative/project link is a file path,
+                    // not an external URL — render it as a clickable path
+                    // link (data-path) instead of a target=_blank anchor.
+                    let is_ext = url.starts_with("http://")
+                        || url.starts_with("https://")
+                        || url.starts_with("mailto:")
+                        || url.starts_with('#');
+                    if !is_ext
+                        && (crate::state::looks_like_inline_path(url)
+                            || (url.contains('/') && !url.contains("://")))
+                    {
+                        out.push_str(&format!(
+                            "<a class=\"markdown-path-link\" role=\"button\" tabindex=\"0\" title=\"{}\" data-path=\"{}\">{}</a>",
+                            esc_attr(url),
+                            esc_attr(url),
+                            esc(text)
+                        ));
+                        return &rest[cb + cp + 1..];
+                    }
                     out.push_str(&format!(
                         "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
                         esc_attr(url),
@@ -514,6 +591,35 @@ mod tests {
     }
 
     #[test]
+    fn plain_prose_paths_become_links() {
+        // round 7 (R11): agent prose paths (no backticks) are clickable
+        let html = to_html("Sprawdź Dokumentacja/QUICK_START.md, potem wróć.");
+        assert!(html.contains("data-path=\"Dokumentacja/QUICK_START.md\""));
+        assert!(html.contains("markdown-path-link"));
+        // trailing sentence punctuation stays outside the link
+        assert!(html.contains("</code>, potem"));
+        // plain words and URLs are untouched
+        let html = to_html("see https://example.com/x and hello world");
+        assert!(!html.contains("markdown-path-link"));
+        // fenced code is NOT linkified
+        let html = to_html("```\nDokumentacja/QUICK_START.md\n```");
+        assert!(!html.contains("markdown-path-link"));
+    }
+
+    #[test]
+    fn relative_markdown_links_become_path_links() {
+        // round 7 (R11): [text](relative/path.md) opens the preview
+        let html = to_html("zobacz [quick start](Dokumentacja/QUICK_START.md) tutaj");
+        assert!(html.contains("data-path=\"Dokumentacja/QUICK_START.md\""));
+        assert!(html.contains("markdown-path-link"));
+        assert!(!html.contains("target=\"_blank\""));
+        // external links stay external
+        let html = to_html("[site](https://example.com)");
+        assert!(html.contains("target=\"_blank\""));
+        assert!(!html.contains("markdown-path-link"));
+    }
+
+    #[test]
     fn renders_code_and_mermaid() {
         let html = to_html("```rust\nfn x() {}\n```\n\n```mermaid\ngraph TD; A-->B;\n```");
         assert!(html.contains("<div class=\"md-code-lang\">rust</div>"));
@@ -546,3 +652,4 @@ mod tests {
         assert!(html.contains("<hr />"));
     }
 }
+

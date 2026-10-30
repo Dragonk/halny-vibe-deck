@@ -6112,7 +6112,40 @@ code {
    highlight layer must wrap identically */
 .code-ta.wrap { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
 .code-editor.wrap .code-hl { white-space: pre-wrap; word-break: break-word; }
+/* round 7 (R1): in wrap mode the gutter numbers are absolutely positioned
+   by vdEdSync at each logical line's offset — one number per logical line,
+   wrapped continuations stay unnumbered */
+.code-gutter .gl { min-height: 1.6em; }
+.code-gutter.wrap { white-space: normal; }
+.code-gutter.wrap .gl { position: absolute; left: 0; right: 0; }
 pre.code-view { white-space: pre; }
+pre.code-view.wrap { white-space: pre-wrap; word-break: break-word; }
+/* round 7 (R3): markdown token colors */
+.tok-md-h1 { color: var(--tok-kw, #c792ea); font-weight: 700; font-size: 1.25em; }
+.tok-md-h2 { color: var(--tok-kw, #c792ea); font-weight: 700; font-size: 1.15em; }
+.tok-md-h3 { color: var(--tok-kw, #c792ea); font-weight: 700; }
+.tok-md-h4, .tok-md-h5, .tok-md-h6 { color: var(--tok-kw, #c792ea); font-weight: 600; }
+.tok-md-b { font-weight: 700; }
+.tok-md-i { font-style: italic; }
+.tok-md-link { color: var(--tok-str, #a5d6a7); text-decoration: underline; }
+.tok-md-quote { color: var(--text-muted); font-style: italic; }
+.tok-md-hr { color: var(--text-dim); }
+.tok-md-li { color: var(--accent, #ff6a00); font-weight: 600; }
+.tok-md-cell { color: var(--text); }
+/* round 7 (R5): DOCX rendered as real pages + generated TOC */
+.doc-render.doc-paged { max-width: none; padding: 0; }
+.doc-pages { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 18px 8px; }
+.doc-page { background: var(--surface); border: 1px solid var(--border); border-radius: 2px; box-shadow: var(--shadow); box-sizing: border-box; overflow: hidden; max-width: 100%; }
+.doc-page img { max-width: 100%; height: auto; }
+.doc-toc { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--panel); padding: 12px 16px; margin: 0 0 18px; }
+.doc-toc-title { font-weight: 700; margin-bottom: 6px; }
+.doc-toc ul { list-style: none; padding-left: 0; margin: 0; }
+.doc-toc li { margin: 2px 0; }
+.doc-toc a { color: var(--accent, #ff6a00); text-decoration: none; }
+.doc-toc a:hover { text-decoration: underline; }
+/* round 7 (R5): PDF pages get the same page look as DOCX */
+.pdf-pages { flex: 1; overflow: auto; padding: 18px 8px; display: flex; flex-direction: column; gap: 18px; align-items: center; }
+img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); border-radius: 2px; box-shadow: var(--shadow); background: #fff; }
 .tok-com { color: var(--tok-com); font-style: italic; }
 .tok-key { color: var(--tok-key); }
 .tok-str { color: var(--tok-str); }
@@ -6179,9 +6212,6 @@ pre.code-view { white-space: pre; }
 .slide-title { margin: 0 0 8px; font-size: 15px; }
 .slide-card ul { padding-left: 20px; margin: 6px 0; }
 .slide-card li { margin: 4px 0; }
-
-.pdf-pages { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
-img.pdf-page { width: 100%; max-width: 880px; border: 1px solid var(--border); border-radius: 4px; background: #fff; }
 
 .sheet-tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); }
 .sheet-tab { padding: 3px 10px; font-size: 11px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; }

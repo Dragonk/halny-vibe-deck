@@ -986,17 +986,24 @@ fn agents_panel(
                     }
                 }
             }
-            div { class: "collapsible-panel", style: if collapsed { "display:none;" } else { "display:flex;" },
-                div { class: "collapsible-header",
-                    onclick: {
-                        let mut tools_collapsed = tools_collapsed.clone();
-                        move |_| {
-                            let cur = *tools_collapsed.read();
-                            tools_collapsed.set(!cur);
-                        }
-                    },
+            // Round 7 (R6): identical collapse to the Tools tab — when
+            // collapsed only the slim header row stays visible.
+            div {
+                class: if collapsed { "tools-list-panel collapsed" } else { "tools-list-panel" },
+                div { class: "settings-section-header",
                     h3 { class: "settings-section-title", "{tr(&lang, \"availableTools\")}" }
-                    span { class: "collapsible-arrow", if collapsed { "▶" } else { "▼" } }
+                    button {
+                        class: "toggle-tools-btn",
+                        title: if collapsed { "{loc(&lang, \"Pokaż\", \"Show\")}" } else { "{loc(&lang, \"Ukryj\", \"Hide\")}" },
+                        onclick: {
+                            let mut tools_collapsed = tools_collapsed.clone();
+                            move |_| {
+                                let cur = *tools_collapsed.read();
+                                tools_collapsed.set(!cur);
+                            }
+                        },
+                        if collapsed { "▶" } else { "▼" }
+                    }
                 }
                 if !collapsed {
                     div { class: "tools-list", {avail_rows.iter().cloned()} }
@@ -4401,6 +4408,8 @@ fn skills_panel(
     let selected = skill_sel.read().clone();
     let files = skill_files.read().clone();
     let cur_path = skill_path.read().clone();
+    // Round 7 (R8): rename draft for the selected skill.
+    let mut rename_draft = use_signal(|| String::new());
 
     // Round 6 (R4): the system file picker reader — installed once.
     #[cfg(any(feature = "web", feature = "desktop"))]
@@ -4592,9 +4601,10 @@ fn skills_panel(
                             spawn(async move {
                                 let _ = dioxus::document::eval("var i=document.getElementById('vd-skill-dir-input'); if(i){i.value=''; i.click();}").await;
                             });
-                        }
-                    },
-                    "{loc(&lang, \"Importuj folder\", \"Import folder\")}"
+                        },
+                        // round 7 (R7): the label lives INSIDE the button
+                        "{loc(&lang, \"Importuj folder\", \"Import folder\")}"
+                    }
                     button {
                         class: "field-btn",
                         title: "{loc(&lang, \"Wybierz plik .zip w oknie systemowym\", \"Pick a .zip file in the system dialog\")}",
@@ -4603,9 +4613,9 @@ fn skills_panel(
                             spawn(async move {
                                 let _ = dioxus::document::eval("var i=document.getElementById('vd-skill-zip-input'); if(i){i.value=''; i.click();}").await;
                             });
-                        }
-                    },
-                    "{loc(&lang, \"Importuj .zip\", \"Import .zip\")}"
+                        },
+                        "{loc(&lang, \"Importuj .zip\", \"Import .zip\")}"
+                    }
                     button {
                         class: "field-btn",
                         onclick: {
@@ -4625,9 +4635,9 @@ fn skills_panel(
                                     }
                                 });
                             }
-                        }
-                    },
-                    "{tr(&lang, \"previewOpenExternally\")}"
+                        },
+                        "{tr(&lang, \"previewOpenExternally\")}"
+                    }
                 }
             }
             // hidden system file pickers + bridge (round 6, R4)
@@ -4730,6 +4740,50 @@ fn skills_panel(
                       div { class: "skill-detail",
                         div { class: "config-item-header-row",
                             h4 { class: "config-item-name", "{selected}" }
+                            // Round 7 (R8): rename the skill (folder + frontmatter)
+                            input {
+                                class: "field-input",
+                                style: "width:140px;",
+                                r#type: "text",
+                                placeholder: "{tr(&lang, \"renameSkill\")}",
+                                value: "{rename_draft.read()}",
+                                oninput: move |e| rename_draft.set(e.value()),
+                            }
+                            button {
+                                class: "field-btn",
+                                title: "{tr(&lang, \"renameSkill\")}",
+                                onclick: {
+                                    let state = state.clone();
+                                    let sc = sc.clone();
+                                    let old = selected.clone();
+                                    let mut skills = skills;
+                                    let mut skill_sel = skill_sel;
+                                    move |_| {
+                                        let new = rename_draft.read().trim().to_string();
+                                        if new.is_empty() || new == old { return; }
+                                        let state = state.clone();
+                                        let sc = sc.clone();
+                                        let old = old.clone();
+                                        spawn(async move {
+                                            match crate::vibeconfig::api_rename_skill(
+                                                token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), old, new.clone(),
+                                            ).await {
+                                                Ok(()) => {
+                                                    rename_draft.set(String::new());
+                                                    skill_sel.set(new);
+                                                    if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
+                                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), "skills".to_string(),
+                                                    ).await {
+                                                        skills.set(list);
+                                                    }
+                                                }
+                                                Err(e) => skill_msg.set(e.to_string()),
+                                            }
+                                        });
+                                    }
+                                },
+                                "{tr(&lang, \"renameSkill\")}"
+                            }
                             button {
                                 class: "field-btn",
                                 onclick: {
