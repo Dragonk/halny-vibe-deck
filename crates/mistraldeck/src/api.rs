@@ -346,7 +346,11 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
     const MAX_IMAGES: usize = 8;
 
     let engine = mistraldeck_engine::Engine::global();
-    let cwd = engine.workdir();
+    // round 8: resolve against the CURRENT SESSION's working directory (and
+    // over SSH for remote sessions) — the engine's global workdir made
+    // `@file` markers in a remote (or non-default project) chat silently
+    // resolve against the wrong local root
+    let (cwd, remote) = engine.current_session_ctx();
     let mut expanded = text.to_string();
     let mut attachments: Vec<mistraldeck_core::types::Attachment> = Vec::new();
     let mut image_count = 0usize;
@@ -363,6 +367,110 @@ fn resolve_attachments(text: &str) -> (String, Vec<mistraldeck_core::types::Atta
             if !raw.is_empty() && !markers.iter().any(|m| m == tok) {
                 markers.push(tok.to_string());
             }
+        }
+    }
+
+    // Remote session: read the markers on the host over SSH.
+    if let Some(rid) = &remote {
+        if let Some(conn) = engine.remote_connection(rid) {
+            let base = cwd.trim_end_matches('/');
+            for marker in &markers {
+                let raw = &marker[1..];
+                let is_dir = raw.ends_with('/');
+                let rel = raw.trim_end_matches('/');
+                if rel.is_empty() || rel.contains("..") || rel.starts_with('/') {
+                    continue;
+                }
+                let full = format!("{base}/{rel}");
+                let q = mistraldeck_engine::remote::shq(&full);
+                let probe = mistraldeck_engine::remote::ssh_run(
+                    &conn,
+                    &format!("if [ -d {q} ]; then echo DIR; elif [ -f {q} ]; then echo FILE; else echo MISSING; fi"),
+                    8000,
+                    None,
+                );
+                let name = rel.rsplit('/').next().unwrap_or(rel).to_string();
+                let (block, content, mime, data_base64) = match probe.stdout.trim() {
+                    "DIR" => {
+                        let ls = mistraldeck_engine::remote::ssh_run(
+                            &conn,
+                            &format!("ls -1 {q} 2>/dev/null | head -n {MAX_DIR_ENTRIES}"),
+                            8000,
+                            None,
+                        );
+                        let listing = ls.stdout.trim_end_matches('\n').to_string();
+                        (
+                            format!(
+                                "<vibe_attach_directory><name>{name}</name><location>{raw}</location><content>{listing}</content></vibe_attach_directory>"
+                            ),
+                            listing,
+                            String::new(),
+                            String::new(),
+                        )
+                    }
+                    "FILE" => {
+                        let meta = mistraldeck_engine::remote::ssh_run(
+                            &conn,
+                            &format!("stat -c %s {q} 2>/dev/null || stat -f %z {q}"),
+                            8000,
+                            None,
+                        );
+                        let size: u64 = meta.stdout.trim().parse().unwrap_or(0);
+                        let path = std::path::PathBuf::from(&full);
+                        if let Some(mime) = image_mime(&path) {
+                            if image_count >= MAX_IMAGES || size > MAX_IMAGE_BYTES as u64 || size == 0 {
+                                continue;
+                            }
+                            image_count += 1;
+                            let b64r = mistraldeck_engine::remote::ssh_run(
+                                &conn,
+                                &format!("base64 {q} 2>/dev/null || base64 -i {q}"),
+                                15000,
+                                None,
+                            );
+                            (
+                                format!(
+                                    "<vibe_attach_image><name>{name}</name><location>{raw}</location></vibe_attach_image>"
+                                ),
+                                String::new(),
+                                mime.to_string(),
+                                b64r.stdout.trim().to_string(),
+                            )
+                        } else {
+                            if size == 0 || size > MAX_FILE_BYTES as u64 {
+                                continue;
+                            }
+                            let cat = mistraldeck_engine::remote::ssh_run(
+                                &conn,
+                                &format!("cat {q}"),
+                                15000,
+                                None,
+                            );
+                            let content = cat.stdout;
+                            (
+                                format!(
+                                    "<vibe_attach_file><name>{name}</name><location>{raw}</location><content>{content}</content></vibe_attach_file>"
+                                ),
+                                content,
+                                String::new(),
+                                String::new(),
+                            )
+                        }
+                    }
+                    _ => continue,
+                };
+                if let Some(pos) = expanded.find(marker.as_str()) {
+                    expanded.replace_range(pos..pos + marker.len(), &block);
+                }
+                attachments.push(mistraldeck_core::types::Attachment {
+                    path: raw.to_string(),
+                    is_dir,
+                    content,
+                    mime,
+                    data_base64,
+                });
+            }
+            return (expanded, attachments);
         }
     }
 

@@ -253,6 +253,19 @@ impl Engine {
         c.save();
     }
 
+    /// The current session's (working_directory, remote_id) — server-side
+    /// resolution of `@marker`s and chat path links must use the SESSION's
+    /// root (remote sessions resolve on the host), not the global workdir.
+    pub fn current_session_ctx(&self) -> (String, Option<String>) {
+        let st = self.state.lock().unwrap();
+        match st.current_session() {
+            Some(s) if !s.working_directory.is_empty() => {
+                (s.working_directory.clone(), s.remote_id.clone())
+            }
+            _ => (self.workdir(), None),
+        }
+    }
+
     pub fn workdir(&self) -> String {
         let wd = self.config().working_directory;
         if wd.is_empty() {
@@ -915,7 +928,17 @@ impl Engine {
         if text.is_empty() {
             return;
         }
-        if self.resolve_agent_path().is_none() {
+        // round 8: a remote (SSH) session spawns the agent on the HOST —
+        // requiring a local vibe binary here made pure-SSH usage fail with
+        // "Mistral Vibe CLI not found" before the spawn branch was reached
+        let current_is_remote = {
+            let st = self.state.lock().unwrap();
+            st.current
+                .and_then(|i| st.sessions.get(i))
+                .map(|s| s.remote_id.is_some())
+                .unwrap_or(false)
+        };
+        if !current_is_remote && self.resolve_agent_path().is_none() {
             // No agent binary - tell the user instead of hanging.
             let instructions = mistraldeck_setup::install_instructions().join("\n");
             *self.agent_missing.lock().unwrap() = Some(instructions.clone());
@@ -1187,7 +1210,11 @@ impl Engine {
                     option_id,
                 });
                 slot.approval = None;
-                break;
+                // round 8: publish so the overlay disappears immediately
+                // instead of waiting for the next agent event
+                drop(st);
+                self.publish(BusEvent::StructureChanged);
+                return;
             }
         }
     }
@@ -1201,7 +1228,10 @@ impl Engine {
                     answer,
                 });
                 slot.question = None;
-                break;
+                // round 8: publish so the overlay disappears immediately
+                drop(st);
+                self.publish(BusEvent::StructureChanged);
+                return;
             }
         }
     }
@@ -1954,7 +1984,7 @@ fn agent_session_idx(
                     // Config options chosen before the agent was ready:
                     // apply them (in order) to the fresh session.
                     if let Some(i) = slot_session {
-                        if let Some(session) = st.sessions.get(i) {
+                        if let Some(session) = st.sessions.get_mut(i) {
                             let key = session.id.clone();
                             if let Some(pending) = st.pending_options.remove(&key) {
                                 for (opt_id, opt_value) in pending {
@@ -1969,6 +1999,25 @@ fn agent_session_idx(
                                         slot.config_options.iter_mut().find(|o| o.id == opt_id)
                                     {
                                         opt.current_value = opt_value.clone();
+                                    }
+                                    // round 8: mirror the pending choice into the
+                                    // session itself — otherwise a later agent
+                                    // config-options payload clobbers the
+                                    // pre-prompt selection in the snapshot
+                                    if let Some(opt) = session
+                                        .config_options
+                                        .iter_mut()
+                                        .find(|o| o.id == opt_id)
+                                    {
+                                        opt.current_value = opt_value.clone();
+                                    }
+                                    match opt_id.as_str() {
+                                        "model" => session.last_model = Some(opt_value.clone()),
+                                        "mode" => session.last_mode = Some(opt_value.clone()),
+                                        "thinking" => {
+                                            session.last_thinking = Some(opt_value.clone())
+                                        }
+                                        _ => {}
                                     }
                                     let _ = slot.cmd.send(AgentCommand::SetConfigOption {
                                         session_id: session_id.clone(),
@@ -2126,12 +2175,23 @@ fn agent_session_idx(
                                 }
                                 merged.extend(tail);
                                 session.messages = merged;
-                                session.plan = plan;
+                                // round 8: the snapshot's SessionHistory carries an
+                                // empty plan — overwriting unconditionally wiped a
+                                // live todo list on every resync
+                                if !plan.is_empty() {
+                                    session.plan = plan;
+                                }
                                 session.last_active_ms = now_ms();
                                 session.stream_msg_id = None;
                             }
                         }
-                        slot.busy = false;
+                        // round 8: SessionHistory must NOT clear busy — right
+                        // after a wake the SessionReady already sent the pending
+                        // prompt with busy=true, and this resync used to flip
+                        // it back to false for the whole first turn (no
+                        // "agent is working" marker, queued prompts could
+                        // fire mid-turn). busy is owned by PromptCompleted /
+                        // SessionError / the wake path only.
                         slot.last_activity = std::time::Instant::now();
                         if let Some(k) = slot_key.as_deref() {
                             st.stopping.remove(k);
@@ -2228,6 +2288,14 @@ fn agent_session_idx(
                             session.split_on_message(&mid);
                             {
                                 let msg = ensure_ai_message(session);
+                                // round 8: stamp the wire messageId onto the live
+                                // bubble — without it the SessionHistory merge
+                                // can never match this message by id and appends
+                                // a duplicate on every mid-turn resync
+                                // (reordering / thinking flicker)
+                                if mid != "current" {
+                                    msg.id = mid.clone();
+                                }
                                 msg.content.push_str(&out_text);
                             }
                             // v0.10.2: the CLI never emits agent_thought_end —
@@ -2624,6 +2692,11 @@ fn preview_to_messages(messages: &[mistraldeck_vibe::PreviewMessage]) -> Vec<Mes
                 ai.content = m.content.clone();
                 ai
             };
+            // round 8: keep the history entry id so the SessionHistory merge
+            // matches disk-preview messages with live ones by id (no dupes)
+            if !m.id.is_empty() {
+                msg.id = m.id.clone();
+            }
             msg.is_complete = true;
             msg.thinking = m
                 .thinking

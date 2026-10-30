@@ -144,10 +144,13 @@ impl Conn {
         if already {
             return;
         }
+        // round 8: the entry may be nested under `params.callback` or be the
+        // params object itself — read callbackId from both shapes
         let callback_id = params
             .get("callback")
             .and_then(|c| c.get("callbackId"))
             .cloned()
+            .or_else(|| params.get("callbackId").cloned())
             .unwrap_or(Value::Null);
         let _ = self.respond(id, json!({"callbackId": callback_id, "accepted": accepted}));
     }

@@ -657,7 +657,8 @@ pub fn looks_like_inline_path(text: &str) -> bool {
         && p
             .chars()
             .next()
-            .map(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            // round 8: Unicode letters too (Ścieżka/plik.md), not ASCII only
+            .map(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))
             .unwrap_or(false);
     abs || rel
 }
@@ -697,7 +698,11 @@ pub async fn open_path(mut state: Signal<ClientState>, raw: &str) {
     // remote sessions resolve and list paths against the remote session
     // root over SSH (Nexus fs.stat/listDir with remoteId)
     let (sess_wd, sess_rid) = session_git_ctx(&state);
-    let cwd = if sess_rid.is_some() && !sess_wd.is_empty() {
+    // round 8: resolve against the SESSION's own cwd for local sessions too —
+    // the global engine workdir made agent links like
+    // "Dokumentacja/QUICK_START.md" resolve to the wrong root whenever the
+    // open project differed from the configured workdir
+    let cwd = if !sess_wd.is_empty() {
         sess_wd
     } else {
         state.read().snapshot.working_directory.clone()

@@ -137,7 +137,24 @@ impl Worker {
                     trace(format!("worker <- cmd {cmd:?}"));
                     self.handle(cmd)
                 }
-                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    // round 8: probe the child process — a dead agent (ssh
+                    // drop, crash, remote host gone) must surface as
+                    // Disconnected so the engine can respawn the slot;
+                    // previously the slot stayed "reused" forever with the
+                    // prompt queued and never sent (busy zombie)
+                    let mut dead: Option<i32> = None;
+                    if let Some(conn) = &mut self.conn {
+                        if let Some(code) = conn.exited() {
+                            dead = Some(code);
+                        }
+                    }
+                    if let Some(code) = dead {
+                        trace(format!("agent process exited ({code}) — Disconnected"));
+                        self.emit(AgentEvent::Disconnected { code: Some(code) });
+                        self.conn = None;
+                    }
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     trace("worker down (commands closed)");
                     return;
@@ -184,9 +201,10 @@ impl Worker {
             if let Some(conn) = &self.conn {
                 conn.ack_callback(id, params, true);
             }
-            if let Ok(cb) = serde_json::from_value::<CallbackEntry>(
-                params.get("callback").cloned().unwrap_or(Value::Null),
-            ) {
+            // round 8: the entry may sit under `params.callback` OR be the
+            // params object itself — accept both
+            let raw = params.get("callback").cloned().unwrap_or_else(|| params.clone());
+            if let Ok(cb) = serde_json::from_value::<CallbackEntry>(raw) {
                 if let Some(ev) = self.proj.callback_event(&cb) {
                     self.emit(ev);
                 }
@@ -632,9 +650,26 @@ impl Worker {
     }
 
     fn answer(&mut self, callback_id: &str, answer: &str) {
+        // round 8: the wire expects UserQuestionResult —
+        // `{answers: [{question, answer, isOther}], cancelled}` — not a flat
+        // `{text}`; map the answer onto the stored question(s)
+        let questions = self
+            .proj
+            .callback_questions
+            .get(callback_id)
+            .cloned()
+            .unwrap_or_default();
+        let answers: Vec<Value> = if questions.is_empty() {
+            vec![json!({"question": "", "answer": answer, "isOther": false})]
+        } else {
+            questions
+                .iter()
+                .map(|q| json!({"question": q, "answer": answer, "isOther": false}))
+                .collect()
+        };
         self.callback_result(
             callback_id,
-            json!({"type": "user_input", "result": {"text": answer}}),
+            json!({"type": "user_input", "result": {"answers": answers, "cancelled": false}}),
         );
     }
 

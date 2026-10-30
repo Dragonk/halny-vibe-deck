@@ -211,22 +211,73 @@ fn parse_docx_rels(xml: &str) -> std::collections::HashMap<String, (String, Stri
     out
 }
 
+/// Round 8: TOC gallery values are localized ("Table of Contents",
+/// "Spis treści", "Inhaltsverzeichnis", …) — normalize to ASCII lowercase
+/// alnum and match the known names.
+fn is_toc_gallery(val: &str) -> bool {
+    let mut norm = String::with_capacity(val.len());
+    for ch in val.chars() {
+        match ch {
+            'ł' | 'Ł' => norm.push('l'),
+            'ó' | 'Ó' => norm.push('o'),
+            'ü' | 'Ü' => norm.push('u'),
+            'ö' | 'Ö' => norm.push('o'),
+            'ä' | 'Ä' => norm.push('a'),
+            'é' | 'É' => norm.push('e'),
+            'í' | 'Í' => norm.push('i'),
+            'ñ' | 'Ñ' => norm.push('n'),
+            _ => {
+                if ch.is_ascii_alphanumeric() {
+                    norm.push(ch.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    matches!(
+        norm.as_str(),
+        "tableofcontents" | "spistreci" | "inhaltsverzeichnis" | "tabledematieres"
+            | "tabladecontenidos" | "indice" | "sommaire" | "toc"
+    )
+}
+
 /// Heading level from a paragraph style id/name. Round 5 (R4): Word style
 /// ids are not always "Heading1" — localized builds use "Nagłówek 1",
 /// "Überschrift 1" etc., and some docs use "Heading 1" with a space, so
 /// normalize away everything but letters+digits and match known prefixes.
 fn heading_level(style: &str) -> Option<u32> {
     let s = style.trim();
-    if s.eq_ignore_ascii_case("title") || s.eq_ignore_ascii_case("tytuł") || s.eq_ignore_ascii_case("título") {
-        return Some(1);
-    }
     let mut norm = String::with_capacity(s.len());
     for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() {
+        // round 8: ASCII-fold common diacritics BEFORE dropping the rest, so
+        // "Nagłówek 1" → "naglowek1" and "Überschrift 2" → "uberschrift2"
+        // actually match (dropping non-ASCII blindly gave "nagwek1" /
+        // "berschrift2", which the old prefix list could never hit).
+        let folded = match ch {
+            'ł' | 'Ł' => Some('l'),
+            'ó' | 'Ó' => Some('o'),
+            'ü' | 'Ü' => Some('u'),
+            'ö' | 'Ö' => Some('o'),
+            'ä' | 'Ä' => Some('a'),
+            'é' | 'É' => Some('e'),
+            'á' | 'Á' => Some('a'),
+            'í' | 'Í' => Some('i'),
+            'ñ' | 'Ñ' => Some('n'),
+            'ś' | 'Ś' => Some('s'),
+            'ć' | 'Ć' => Some('c'),
+            'ź' | 'Ź' => Some('z'),
+            'ż' | 'Ż' => Some('z'),
+            _ => None,
+        };
+        if let Some(f) = folded {
+            norm.push(f.to_ascii_lowercase());
+        } else if ch.is_ascii_alphanumeric() {
             norm.push(ch.to_ascii_lowercase());
         }
     }
-    for prefix in ["heading", "nagłówek", "naglowek", "überschrift", "ueberschrift", "titre", "titolo", "encabezado", "überschrift"] {
+    if matches!(norm.as_str(), "title" | "tytul" | "titulo" | "titre") {
+        return Some(1);
+    }
+    for prefix in ["heading", "naglowek", "uberschrift", "ueberschrift", "berschrift", "titre", "titolo", "encabezado"] {
         if let Some(rest) = norm.strip_prefix(prefix) {
             if let Ok(n) = rest.parse::<u32>() {
                 if (1..=9).contains(&n) {
@@ -336,6 +387,13 @@ fn docx_page_style(xml: &str) -> String {
     // scan every sectPr block; the last one wins (body-level section)
     let mut rest = xml;
     while let Some(pos) = rest.find("<w:sectPr") {
+        // round 8: "<w:sectPrChange" also starts with "<w:sectPr" — require
+        // the tag to actually be sectPr (next char '>' or whitespace)
+        let after = rest[pos + "<w:sectPr".len()..].chars().next();
+        if !matches!(after, Some('>') | Some(' ') | Some('\t') | Some('\n') | Some('/')) {
+            rest = &rest[pos + 1..];
+            continue;
+        }
         let end = rest[pos..]
             .find("</w:sectPr>")
             .map(|e| pos + e + "</w:sectPr>".len())
@@ -365,10 +423,12 @@ fn docx_page_style(xml: &str) -> String {
         }
         rest = &rest[end.min(rest.len())..];
     }
-    let _ = h;
+    // round 8: emit the page HEIGHT too — without a min-height the "pages"
+    // were just width-constrained sheets, not page-shaped cards
     format!(
-        "width:{:.0}px;padding:{:.0}px {:.0}px {:.0}px {:.0}px;",
+        "width:{:.0}px;min-height:{:.0}px;padding:{:.0}px {:.0}px {:.0}px {:.0}px;",
         w * twip,
+        h * twip,
         mar.0 * twip,
         mar.1 * twip,
         mar.2 * twip,
@@ -401,6 +461,9 @@ fn docx_xml_full(
     let page_open_tag = format!("<div class=\"doc-page\" style=\"{page_style}\">");
     let mut out = String::from("<div class=\"doc-render doc-paged\"><div class=\"doc-pages\">");
     out.push_str(&page_open_tag);
+    // round 8: start offset of the currently open sheet — used to drop an
+    // empty trailing page when the document ends with a page break
+    let mut last_page_open = out.len() - page_open_tag.len();
     // insertion point for the generated TOC (top of the first page)
     let first_page_start = out.len();
     let mut page_break_pending = false;
@@ -514,6 +577,7 @@ fn docx_xml_full(
                 // opens a fresh one
                 if page_break_pending && !in_cell {
                     out.push_str("</div>");
+                    last_page_open = out.len();
                     out.push_str(&page_open_tag);
                     page_break_pending = false;
                 }
@@ -667,7 +731,18 @@ fn docx_xml_full(
                     "sdt" => {}
                     "docPartGallery" => {
                         if let Some(v) = attr(&e, "val") {
-                            if v.contains("Table of Contents") || v.contains("TableOfContents") {
+                            if is_toc_gallery(&v) {
+                                toc_marker = true;
+                            }
+                        }
+                    }
+                    // round 8: a TOC inserted as a simple field
+                    // (<w:fldSimple w:instr="TOC \o ...">) carries the
+                    // instruction in an ATTRIBUTE — it never reaches the
+                    // instrText arm below, so the TOC was silently skipped
+                    "fldSimple" => {
+                        if let Some(v) = attr(&e, "instr") {
+                            if v.contains("TOC") {
                                 toc_marker = true;
                             }
                         }
@@ -791,7 +866,14 @@ fn docx_xml_full(
                     }
                     "docPartGallery" => {
                         if let Some(v) = attr(&e, "val") {
-                            if v.contains("Table of Contents") || v.contains("TableOfContents") {
+                            if is_toc_gallery(&v) {
+                                toc_marker = true;
+                            }
+                        }
+                    }
+                    "fldSimple" => {
+                        if let Some(v) = attr(&e, "instr") {
+                            if v.contains("TOC") {
                                 toc_marker = true;
                             }
                         }
@@ -871,6 +953,12 @@ fn docx_xml_full(
     }
     if list_open {
         out.push_str(if list_num { "</ol>" } else { "</ul>" });
+    }
+
+    // Round 8: a page break as the very last content opened a fresh sheet
+    // that stayed empty — drop it instead of rendering a blank trailing page.
+    if out[last_page_open..].is_empty() && last_page_open > 0 {
+        out.truncate(last_page_open);
     }
 
     // Round 7 (R5): close the last sheet and the page stack.
@@ -2237,5 +2325,61 @@ mod tests {
         assert_eq!(out[0].size, 11);
         assert_eq!(out[1].name, "sub/a.txt");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn heading_level_localized_styles() {
+        // round 8: ASCII-folding makes the localized prefixes reachable
+        assert_eq!(heading_level("Nagłówek 2"), Some(2));
+        assert_eq!(heading_level("Überschrift 3"), Some(3));
+        assert_eq!(heading_level("Heading 1"), Some(1));
+        assert_eq!(heading_level("Tytuł"), Some(1));
+        assert_eq!(heading_level("Normal"), None);
+    }
+
+    #[test]
+    fn docx_toc_from_fld_simple() {
+        // round 8: a TOC inserted as <w:fldSimple w:instr="TOC …"> carries the
+        // instruction in an attribute — it must trigger the generated TOC
+        let xml = "<w:body>\
+<w:p><w:r><w:fldSimple w:instr=\"TOC \\o 1-3\"><w:r><w:t>x</w:t></w:r></w:fldSimple></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>\
+</w:body>";
+        let html = docx_xml(xml);
+        assert!(html.contains("doc-toc"), "{html}");
+        assert!(html.contains(">One</a>") && html.contains(">Two</a>"), "{html}");
+        // TOC sits at the TOP of the first page, not at the end
+        let toc_pos = html.find("doc-toc").unwrap();
+        let h1_pos = html.find("<h1").unwrap();
+        assert!(toc_pos < h1_pos, "{html}");
+    }
+
+    #[test]
+    fn docx_toc_from_localized_gallery() {
+        // round 8: Polish Word writes w:val="Spis treści"
+        let xml = "<w:body>\
+<w:sdt><w:sdtPr><w:docPartGallery w:val=\"Spis treści\"/></w:sdtPr></w:sdt>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>A</w:t></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:t>B</w:t></w:r></w:p>\
+</w:body>";
+        let html = docx_xml(xml);
+        assert!(html.contains("doc-toc"), "{html}");
+    }
+
+    #[test]
+    fn docx_page_has_min_height_and_no_empty_trailing_page() {
+        // round 8: pages are page-shaped (min-height from w:pgSz w:h)
+        let style = docx_page_style("<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>\
+<w:pgMar w:top=\"1440\" w:right=\"1800\" w:bottom=\"1440\" w:left=\"1800\"/></w:sectPr>");
+        assert!(style.contains("min-height:"), "{style}");
+        assert!(style.contains("width:794px"), "{style}");
+        // a page break as the very last content must not leave a blank sheet
+        let xml = "<w:body>\
+<w:p><w:r><w:t>page one</w:t></w:r></w:p>\
+<w:p><w:r><w:br w:type=\"page\"/><w:t>x</w:t></w:r></w:p>\
+</w:body>";
+        let html = docx_xml(xml);
+        assert_eq!(html.matches("class=\"doc-page\"").count(), 2, "{html}");
     }
 }

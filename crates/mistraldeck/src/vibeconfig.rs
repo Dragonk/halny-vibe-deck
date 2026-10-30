@@ -1179,10 +1179,13 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
             return Ok(());
         }
         let ctx = resolve_ctx(scope, cwd, conn)?;
-        let Ctx::Local(base) = ctx else {
-            return Err(ServerFnError::new(
-                "renaming skills on an SSH host is not supported yet",
-            ));
+        let base = match &ctx {
+            Ctx::Local(b) => b.clone(),
+            Ctx::Remote { .. } => {
+                return Err(ServerFnError::new(
+                    "renaming skills on an SSH host is not supported yet",
+                ));
+            }
         };
         let src = base.join("skills").join(&old);
         let dst = base.join("skills").join(&new);
@@ -1193,28 +1196,63 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
             return Err(ServerFnError::new("a skill with that name already exists"));
         }
         fs::rename(&src, &dst).map_err(|e| ServerFnError::new(e.to_string()))?;
+        // round 8: keep config.toml references in sync — a renamed skill that
+        // is enabled/disabled by name would otherwise dangle and stop loading
+        {
+            let old_k = old.clone();
+            let new_k = new.clone();
+            let _ = with_cfg(&ctx, move |cfg| {
+                let en = cfg.enabled_skills();
+                if en.iter().any(|s| s == &old_k) {
+                    cfg.set_enabled_skills(
+                        en.iter().map(|s| if s == &old_k { new_k.clone() } else { s.clone() }).collect(),
+                    );
+                }
+                let dis = cfg.disabled_skills();
+                if dis.iter().any(|s| s == &old_k) {
+                    cfg.set_disabled_skills(
+                        dis.iter().map(|s| if s == &old_k { new_k.clone() } else { s.clone() }).collect(),
+                    );
+                }
+            });
+        }
         // keep SKILL.md frontmatter in sync with the folder name
         let md = dst.join("SKILL.md");
         if let Ok(text) = fs::read_to_string(&md) {
-            let updated = if text.starts_with("---\n") {
-                if let Some(end) = text[4..].find("\n---") {
-                    let fm = &text[..end + 4];
-                    let body = &text[end + 4..];
+            // round 8: quote the value when it would break YAML (`a:b`,
+            // leading/trailing space), and handle CRLF files
+            let needs_quote = new.contains(':')
+                || new.starts_with(' ')
+                || new.ends_with(' ')
+                || new.contains('#')
+                || new.contains('"');
+            let name_line = if needs_quote {
+                format!("name: \"{}\"", new.replace('\\', "\\\\").replace('"', "\\\""))
+            } else {
+                format!("name: {new}")
+            };
+            let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+            let updated = if text.starts_with("---\n") || text.starts_with("---\r\n") {
+                let open_len = if text.starts_with("---\r\n") { 5 } else { 4 };
+                if let Some(end) = text[open_len..].find(&format!("{nl}---")) {
+                    let fm = &text[..end + open_len];
+                    let body = &text[end + open_len..];
                     let mut replaced = false;
                     let new_fm = fm
-                        .lines()
+                        .split_inclusive(['\n'])
                         .map(|l| {
-                            if l.starts_with("name:") && !replaced {
+                            let lt = l.trim_end_matches(['\r', '\n']);
+                            if lt.starts_with("name:") && !replaced {
                                 replaced = true;
-                                format!("name: {new}")
+                                let eol = if l.ends_with("\r\n") { "\r\n" } else if l.ends_with('\n') { "\n" } else { "" };
+                                format!("{name_line}{eol}")
                             } else {
                                 l.to_string()
                             }
                         })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                        .collect::<String>();
                     let new_fm = if !replaced {
-                        format!("{new_fm}\nname: {new}")
+                        format!("{new_fm}{name_line}{nl}")
                     } else {
                         new_fm
                     };

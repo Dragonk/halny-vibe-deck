@@ -502,7 +502,9 @@ pub fn Dock() -> Element {
                     cwd_w.set(String::new());
                     let mut ancestors: Vec<String> = Vec::new();
                     let mut acc = String::new();
-                    for part in target_rel.split('/').filter(|p| !p.is_empty()) {
+                    // round 8: split on both separators — Windows/remote
+                    // paths use '\' and produced one bogus ancestor
+                    for part in target_rel.split(['/', '\\']).filter(|p| !p.is_empty()) {
                         if !acc.is_empty() {
                             acc.push('/');
                         }
@@ -1671,6 +1673,12 @@ fn FilePreviewTab(
                                             "try{{localStorage.setItem('vdEditorWrap','{}');}}catch(e){{}}",
                                             if next { "1" } else { "0" }
                                         )).await;
+                                        // round 8: re-position the gutter numbers
+                                        // immediately after the wrap flip (the
+                                        // editor effect only tracks content).
+                                        let _ = dioxus::document::eval(
+                                            "requestAnimationFrame(function(){window.vdEdSync && window.vdEdSync('pv');});",
+                                        ).await;
                                     });
                                 },
                                 svg {

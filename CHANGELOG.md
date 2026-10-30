@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.99.14 — user-reported defects round 8 (2026-10-30)
+
+Round 7 areas re-reported; each row re-audited, real root causes fixed. Root cause + fix per row in `docs/next-bugs-round8.md`.
+
+- **Preview/editor**: wrap toggle re-syncs the line-number gutter immediately (was only on scroll/content); the highlight layer is now byte-identical to the source (keywords were rendered doubled, md `#`/`>`/`**`/backtick markers dropped, TOML had a phantom trailing newline) — this also fixes caret alignment and wrap-mode gutter offsets; textarea scrollbar hidden so both layers wrap identically; `.code-hl` tab-size matches; raw-TOML settings editor gets TOML highlighting. Icon-only wrap toggle and edit→eye "back to preview" verified.
+- **Window chrome**: the viewport scrollbar at the window edge is now detected (`onScrollbar` walks up to `<html>`), so grabbing it no longer shows the window-resize cursor.
+- **DOCX preview**: TOC renders again — `fldSimple` TOC fields (instruction in an attribute), localized gallery values ("Spis treści"…), and ASCII-folded localized heading style names ("Nagłówek 1", "Überschrift 2") all recognized. Pages are page-shaped (`min-height` from `w:pgSz w:h`, previously parsed and discarded), `sectPrChange` no longer misparsed, no empty trailing sheet after a final page break. PDF page cards verified.
+- **Settings → Skills**: rename now reloads the file tree for the new name (stale rows could resurrect the old folder on save), rewrites `enabled_skills`/`disabled_skills` in config.toml, handles CRLF/quoting in SKILL.md frontmatter, and the "new file" input no longer shares its signal with "create skill". Tools-collapse 1:1 and in-button labels verified.
+- **Chat**: relative agent links resolve against the session cwd (was the global workdir for local sessions), md path tokens tolerate emphasis markers and Unicode-leading paths, directory reveals split `\` too. Live-turn merge fixed at the root: wire message ids stamped on streaming bubbles + disk-preview entry ids (no more duplicate/reordered messages on resync), snapshot primes assistant delta length correctly (no full-text re-emit), unknown `entryUpdated` ids flag a resync instead of corrupting `/history/0`, pre-resume tool cards honor wire `state.status`. Pre-prompt model/mode/thinking choices are mirrored into the session so later agent payloads can't clobber them.
+- **SSH new session**: callbacks now parse the real wire shape (`detail.kind`, `request.questions[]`/`options[]`, `effect.toolName`, `UserQuestionResult` answers) so approvals/questions actually surface and get answered; dead agent/ssh processes emit `Disconnected` (no more zombie busy slots with queued prompts); the local-binary guard no longer blocks pure-SSH hosts; `busy` survives the post-wake resync; `todo_write` feeds the plan card and resyncs keep it; `@file` markers in remote chats read over SSH; approval overlays clear immediately.
+
 ## 1.99.13 — user-reported defects round 7 (2026-10-30)
 
 All 14 reported defects fixed; root cause + fix per row in `docs/next-bugs-round7.md`.

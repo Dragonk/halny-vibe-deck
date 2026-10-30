@@ -6084,6 +6084,9 @@ code {
     white-space: pre;
     color: var(--text);
     pointer-events: none;
+    /* round 8: same tab advance as the textarea, or tab-indented files
+       wrap/measure at different offsets in the two layers */
+    tab-size: 4;
 }
 .code-ta {
     position: absolute;
@@ -6106,7 +6109,13 @@ code {
     white-space: pre;
     overflow: auto;
     tab-size: 4;
+    /* round 8: the textarea's own scrollbar would shrink its content width
+       below the highlight layer's, so the two wrap at different points and
+       the wrap-mode gutter numbers misalign. Scrolling is JS-synced to the
+       highlight layer anyway — hide the textarea scrollbar. */
+    scrollbar-width: none;
 }
+.code-ta::-webkit-scrollbar { display: none; }
 .code-ta::selection { background: rgba(250, 80, 15, 0.30); }
 /* round 5 (R3): word-wrap toggle in the preview editor — textarea and the
    highlight layer must wrap identically */

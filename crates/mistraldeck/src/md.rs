@@ -185,9 +185,11 @@ pub fn inline(s: &str) -> String {
         let lead = &body[..lead_len];
         let rest = &body[lead_len..];
         // trailing punctuation (`,`, `.`, `)`, …) is not part of the path
+        // round 8: emphasis markers too — `**path/file.md**` must not end up
+        // with the asterisks inside data-path
         let mut trail_len = 0usize;
         for (i, c) in rest.char_indices().rev() {
-            if matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '`') {
+            if matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '`' | '*' | '~' | '_') {
                 trail_len = rest.len() - i;
             } else {
                 break;
@@ -203,7 +205,7 @@ pub fn inline(s: &str) -> String {
             && !core.is_empty()
             && crate::state::looks_like_inline_path(core)
             // never linkify markup-looking fragments (`<script>…</script>`)
-            && !core.contains(['<', '>', '"', '\'', '`', '(', ')', '{', '}', '[', ']', '='])
+            && !core.contains(['<', '>', '"', '\'', '`', '(', ')', '{', '}', '[', ']', '=', '*', '~'])
         {
             let idx = links.len();
             links.push(format!(

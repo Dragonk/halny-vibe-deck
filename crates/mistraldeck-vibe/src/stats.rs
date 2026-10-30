@@ -702,6 +702,10 @@ pub struct PreviewToolCall {
 pub struct PreviewMessage {
     pub role: String,
     pub content: String,
+    /// round 8: the history entry id, so the engine's SessionHistory merge
+    /// can match disk-preview messages with live ones instead of duplicating
+    #[serde(default)]
+    pub id: String,
     #[serde(default)]
     pub thinking: Vec<PreviewThinking>,
     #[serde(default)]
@@ -815,6 +819,11 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                         }
                     }
                 }
+                let entry_id = e
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
                 if is_user {
                     if let Some(msg) = cur_ai.take() {
                         messages.push(msg);
@@ -823,6 +832,7 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                     messages.push(PreviewMessage {
                         role: "user".to_string(),
                         content: text,
+                        id: entry_id,
                         thinking: Vec::new(),
                         tool_calls: Vec::new(),
                     });
@@ -834,6 +844,7 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                     cur_ai = Some(PreviewMessage {
                         role: "ai".to_string(),
                         content: text,
+                        id: entry_id,
                         thinking,
                         tool_calls: Vec::new(),
                     });
@@ -863,6 +874,11 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                     cur_ai = Some(PreviewMessage {
                         role: "ai".to_string(),
                         content: String::new(),
+                        id: e
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         thinking,
                         tool_calls: Vec::new(),
                     });
@@ -931,10 +947,33 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                 } else {
                     None
                 };
+                // round 8: the wire state.status is authoritative — a failed
+                // call without a display.success/decision used to render "done"
+                let wire_status = state.and_then(|s| {
+                    s.get("status")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            s.get("status")
+                                .and_then(|v| v.get("status").or_else(|| v.get("type")))
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
+                });
+                let status = match wire_status.as_deref() {
+                    Some("failed") | Some("error") | Some("cancelled") | Some("blocked") => "error",
+                    Some("running") | Some("in_progress") | Some("pending") => "running",
+                    Some(_) => {
+                        if success { "done" } else { "error" }
+                    }
+                    None => {
+                        if success { "done" } else { "error" }
+                    }
+                };
                 if let Some(ai) = &mut cur_ai {
                     ai.tool_calls.push(PreviewToolCall {
                         title: title.to_string(),
-                        status: if success { "done" } else { "error" }.to_string(),
+                        status: status.to_string(),
                         tool_name,
                         subagent,
                     });

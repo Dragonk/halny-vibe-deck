@@ -190,7 +190,8 @@ pub fn highlight_toml(src: &str) -> String {
             }
         }
     }
-    out.push('\n');
+    // round 8: no trailing '\n' — the highlight layer must mirror the source
+    // byte-for-byte or the editor caret / wrap gutter desync.
     out
 }
 
@@ -347,8 +348,10 @@ pub fn highlight_code(src: &str, ext: &str) -> String {
                 i += 1;
             }
             if cfg.kw.contains(&&src[start..i]) {
-                if plain < i {
-                    out.push_str(&escape_html(&src[plain..i]));
+                // round 8: flush only up to the keyword — `plain..i` used to
+                // include the word itself, so keywords rendered DOUBLED
+                if plain < start {
+                    out.push_str(&escape_html(&src[plain..start]));
                 }
                 span("kw", &src[start..i], &mut out);
                 plain = i;
@@ -381,7 +384,12 @@ fn md_inline(s: &str, out: &mut String) {
         if b[i] == b'`' {
             if let Some(e) = s[i + 1..].find('`') {
                 flush!(plain);
-                span("str", &s[i + 1..i + 1 + e], out);
+                // round 8: keep the backticks inside the span — the highlight
+                // layer must contain exactly the same text as the textarea
+                // or the caret/highlight alignment and wrap gutter break.
+                out.push_str("<span class=\"tok-str\">`");
+                out.push_str(&escape_html(&s[i + 1..i + 1 + e]));
+                out.push_str("`</span>");
                 i += e + 2;
                 plain = i;
                 continue;
@@ -392,7 +400,9 @@ fn md_inline(s: &str, out: &mut String) {
             if let Some(e) = s[i + 2..].find(m) {
                 flush!(plain);
                 out.push_str("<span class=\"tok-md-b\">");
+                out.push_str(&escape_html(m));
                 md_inline(&s[i + 2..i + 2 + e], out);
+                out.push_str(&escape_html(m));
                 out.push_str("</span>");
                 i += e + 4;
                 plain = i;
@@ -404,8 +414,11 @@ fn md_inline(s: &str, out: &mut String) {
                 let inner = &s[i + 1..i + 1 + e];
                 if !inner.is_empty() && !inner.contains('\n') {
                     flush!(plain);
+                    let m = b[i] as char;
                     out.push_str("<span class=\"tok-md-i\">");
+                    out.push(m);
                     md_inline(inner, out);
+                    out.push(m);
                     out.push_str("</span>");
                     i += e + 2;
                     plain = i;
@@ -471,16 +484,15 @@ pub fn highlight_md(src: &str) -> String {
             out.push_str(nl);
             continue;
         }
-        if !t.is_empty() && t.chars().all(|c| c == '#') {
-            // blank-ish "###" line: treat as plain
-        }
         if t.starts_with('#') {
             let hashes = t.chars().take_while(|c| *c == '#').count();
             if hashes <= 6 && t[hashes..].starts_with(' ') {
                 let lvl = hashes;
-                let text = t[hashes..].trim_start();
+                // round 8: color the WHOLE raw line (markers included) —
+                // dropping characters desyncs the highlight layer from the
+                // textarea (caret alignment + wrap-mode gutter offsets).
                 out.push_str(&format!("<span class=\"tok-md-h{lvl}\">"));
-                md_inline(text, &mut out);
+                md_inline(body, &mut out);
                 out.push_str("</span>");
                 out.push_str(nl);
                 continue;
@@ -492,8 +504,9 @@ pub fn highlight_md(src: &str) -> String {
             continue;
         }
         if t.starts_with('>') {
+            // round 8: keep the '>' markers — full raw line inside the span
             out.push_str("<span class=\"tok-md-quote\">");
-            md_inline(t.trim_start_matches('>').trim_start(), &mut out);
+            md_inline(body, &mut out);
             out.push_str("</span>");
             out.push_str(nl);
             continue;
@@ -513,6 +526,9 @@ pub fn highlight_md(src: &str) -> String {
             }
         };
         if let Some((marker, rest)) = list_marker {
+            // round 8: keep the line indent so the layer matches the textarea
+            let indent = &body[..body.len() - t.len()];
+            out.push_str(&escape_html(indent));
             span("md-li", marker, &mut out);
             md_inline(rest, &mut out);
             out.push_str(nl);
@@ -613,5 +629,49 @@ mod tests {
     #[test]
     fn gutter_counts_lines() {
         assert_eq!(gutter_html("a\nb"), "<div class=\"gl\">1</div><div class=\"gl\">2</div>");
+    }
+
+    /// Strip tags + unescape — the text content of the highlight layer.
+    fn text_of(html: &str) -> String {
+        let mut out = String::new();
+        let mut in_tag = false;
+        let mut rest = html;
+        while let Some(i) = rest.find(['<', '&']) {
+            out.push_str(&rest[..i]);
+            rest = &rest[i..];
+            if rest.starts_with('<') {
+                let end = rest.find('>').map(|e| e + 1).unwrap_or(rest.len());
+                in_tag = true;
+                rest = &rest[end..];
+                let _ = in_tag;
+            } else {
+                let end = rest.find(';').map(|e| e + 1).unwrap_or(rest.len());
+                let ent = &rest[..end];
+                out.push_str(match ent {
+                    "&amp;" => "&",
+                    "&lt;" => "<",
+                    "&gt;" => ">",
+                    "&quot;" => "\"",
+                    "&#39;" => "'",
+                    _ => ent,
+                });
+                rest = &rest[end..];
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Round 8: the highlight layer must contain EXACTLY the source text —
+    /// dropping markers (`#`, `>`, `**`, backticks) or adding newlines
+    /// desyncs the transparent textarea (caret) and the wrap-mode gutter.
+    #[test]
+    fn highlight_layer_is_byte_identical_to_source() {
+        let src = "# Title\n\nSome **bold** and *it* and `code` and _u_.\n\n- item\n\n> quote\n\n  indented para\n\n```rs\nfn main() {}\n```\n";
+        assert_eq!(text_of(&highlight_md(src)), src);
+        let toml_src = "# note\n[models.gpt]\nname = \"gpt\"\ncount = 3\nflag = true\n";
+        assert_eq!(text_of(&highlight_toml(toml_src)), toml_src);
+        let rs_src = "fn main() {\n\tlet x = 1; // hi\n}\n";
+        assert_eq!(text_of(&highlight_code(rs_src, "rs")), rs_src);
     }
 }

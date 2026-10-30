@@ -167,6 +167,26 @@ pub struct CallbackEntry {
     pub session_id: Option<String>,
 }
 
+impl CallbackEntry {
+    /// Round 8: on the real wire the discriminator lives INSIDE `detail`
+    /// (`detail.kind` — the union is `Field(discriminator="kind")`); the
+    /// entry-level `kind` only appears on some history/synthetic payloads.
+    /// Reading only the entry-level field made every live callback parse as
+    /// "unknown kind" → approvals/questions never surfaced and the agent
+    /// blocked forever waiting for a decision.
+    pub fn effective_kind(&self) -> Option<String> {
+        if self.detail_kind.is_some() {
+            self.detail_kind.clone()
+        } else {
+            self.detail
+                .as_ref()
+                .and_then(|d| d.get("kind"))
+                .and_then(|k| k.as_str())
+                .map(str::to_string)
+        }
+    }
+}
+
 /// `session/list` item.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SessionListItem {

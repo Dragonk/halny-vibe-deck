@@ -3241,6 +3241,8 @@ rsx! {
                         CodeEditor {
                             code: raw_toml,
                             id: "raw".to_string(),
+                            // round 8: TOML syntax colors in the raw-config editor
+                            file: Some("config.toml".to_string()),
                         }
                     }
                     if !list_saved.read().is_empty() {
@@ -4410,6 +4412,9 @@ fn skills_panel(
     let cur_path = skill_path.read().clone();
     // Round 7 (R8): rename draft for the selected skill.
     let mut rename_draft = use_signal(|| String::new());
+    // Round 8: the "new file" input must NOT share `new_name` with the
+    // header "create skill" input — typing in one mirrored into the other.
+    let mut new_file_name = use_signal(|| String::new());
 
     // Round 6 (R4): the system file picker reader — installed once.
     #[cfg(any(feature = "web", feature = "desktop"))]
@@ -4758,6 +4763,9 @@ fn skills_panel(
                                     let old = selected.clone();
                                     let mut skills = skills;
                                     let mut skill_sel = skill_sel;
+                                    let mut skill_files = skill_files;
+                                    let mut skill_path = skill_path;
+                                    let mut skill_editor = skill_editor;
                                     move |_| {
                                         let new = rename_draft.read().trim().to_string();
                                         if new.is_empty() || new == old { return; }
@@ -4770,11 +4778,22 @@ fn skills_panel(
                                             ).await {
                                                 Ok(()) => {
                                                     rename_draft.set(String::new());
-                                                    skill_sel.set(new);
+                                                    // round 8: file paths embed the skill name — reload the
+                                                    // file list for the NEW name and drop the stale editor,
+                                                    // otherwise saving resurrects the old folder
+                                                    skill_files.set(Vec::new());
+                                                    skill_path.set(String::new());
+                                                    skill_editor.set(String::new());
+                                                    skill_sel.set(new.clone());
                                                     if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
                                                         token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), "skills".to_string(),
                                                     ).await {
                                                         skills.set(list);
+                                                    }
+                                                    if let Ok(list) = crate::vibeconfig::api_list_skill_files(
+                                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), new,
+                                                    ).await {
+                                                        skill_files.set(list);
                                                     }
                                                 }
                                                 Err(e) => skill_msg.set(e.to_string()),
@@ -4862,8 +4881,8 @@ fn skills_panel(
                                         class: "field-input",
                                         r#type: "text",
                                         placeholder: "{loc(&lang, \"Nowy plik (np. notes.md)\", \"New file (e.g. notes.md)\")}",
-                                        value: "{new_name.read()}",
-                                        oninput: move |e| new_name.set(e.value()),
+                                        value: "{new_file_name.read()}",
+                                        oninput: move |e| new_file_name.set(e.value()),
                                     }
                                     button {
                                         class: "field-btn",
@@ -4872,7 +4891,7 @@ fn skills_panel(
                                             let sc = sc.clone();
                                             let name = selected.clone();
                                             move |_| {
-                                                let fname = new_name.read().trim().to_string();
+                                                let fname = new_file_name.read().trim().to_string();
                                                 if fname.is_empty() { return; }
                                                 let state = state.clone();
                                                 let sc = sc.clone();
@@ -4883,7 +4902,7 @@ fn skills_panel(
                                                         token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
                                                         path, String::new(),
                                                     ).await.is_ok() {
-                                                        new_name.set(String::new());
+                                                        new_file_name.set(String::new());
                                                         if let Ok(list) = crate::vibeconfig::api_list_skill_files(
                                                             token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), name,
                                                         ).await {

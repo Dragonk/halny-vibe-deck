@@ -192,8 +192,17 @@ const BOOT_JS: &str = r#"
     // edge-resize arm.
     function onScrollbar(e) {
       var el = e.target;
-      while (el && el !== document.body) {
-        if (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) {
+      // round 8: walk ALL the way up, including <body> and <html> — the
+      // viewport's own scrollbar sits at the window edge, and stopping at
+      // body made the edge-resize cursor appear exactly over that "suwak"
+      while (el) {
+        if (el === document.documentElement || el === document.body) {
+          if (document.documentElement.scrollHeight > document.documentElement.clientHeight + 2
+              || document.body.scrollHeight > document.body.clientHeight + 2) {
+            if (e.clientX >= window.innerWidth - 18) return true;   // viewport vertical scrollbar
+            if (e.clientY >= window.innerHeight - 18) return true;  // viewport horizontal scrollbar
+          }
+        } else if (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) {
           var r = el.getBoundingClientRect();
           if (e.clientX >= r.right - 18) return true;   // vertical scrollbar
           if (e.clientY >= r.bottom - 18) return true;  // horizontal scrollbar

@@ -40,6 +40,10 @@ pub struct Projection {
     pub emitted_len: HashMap<String, usize>,
     /// callback_id → session_id (for callback/result routing).
     pub callback_sessions: HashMap<String, String>,
+    /// round 8: callback_id → the question texts of a user_input request, so
+    /// the answer can be wrapped in the wire's UserQuestionResult shape
+    /// (`answers: [{question, answer, isOther}]`)
+    pub callback_questions: HashMap<String, Vec<String>>,
 }
 
 impl Projection {
@@ -76,7 +80,11 @@ impl Projection {
             for e in entries {
                 if is_assistant(e) || e.kind == "reasoning" {
                     if let Some(id) = &e.id {
-                        let len = if e.kind == "assistant" {
+                        // round 8: assistant entries have kind "message" (never
+                        // "assistant"), so the old inner check primed them with
+                        // len 0 and the next entryUpdated re-emitted the FULL
+                        // text as a delta (duplicated assistant bubbles)
+                        let len = if is_assistant(e) {
                             e.text_content().len()
                         } else {
                             e.text.clone().unwrap_or_default().len()
@@ -190,7 +198,13 @@ impl Projection {
                 // (`/text`, `/content/0/text`) — prefix them with the
                 // entry's path in the mirror doc, otherwise they never land
                 // and reasoning deltas (thinking) are lost.
-                let idx = self.index_of(entry_id);
+                // round 8: an unknown entryId must NOT fall back to index 0 —
+                // the entry-relative ops would corrupt the FIRST history
+                // entry. Flag a resync instead.
+                let Some(idx) = self.index_of(entry_id) else {
+                    self.resync_needed = true;
+                    return events;
+                };
                 let base = format!("/history/{idx}");
                 let ops: Vec<PatchOp> = raw_ops
                     .into_iter()
@@ -472,7 +486,7 @@ impl Projection {
             .and_then(|e| serde_json::from_value(e.clone()).ok())
     }
 
-    fn index_of(&self, id: &str) -> usize {
+    fn index_of(&self, id: &str) -> Option<usize> {
         self.doc["history"]
             .as_array()
             .and_then(|arr| {
@@ -480,7 +494,6 @@ impl Projection {
                     e.get("id").and_then(Value::as_str) == Some(id)
                 })
             })
-            .unwrap_or(0)
     }
 
     /// Server→client callback → GUI approval/question event.
@@ -491,7 +504,7 @@ impl Projection {
         let callback_id = cb.callback_id.clone();
         self.callback_sessions
             .insert(callback_id.clone(), self.session_id.clone());
-        match cb.detail_kind.as_deref() {
+        match cb.effective_kind().as_deref() {
             Some("approval") => Some(AgentEvent::ToolApprovalRequest {
                 request_id: callback_id,
                 method: "callback/approval".into(),
@@ -499,24 +512,60 @@ impl Projection {
                     cb.detail.as_ref()?,
                 )
                 .ok()?,
-                tool_name: cb.detail
-                    .as_ref()
-                    .and_then(|d| effect_tool_name(d)),
+                tool_name: cb.detail.as_ref().and_then(|d| effect_tool_name(d)),
             }),
             Some("user_input") => {
                 let detail = cb.detail.as_ref()?;
                 let req = detail.get("request")?;
-                let question = req
-                    .get("question")
-                    .or_else(|| req.get("title"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("Question")
-                    .to_string();
-                let choices = req
-                    .get("choices")
-                    .and_then(Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
+                // round 8: the wire is `request.questions[]` (each with
+                // `question` and `options[].label`), not a flat
+                // `question`/`choices` pair — join all questions and collect
+                // all options so multi-question forms render fully
+                let questions = req.get("questions").and_then(Value::as_array);
+                let question_texts: Vec<String> = match questions {
+                    Some(arr) if !arr.is_empty() => arr
+                        .iter()
+                        .filter_map(|q| {
+                            q.get("question")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if !question_texts.is_empty() {
+                    self.callback_questions
+                        .insert(callback_id.clone(), question_texts.clone());
+                }
+                let question = if !question_texts.is_empty() {
+                    question_texts.join("\n")
+                } else {
+                    req.get("question")
+                        .or_else(|| req.get("title"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("Question")
+                        .to_string()
+                };
+                let mut choices: Vec<String> = Vec::new();
+                if let Some(arr) = questions {
+                    for q in arr {
+                        if let Some(opts) = q.get("options").and_then(Value::as_array) {
+                            for o in opts {
+                                if let Some(l) = o.as_str().map(str::to_string).or_else(|| {
+                                    o.get("label").and_then(Value::as_str).map(str::to_string)
+                                }) {
+                                    if !choices.contains(&l) {
+                                        choices.push(l);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if choices.is_empty() {
+                    if let Some(arr) = req.get("choices").and_then(Value::as_array) {
+                        choices = arr
+                            .iter()
                             .filter_map(|c| {
                                 c.as_str().map(str::to_string).or_else(|| {
                                     c.get("label")
@@ -524,9 +573,9 @@ impl Projection {
                                         .map(str::to_string)
                                 })
                             })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                            .collect();
+                    }
+                }
                 Some(AgentEvent::AskUserQuestion {
                     request_id: callback_id,
                     question,
@@ -560,14 +609,19 @@ fn usage_f64(v: Option<&Value>, keys: &[&str]) -> f64 {
 }
 
 fn effect_tool_name(detail: &Value) -> Option<String> {
-    Some(
-        detail
-            .get("toolName")
-            .or_else(|| detail.get("tool_name"))
-            .or_else(|| detail.get("title"))?
-            .as_str()?
-            .to_string(),
-    )
+    // round 8: approval details nest the tool under `effect.toolName`
+    // (ApprovalCallbackDetail.effect); accept the flat shapes too
+    detail
+        .get("effect")
+        .and_then(|e| {
+            e.get("toolName")
+                .or_else(|| e.get("tool_name"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| detail.get("toolName").and_then(Value::as_str))
+        .or_else(|| detail.get("tool_name").and_then(Value::as_str))
+        .or_else(|| detail.get("title").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 /// Build the GUI [`ToolCall`] for one `effect` history entry (shared by the
@@ -735,7 +789,38 @@ fn effect_events(
     let status = tc.status;
     let output = tc.output.clone();
     let subagent = tc.subagent.clone();
-    vec![if started {
+    let mut events = Vec::new();
+    // round 8: todo_write effects feed the plan card — PlanUpdate had no
+    // producer at all, so the todo list never rendered live
+    if entry
+        .detail
+        .as_ref()
+        .and_then(|d| d.get("kind"))
+        .and_then(Value::as_str)
+        == Some("todo")
+    {
+        let todos = entry
+            .detail
+            .as_ref()
+            .and_then(|d| d.get("input"))
+            .and_then(|i| i.get("todos"))
+            .or_else(|| {
+                entry
+                    .state
+                    .as_ref()
+                    .and_then(|s| s.get("output"))
+                    .and_then(|o| o.get("todos"))
+            });
+        if let Some(todos) = todos {
+            if let Ok(entries_json) = serde_json::to_string(todos) {
+                events.push(AgentEvent::PlanUpdate {
+                    session_id: session_id.to_string(),
+                    entries_json,
+                });
+            }
+        }
+    }
+    events.push(if started {
         AgentEvent::ToolCallStarted {
             session_id: session_id.to_string(),
             tool_call: tc,
@@ -748,7 +833,8 @@ fn effect_events(
             output,
             subagent,
         }
-    }]
+    });
+    events
 }
 
 /// History entry → GUI message (snapshot/resume path).
@@ -1261,6 +1347,140 @@ mod tests {
             _ => None,
         });
         assert_eq!(usage, Some((100.0, 20.0, 40.0, 120.0, 120.0)), "{evs:?}");
+    }
+
+    /// Round 8: on the real wire the callback discriminator lives INSIDE
+    /// `detail.kind` — entry-level `kind` must not be required, and the
+    /// approval tool name is nested at `detail.effect.toolName`.
+    #[test]
+    fn callback_detail_kind_and_effect_tool_name() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let cb: crate::proto::CallbackEntry = serde_json::from_value(json!({
+            "callbackId": "cb-9",
+            "detail": {
+                "kind": "approval",
+                "effect": {"toolName": "bash", "input": {"command": "ls"}},
+                "request": {"choices": ["approve", "deny"]}
+            }
+        }))
+        .unwrap();
+        let ev = p.callback_event(&cb).expect("approval event");
+        match ev {
+            AgentEvent::ToolApprovalRequest { request_id, tool_name, .. } => {
+                assert_eq!(request_id, "cb-9");
+                assert_eq!(tool_name.as_deref(), Some("bash"));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    /// Round 8: user_input requests carry `request.questions[]` with
+    /// `options[].label` — not a flat question/choices pair.
+    #[test]
+    fn callback_user_input_questions_array() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let cb: crate::proto::CallbackEntry = serde_json::from_value(json!({
+            "callbackId": "cb-10",
+            "detail": {
+                "kind": "user_input",
+                "request": {"questions": [
+                    {"question": "Which file?", "options": [{"label": "a.md"}, {"label": "b.md"}]},
+                    {"question": "Continue?", "options": [{"label": "yes"}]}
+                ]}
+            }
+        }))
+        .unwrap();
+        let ev = p.callback_event(&cb).expect("question event");
+        match ev {
+            AgentEvent::AskUserQuestion { question, choices, .. } => {
+                assert_eq!(question, "Which file?\nContinue?");
+                assert_eq!(choices, vec!["a.md".to_string(), "b.md".to_string(), "yes".to_string()]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // the stored questions feed the UserQuestionResult-shaped answer
+        assert_eq!(
+            p.callback_questions.get("cb-10").map(|v| v.len()),
+            Some(2)
+        );
+    }
+
+    /// Round 8: an entryUpdated for an unknown entryId must NOT patch
+    /// /history/0 (that corrupted the first entry) — it flags a resync.
+    #[test]
+    fn entry_updated_unknown_id_does_not_corrupt_first_entry() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        p.consume("history/entryAdded", &json!({
+            "eventId": 6,
+            "entry": {"type": "message", "role": "user", "id": "u1",
+                      "content": [{"type": "text", "text": "keep me"}]}
+        }));
+        let before = p.doc["history"][0].clone();
+        let evs = p.consume("history/entryUpdated", &json!({
+            "eventId": 7, "entryId": "does-not-exist",
+            "patch": [{"op": "replace", "path": "/content/0/text", "value": "CORRUPTED"}]
+        }));
+        assert!(evs.is_empty());
+        assert!(p.resync_needed);
+        assert_eq!(p.doc["history"][0], before);
+    }
+
+    /// Round 8: after a snapshot, an assistant entry's emitted_len is primed
+    /// with the FULL text — a same-length update must not re-emit the whole
+    /// message as a fresh delta (duplicated bubbles).
+    #[test]
+    fn snapshot_primes_assistant_emitted_len() {
+        let mut p = proj();
+        let evs = p.consume("session/snapshot", &json!({
+            "state": {
+                "eventId": 5,
+                "session": {"id": "s1", "title": "t", "status": {"type": "idle"}},
+                "history": [
+                    {"type": "message", "role": "assistant", "id": "a1",
+                     "content": [{"type": "text", "text": "Hello"}]}
+                ],
+                "activeCallbacks": []
+            },
+            "lastEventId": 5
+        }));
+        // snapshot itself emits the history but no MessageChunk replay
+        assert!(evs.iter().all(|e| !matches!(e, AgentEvent::MessageChunk { .. })));
+        let evs = p.consume("history/entryUpdated", &json!({
+            "eventId": 6, "entryId": "a1",
+            "patch": [{"op": "replace", "path": "/content/0/text", "value": "Hello"}]
+        }));
+        assert!(
+            evs.iter().all(|e| !matches!(e, AgentEvent::MessageChunk { .. })),
+            "same-length patch re-emitted full text: {evs:?}"
+        );
+    }
+
+    /// Round 8: todo_write effects emit PlanUpdate (the plan card had no
+    /// producer) alongside the tool-call event.
+    #[test]
+    fn todo_effect_emits_plan_update() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("history/entryAdded", &json!({
+            "eventId": 6,
+            "entry": {"type": "effect", "id": "td1", "title": "todo_write",
+                      "detail": {"kind": "todo",
+                                 "input": {"todos": [
+                                     {"content": "step 1", "status": "in_progress"},
+                                     {"content": "step 2", "status": "pending"}]}}}
+        }));
+        let plan = evs.iter().find_map(|e| match e {
+            AgentEvent::PlanUpdate { entries_json, .. } => Some(entries_json.clone()),
+            _ => None,
+        });
+        let plan = plan.expect("PlanUpdate emitted");
+        let entries = mistraldeck_core::types::PlanEntry::parse_list(&plan);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].status, "in_progress");
+        assert_eq!(entries[1].content, "step 2");
     }
 }
 
