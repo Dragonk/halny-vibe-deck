@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.99.11 — user-reported defects round 5 (2026-10-29)
+
+All 13 reported defects fixed; root cause + fix per row in `docs/next-bugs-round5.md`.
+
+**SSH sessions (critical)**
+- `ssh_connect_opts()` (StrictHostKeyChecking=accept-new + ConnectTimeout=10) is now applied to **every** ssh spawn — `ssh_run`, `remote_argv` (remote agent slots) and `list_remote_sessions` (the sidebar lister). Previously the lister spawned ssh without them and hung on the interactive host-key prompt, so the session list showed no SSH sessions at all. Sidebar panes also reload when the group is expanded and when the snapshot changes, and show an error hint when the host is unreachable.
+
+**Session list**
+- Untitled sessions get a real name immediately (title → session-index title → first user prompt `preview`), at both list sources (disk lister + `session/list`).
+
+**Preview / editor**
+- Resize handles no longer sit on top of scrollbars (hit areas clipped to the handle strip; sidebar/dock reserve a 5px strip) — clicking a scrollbar no longer starts a panel resize.
+- The preview editor has a persistent **word-wrap toggle** (localStorage) with a matching highlight layer.
+- DOCX headings render at the right levels: `w:outlineLvl` wins, style names normalized across locales (Heading1 / "Heading 1" / Nagłówek 1 / …).
+- XLSX preview: the sheet scrolls INSIDE the preview body (no more off-screen table on small windows), and cell styles now include theme colors (theme1.xml palette), indexed colors, tint, plus number formats (%, decimals, thousands, currency) applied to the displayed values.
+- Mermaid in md previews fixed (a `to_string` typo in the renderer bootstrap) — mermaid@12 renders in chat and file preview again.
+
+**Windows console flashing**
+- `mistraldeck_core::util::no_window` (CREATE_NO_WINDOW) applied at every process spawn — git commands (the Git tab), the ssh lister, the `uv tool dir` probe, open-externally — audited all `Command::new` sites across the workspace.
+
+**Settings on phones**
+- Tools tab: the available-tools list is collapsible and stacks ABOVE the permission configuration on narrow screens.
+- Skills and Prompts/Agents editors now use the same syntax-highlighted `CodeEditor` as the file preview and fill the panel (42–46vh on phones).
+- TOML tab stacks vertically on phones (file tree on top, editor below).
+
+**Resumed sessions**
+- Wire `effect` entries map to rich tool cards (toolName / kind / display.summary / input / state.output / state.status) instead of raw JSON; `status` (not just `type`) is read and `cancelled` maps to error.
+- Chat auto-scroll only jumps to the bottom when the user is already near it (or on session switch) — reading up while the agent streams no longer yanks the view down.
+
+## 1.99.10 — user-reported defects round 4 (2026-10-29)
+
 ## 1.99.10 — user-reported defects round 4 (2026-10-29)
 
 All 26 reported defects fixed; each row in `docs/next-bugs-round4.md` carries its root cause + fix. Highlights:

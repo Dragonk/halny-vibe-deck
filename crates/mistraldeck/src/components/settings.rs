@@ -359,13 +359,17 @@ fn files_panel(
                                 }
                             }
                         }
-                        div { class: "field",
+                        div { class: "field editor-field",
                             label { class: "field-label", "{content_lbl}" }
-                            textarea {
-                                class: "field-textarea",
-                                rows: "14",
-                                value: "{editor.read()}",
-                                oninput: move |e| editor.set(e.value()),
+                            // round 5 (R11): the same syntax-highlighted
+                            // editor as the file preview, filling the panel
+                            div { class: "vibe-editor-box settings-editor-box",
+                                crate::components::code_editor::CodeEditor {
+                                    code: editor,
+                                    id: "fp".to_string(),
+                                    file: Some(card.path.clone()),
+                                    wrap: None,
+                                }
                             }
                             div { class: "config-item-header-row", style: "margin-top:8px;",
                                 button {
@@ -1052,6 +1056,9 @@ pub fn SettingsView() -> Element {
     let agent_prompts = use_signal(Vec::<String>::new);
     // Agents tab: right-hand global tools panel collapsed state.
     let agents_tools_collapsed = use_signal(|| true);
+    // Tools tab (round 5, R9): the available-tools list is collapsible and,
+    // on phones, sits ABOVE the permission configuration.
+    let tools_list_collapsed = use_signal(|| false);
 
     // SSH remote-connections editor state (remote tab, second section).
     let ssh_draft = use_signal(|| Option::<SshDraft>::None);
@@ -2902,12 +2909,26 @@ pub fn SettingsView() -> Element {
                   div { class: "tools-list-panel",
                     div { class: "settings-section-header",
                         h3 { class: "settings-section-title", "{tr(&lang, \"availableTools\")}" }
-                    }
-                    div { class: "tools-list",
-                        if avail_tools.is_empty() {
-                            p { class: "default-tools-note", "{tr(&lang, \"defaultToolsHint\")}" }
+                        button {
+                            class: "toggle-tools-btn",
+                            title: if *tools_list_collapsed.read() { "{loc(&lang, \"Pokaż\", \"Show\")}" } else { "{loc(&lang, \"Ukryj\", \"Hide\")}" },
+                            onclick: {
+                                let mut c = tools_list_collapsed.clone();
+                                move |_| {
+                                    let cur = *c.read();
+                                    c.set(!cur);
+                                }
+                            },
+                            if *tools_list_collapsed.read() { "▶" } else { "▼" }
                         }
-                        {avail_rows.iter().cloned()}
+                    }
+                    if !*tools_list_collapsed.read() {
+                        div { class: "tools-list",
+                            if avail_tools.is_empty() {
+                                p { class: "default-tools-note", "{tr(&lang, \"defaultToolsHint\")}" }
+                            }
+                            {avail_rows.iter().cloned()}
+                        }
                     }
                   }
                 }
@@ -4878,11 +4899,13 @@ fn skills_panel(
                                         }
                                     }
                                     div { class: "vibe-editor-box",
-                                        textarea {
-                                            class: "field-input skill-file-editor",
-                                            spellcheck: "false",
-                                            value: "{skill_editor.read()}",
-                                            oninput: move |e| skill_editor.set(e.value()),
+                                        // round 5 (R10): same highlighted
+                                        // editor as the preview dock
+                                        crate::components::code_editor::CodeEditor {
+                                            code: skill_editor,
+                                            id: "sk".to_string(),
+                                            file: Some(cur_path.clone()),
+                                            wrap: None,
                                         }
                                     }
                                 } else {

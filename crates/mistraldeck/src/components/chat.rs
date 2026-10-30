@@ -130,11 +130,13 @@ pub fn ChatView() -> Element {
                 dioxus::document::eval(SCROLL_JS);
             });
         }
-        // Scroll to the bottom whenever the open session changes or the
-        // message count grows (covers session clicks even if no DOM
-        // mutation reaches the observer).
+        // Round 5 (R13): scroll to the bottom ONLY when the open session
+        // changes (force) — on message growth the MutationObserver path
+        // already applies the near-bottom rule, so reading up is never
+        // yanked down while the agent streams.
         {
             let state = state.clone();
+            let mut prev_sess = use_signal(|| String::new());
             use_effect(move || {
                 let s = state.read();
                 let cur_id = s
@@ -145,10 +147,17 @@ pub fn ChatView() -> Element {
                     .unwrap_or_default();
                 let n = s.snapshot.current_messages.len();
                 drop(s);
+                let changed = *prev_sess.read() != cur_id;
+                if changed {
+                    prev_sess.set(cur_id);
+                }
+                let _ = n;
                 spawn(async move {
-                    let _ = dioxus::document::eval("window.__vdScrollChat && window.__vdScrollChat();").await;
+                    let force = if changed { "true" } else { "false" };
+                    let _ = dioxus::document::eval(&format!(
+                        "window.__vdScrollChat && window.__vdScrollChat({force});"
+                    )).await;
                 });
-                let _ = (cur_id, n);
             });
         }
     }
@@ -3074,9 +3083,14 @@ const PATH_CLICK_JS: &str = r#"
 const SCROLL_JS: &str = r#"
 (function(){
   if (window.__vdScrollInit) return; window.__vdScrollInit = true;
-  window.__vdScrollChat = function(){
+  window.__vdScrollChat = function(force){
     var el = document.querySelector('.chat-messages');
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // round 5 (R13): only auto-scroll when the user is already near the
+    // bottom (or when forced on session open) — scrolling up to read must
+    // never be yanked back down by streaming updates.
+    var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (force || nearBottom) el.scrollTop = el.scrollHeight;
   };
   // Observe <body> (never replaced by hydration/re-render, unlike the
   // SSR'd chat nodes) and scroll whenever the chat DOM changes.
@@ -3087,14 +3101,14 @@ const SCROLL_JS: &str = r#"
         if (window.__vdScrollRaf) return;
         window.__vdScrollRaf = requestAnimationFrame(function(){
           window.__vdScrollRaf = 0;
-          window.__vdScrollChat();
+          window.__vdScrollChat(false);
         });
         return;
       }
     }
   });
   mo.observe(document.body, { childList: true, subtree: true, characterData: true });
-  window.__vdScrollChat();
+  window.__vdScrollChat(true);
 })();
 "#;
 

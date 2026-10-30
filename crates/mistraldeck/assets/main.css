@@ -261,6 +261,11 @@ code {
     border-right: 1px solid var(--border-subtle);
     overflow: hidden;
     position: relative;
+    /* round 5 (R3): reserve the resize-handle strip — without it the
+       handle's hit area sat on top of the session-list scrollbar and
+       clicking the scrollbar started a panel resize */
+    padding-right: 5px;
+    box-sizing: border-box;
 }
 
 .sidebar-resizing {
@@ -279,13 +284,14 @@ code {
     /* faa86ac: touch drags must not scroll/zoom while resizing */
     touch-action: none;
 }
-/* wider hit-area so a finger can actually grab the handle */
+/* round 5 (R3): the hit area must NOT extend into the panel content —
+   it used to cover the scrollbar (right:-5px;width:14px) */
 .sidebar-resize-handle::after {
     content: '';
     position: absolute;
     top: 0;
-    right: -5px;
-    width: 14px;
+    right: 0;
+    width: 4px;
     height: 100%;
 }
 
@@ -2148,6 +2154,22 @@ code {
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+/* round 5 (R9): on phones the available-tools list stacks ABOVE the
+   permission configuration and stays collapsible */
+@media (max-width: 768px) {
+    .settings-section.tools-section {
+        flex-direction: column;
+        gap: 10px;
+    }
+    .tools-list-panel {
+        width: 100%;
+        max-height: 40vh;
+        order: -1;
+    }
+    .tools-config-panel {
+        width: 100%;
+    }
 }
 
 .tool-item {
@@ -4183,6 +4205,9 @@ code {
     min-width: 0;
     width: var(--vd-dock-w, 400px);
     flex-shrink: 0;
+    /* round 5 (R3): reserve the handle strip (see .sidebar) */
+    padding-left: 5px;
+    box-sizing: border-box;
 }
 .dock-resizing {
     user-select: none;
@@ -4199,13 +4224,14 @@ code {
     /* faa86ac: touch drags must not scroll/zoom while resizing */
     touch-action: none;
 }
-/* wider hit-area so a finger can actually grab the handle */
+/* round 5 (R3): no wide ::after — it overlapped the chat scrollbar at the
+   shared edge and turned scrollbar clicks into panel resizes */
 .dock-resize-handle::after {
     content: '';
     position: absolute;
     top: 0;
-    left: -5px;
-    width: 15px;
+    left: 0;
+    width: 5px;
     height: 100%;
 }
 .dock-resize-handle:hover {
@@ -4799,8 +4825,12 @@ code {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
 }
+/* round 5 (R5): the sheet scrolls INSIDE the preview body — on small
+   windows the table must never push past the screen edge */
+.file-preview-body:has(.preview-sheet) { padding: 8px; display: flex; flex-direction: column; overflow: hidden; }
 .sheet-tabs {
     display: flex;
     gap: 4px;
@@ -5720,6 +5750,58 @@ code {
   position: absolute;
   inset: 0;
 }
+/* round 5 (R10/R11): the preview's CodeEditor fills the settings editor
+   box (skills detail, prompts/agents file editor) */
+.vibe-editor-box .code-editor {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+}
+.master-detail-panel {
+    display: flex;
+    flex-direction: column;
+}
+.editor-field {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    gap: 6px;
+}
+.settings-editor-box {
+    flex: 1 1 auto;
+    min-height: 260px;
+}
+@media (max-width: 768px) {
+    .settings-editor-box { min-height: 42vh; }
+    .master-detail { flex-direction: column; min-height: 0; height: auto; }
+    .master-list { width: 100%; max-height: 30vh; }
+    .master-detail-panel { max-height: none; overflow: visible; }
+    /* round 5 (R12): the TOML tab stacks on phones — file tree on top,
+       editor below, both usable */
+    .raw-config-section {
+        height: auto;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: visible;
+    }
+    .raw-config-section .dirtree-col {
+        width: 100%;
+        max-width: none;
+        max-height: 32vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding-right: 0;
+        padding-bottom: 8px;
+    }
+    .raw-config-section .raw-editor-col { min-height: 46vh; }
+    .skill-detail-body { flex-direction: column; height: auto; }
+    .skill-detail-body .dirtree-col { width: 100%; max-width: none; border-right: none; border-bottom: 1px solid var(--border); max-height: 30vh; }
+    .skill-detail-body .vibe-editor-col { min-height: 44vh; }
+}
 .skill-detail {
   display: flex;
   flex-direction: column;
@@ -5997,6 +6079,10 @@ code {
     tab-size: 4;
 }
 .code-ta::selection { background: rgba(250, 80, 15, 0.30); }
+/* round 5 (R3): word-wrap toggle in the preview editor — textarea and the
+   highlight layer must wrap identically */
+.code-ta.wrap { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+.code-editor.wrap .code-hl { white-space: pre-wrap; word-break: break-word; }
 pre.code-view { white-space: pre; }
 .tok-com { color: var(--tok-com); font-style: italic; }
 .tok-key { color: var(--tok-key); }

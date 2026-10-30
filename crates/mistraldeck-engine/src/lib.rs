@@ -327,15 +327,32 @@ impl Engine {
             mistraldeck_vibe::stats::load_sessions()
                 .into_iter()
                 .filter(|s| !s.session_id.is_empty())
-                .map(|s| mistraldeck_core::proto::AgentSessionInfo {
-                    session_id: s.session_id.clone(),
-                    name: s.title.clone().unwrap_or_default(),
-                    cwd: s
-                        .environment
-                        .as_ref()
-                        .and_then(|e| e.working_directory.clone())
-                        .unwrap_or_default(),
-                    start_time: s.start_time.clone(),
+                .map(|s| {
+                    // Round 5 (R2): a session the CLI has not titled yet
+                    // still gets a real name on the list — index title,
+                    // else the first user prompt — instead of "untitled".
+                    let mut name = s.title.clone().unwrap_or_default();
+                    if name.trim().is_empty() {
+                        name = mistraldeck_vibe::stats::index_title(&s.session_id)
+                            .unwrap_or_default();
+                    }
+                    if name.trim().is_empty() {
+                        name = mistraldeck_vibe::stats::index_preview(&s.session_id)
+                            .unwrap_or_default();
+                    }
+                    if name.len() > 80 {
+                        name = format!("{}…", &name[..name.len().min(80)]);
+                    }
+                    mistraldeck_core::proto::AgentSessionInfo {
+                        session_id: s.session_id.clone(),
+                        name,
+                        cwd: s
+                            .environment
+                            .as_ref()
+                            .and_then(|e| e.working_directory.clone())
+                            .unwrap_or_default(),
+                        start_time: s.start_time.clone(),
+                    }
                 })
                 .collect();
         // Newest first (ISO-8601 timestamps sort lexicographically).

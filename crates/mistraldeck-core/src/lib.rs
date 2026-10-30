@@ -8,6 +8,7 @@
 pub mod proto;
 pub mod snapshot;
 pub mod types;
+pub mod util;
 
 pub use proto::{AgentCommand, AgentEvent};
 pub use types::*;

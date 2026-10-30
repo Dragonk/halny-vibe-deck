@@ -10,19 +10,31 @@ use dioxus::prelude::*;
 use crate::highlight;
 
 /// CodeEditor: `code` is the signal bound to the text; `id` disambiguates
-/// the internal DOM ids when several editors are on screen.
+/// the internal DOM ids when several editors are on screen. `file` picks
+/// the syntax highlighter by extension (round 5, R10: the same editor as
+/// the preview, with highlighting, is used in Settings too); `wrap` turns
+/// on word wrapping (round 5, R3).
 #[component]
-pub fn CodeEditor(mut code: Signal<String>, id: String) -> Element {
+pub fn CodeEditor(
+    mut code: Signal<String>,
+    id: String,
+    file: Option<String>,
+    wrap: Option<bool>,
+) -> Element {
     let text = code.read().clone();
-    let hl = highlight::highlight_toml(&text);
+    let fname = file.clone().unwrap_or_default();
+    let hl = highlight::highlight_auto(&fname, &text);
     let gut = highlight::gutter_html(&text);
+    let wrap = wrap.unwrap_or(false);
+    let ed_cls = if wrap { "code-editor wrap" } else { "code-editor" };
+    let ta_cls = if wrap { "code-ta wrap" } else { "code-ta" };
 
     rsx! {
-        div { class: "code-editor",
+        div { class: "{ed_cls}",
             div { class: "code-gutter", id: "vd-ed-gut-{id}", dangerous_inner_html: "{gut}" }
             pre { class: "code-hl", id: "vd-ed-hl-{id}", dangerous_inner_html: "{hl}" }
             textarea {
-                class: "code-ta",
+                class: "{ta_cls}",
                 id: "vd-ed-ta-{id}",
                 spellcheck: "false",
                 autocomplete: "off",

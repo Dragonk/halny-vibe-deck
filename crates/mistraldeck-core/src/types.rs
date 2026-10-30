@@ -16,7 +16,8 @@ impl ToolStatus {
     pub fn normalize(raw: &str) -> Self {
         match raw {
             "completed" | "done" | "success" => ToolStatus::Done,
-            "failed" | "error" => ToolStatus::Error,
+            // round 5 (R13): the wire EffectState also has failed/cancelled
+            "failed" | "error" | "cancelled" => ToolStatus::Error,
             _ => ToolStatus::Running,
         }
     }

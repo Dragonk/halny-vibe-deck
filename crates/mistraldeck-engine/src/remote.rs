@@ -46,6 +46,35 @@ pub fn shq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Insert OpenSSH connect options into a tokenized ssh command.
+/// Round 5 (R1): EVERY ssh spawn must carry these — without
+/// `StrictHostKeyChecking=accept-new` a first connect hangs on the
+/// interactive host-key prompt (the sidebar's remote session list then
+/// silently comes back empty) and without `ConnectTimeout` a dead host
+/// blocks until the caller's deadline. Only for an OpenSSH binary and
+/// only when the user's own command passes no `-o` options.
+pub fn ssh_connect_opts(tokens: &[String]) -> Vec<String> {
+    let Some(ssh_idx) = tokens.iter().position(|t| {
+        std::path::Path::new(t)
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some("ssh")
+    }) else {
+        return tokens.to_vec();
+    };
+    if tokens.iter().any(|t| t == "-o") {
+        return tokens.to_vec();
+    }
+    let mut out: Vec<String> = tokens[..=ssh_idx].to_vec();
+    out.extend(
+        ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    out.extend(tokens[ssh_idx + 1..].iter().cloned());
+    out
+}
+
 /// Result of one `ssh <conn> <remote_cmd>` run.
 #[derive(Clone, Debug)]
 pub struct SshRunResult {
@@ -70,26 +99,11 @@ pub fn ssh_run(conn: &RemoteConnection, remote_cmd: &str, timeout_ms: u64, stdin
         return SshRunResult::err("Empty ssh command".into());
     }
     let mut cmd = Command::new(&tokens[0]);
-    cmd.args(&tokens[1..]);
-    // v1.0.9: a first connect used to hang on the interactive host-key
-    // prompt until the timeout — accept new keys automatically and
-    // bound the TCP connect. Only for an OpenSSH binary and only when
-    // the user's own command passes no `-o` options.
-    if let Some(ssh_idx) = tokens
-        .iter()
-        .position(|t| std::path::Path::new(t).file_name().and_then(|n| n.to_str()) == Some("ssh"))
-    {
-        if !tokens.iter().any(|t| t == "-o") {
-            let mut opts: Vec<String> = tokens[..=ssh_idx].to_vec();
-            opts.extend(
-                ["-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10"]
-                    .iter()
-                    .map(|s| s.to_string()),
-            );
-            opts.extend(tokens[ssh_idx + 1..].iter().cloned());
-            cmd.args(&opts[1..]);
-        }
-    }
+    // v1.0.9 + round 5 (R1): connect options on every ssh spawn (see
+    // ssh_connect_opts) — a first connect must never hang on the
+    // interactive host-key prompt.
+    let opts = ssh_connect_opts(&tokens);
+    cmd.args(&opts[1..]);
     cmd.arg(remote_cmd);
     cmd.stdin(if stdin_data.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
@@ -238,7 +252,9 @@ pub fn check_remote_status(conn: &RemoteConnection) -> RemoteStatus {
 /// uv-installed binaries are on PATH). The client then speaks JSON-RPC
 /// over the ssh pipe exactly like a local process.
 pub fn remote_argv(conn: &RemoteConnection) -> Vec<String> {
-    let mut argv = tokenize_cmd(&conn.ssh_cmd);
+    // Round 5 (R1): connect options here too — the remote slot's agent
+    // spawn goes through this argv.
+    let mut argv = ssh_connect_opts(&tokenize_cmd(&conn.ssh_cmd));
     argv.push("bash -lc \"exec vibe-app-server\"".to_string());
     argv
 }
@@ -247,7 +263,10 @@ pub fn remote_argv(conn: &RemoteConnection) -> Vec<String> {
 /// vibe-app-server spawned over ssh (initialize -> session/list with cursor
 /// pagination, port of Nexus `listRemoteSessions`).
 pub fn list_remote_sessions(conn: &RemoteConnection) -> Vec<RemoteSessionInfo> {
-    let tokens = tokenize_cmd(&conn.ssh_cmd);
+    // Round 5 (R1): connect options on this spawn too — without them the
+    // host-key prompt hung the lister until its deadline and the sidebar
+    // showed no SSH sessions at all.
+    let tokens = ssh_connect_opts(&tokenize_cmd(&conn.ssh_cmd));
     if tokens.is_empty() {
         return Vec::new();
     }

@@ -193,7 +193,10 @@ pub fn status_str(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Object(map)) => map
-            .get("type")
+            // round 5 (R13): EffectState uses `status` (pending/running/
+            // blocked/completed/failed/cancelled); older docs used `type`
+            .get("status")
+            .or_else(|| map.get("type"))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),

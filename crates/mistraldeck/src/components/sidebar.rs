@@ -289,6 +289,9 @@ pub fn Sidebar() -> Element {
         let remote_panes = remote_panes.clone();
         let conns = remotes.clone();
         use_effect(move || {
+            // Subscribe to the snapshot too, so a config change (new/edited
+            // SSH connection) reloads the panes (round 5, R1).
+            let _rev = state.read().snapshot.sessions.len();
             for conn in &conns {
                 let loaded = remote_panes
                     .read()
@@ -1110,30 +1113,26 @@ fn remote_conn_el(
                         let mut c = collapsed.write();
                         if c.contains(&key) {
                             c.retain(|k| k != &key);
-                            let loaded = remote_panes
-                                .read()
-                                .get(&conn_id)
-                                .map(|p| p.loaded)
-                                .unwrap_or(false);
                             drop(c);
-                            if !loaded {
-                                let state = state.clone();
-                                let mut remote_panes = remote_panes.clone();
-                                let cid = conn_id.clone();
-                                spawn(async move {
-                                    let tok = token(&state);
-                                    let status = crate::api::api_check_remote_status(tok.clone(), cid.clone())
-                                        .await
-                                        .unwrap_or_default();
-                                    let sessions = crate::api::api_remote_sessions(tok, cid.clone())
-                                        .await
-                                        .unwrap_or_default();
-                                    remote_panes.write().insert(
-                                        cid,
-                                        RemotePane { status: Some(status), sessions, loaded: true },
-                                    );
-                                });
-                            }
+                            // Expanding always re-lists the remote sessions
+                            // (round 5, R1): the list must be fresh, not only
+                            // on first load.
+                            let state = state.clone();
+                            let mut remote_panes = remote_panes.clone();
+                            let cid = conn_id.clone();
+                            spawn(async move {
+                                let tok = token(&state);
+                                let status = crate::api::api_check_remote_status(tok.clone(), cid.clone())
+                                    .await
+                                    .unwrap_or_default();
+                                let sessions = crate::api::api_remote_sessions(tok, cid.clone())
+                                    .await
+                                    .unwrap_or_default();
+                                remote_panes.write().insert(
+                                    cid,
+                                    RemotePane { status: Some(status), sessions, loaded: true },
+                                );
+                            });
                         } else {
                             c.push(key);
                         }
@@ -1164,6 +1163,21 @@ fn remote_conn_el(
                 }
             }
             if !is_collapsed {
+                // Round 5 (R1): when the lister ran but the host is
+                // unreachable, say so instead of showing an empty group.
+                if pane.loaded
+                    && pane.sessions.is_empty()
+                    && mirrors.is_empty()
+                    && pane.status.as_ref().map(|s| !s.ok).unwrap_or(false)
+                {
+                    div { class: "session-empty",
+                        "{loc(&lang, \"Nie można połączyć się z hostem (sprawdź ssh)\", \"Cannot reach the host (check the ssh command)\")}"
+                    }
+                } else if pane.loaded && pane.sessions.is_empty() && mirrors.is_empty() && folder_els.is_empty() {
+                    div { class: "session-empty",
+                        "{loc(&lang, \"Brak sesji na zdalnym hoście\", \"No sessions on the remote host\")}"
+                    }
+                }
                 {folder_els.iter().cloned()}
             }
         }

@@ -553,16 +553,58 @@ fn effect_tool_name(detail: &Value) -> Option<String> {
 
 /// Build the GUI [`ToolCall`] for one `effect` history entry (shared by the
 /// live stream and the snapshot/resume grouping).
+///
+/// Wire shape (vibe/app_server/_effect_models.py, models.py): the entry's
+/// `detail` carries `{toolName, kind, display: {summary, verb, message,
+/// settledVerb, settledMessage, statusText, content, suffix}, input}` and the
+/// entry's `state` carries `{status, output, outputText/output_text,
+/// display}`. Round 5 (R13): without this mapping a resumed session rendered
+/// the raw effect JSON instead of the rich tool card.
 fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
     let id = entry
         .id
         .clone()
         .unwrap_or_else(|| entry.title.clone().unwrap_or_default());
-    let state_str = status_str(entry.state.as_ref());
-    let status = ToolStatus::normalize(&state_str);
-    let title = entry.title.clone().unwrap_or_default();
+    let status = ToolStatus::normalize(&status_str(entry.state.as_ref()));
     let detail = entry.detail.clone().unwrap_or(Value::Null);
-    let detail_json = serde_json::to_string(&detail).ok();
+    let display = detail.get("display").cloned().unwrap_or(Value::Null);
+    let str_field = |v: &Value, keys: &[&str]| -> String {
+        keys.iter()
+            .find_map(|k| v.get(*k).and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let tool_name_raw = str_field(&detail, &["toolName", "tool_name"]);
+    let tool_name = if tool_name_raw.is_empty() {
+        entry.title.clone().unwrap_or_default()
+    } else {
+        tool_name_raw
+    };
+    let kind = str_field(&detail, &["kind"]);
+    let title_raw = str_field(&display, &["summary", "message", "verb"]);
+    let title = if title_raw.is_empty() {
+        entry.title.clone().unwrap_or_default()
+    } else {
+        title_raw
+    };
+    let input_json = detail
+        .get("input")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::to_string(v).ok());
+    // output: structured `state.output` when present, else the text fields
+    let state = entry.state.clone().unwrap_or(Value::Null);
+    let output = state
+        .get("output")
+        .filter(|v| !v.is_null())
+        .and_then(|v| serde_json::to_string(v).ok())
+        .or_else(|| {
+            let t = str_field(&state, &["outputText", "output_text"]);
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        });
     let subagent = detail
         .get("childSessionId")
         .or_else(|| detail.get("child_session_id"))
@@ -587,13 +629,13 @@ fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
     ToolCall {
         id,
         title,
-        kind: "appserver-effect".into(),
+        kind: if kind.is_empty() { "appserver-effect".into() } else { kind },
         status,
-        input_json: None,
-        output: detail_json,
+        input_json,
+        output,
         file_changes: Vec::new(),
         diffs: Vec::new(),
-        tool_name: effect_tool_name(&detail).unwrap_or_default(),
+        tool_name,
         previous_content: None,
         raw_output_json: None,
         subagent,
@@ -1071,6 +1113,40 @@ mod tests {
         assert_eq!(msgs[1].tool_calls[0].tool_name, "bash");
         assert!(matches!(msgs[1].tool_calls[0].status, ToolStatus::Done));
         assert_eq!(msgs[2].content, "note");
+    }
+
+    /// Round 5 (R13): a wire `effect` entry must map to a rich ToolCall —
+    /// tool_name from detail.toolName, title from display.summary, input
+    /// from detail.input, output from state.output, status from
+    /// state.status — not the raw detail JSON (that rendered as raw JSON in
+    /// resumed sessions).
+    #[test]
+    fn effect_entry_maps_to_rich_tool_call() {
+        let entry: HistoryEntry = serde_json::from_value(json!({
+            "type": "effect",
+            "id": "e1",
+            "title": "file_system.bash",
+            "detail": {
+                "toolName": "file_system.bash",
+                "kind": "shell",
+                "display": {"summary": "ls Astrafox", "verb": "Running", "statusText": "Running command"},
+                "input": {"command": "ls Astrafox"}
+            },
+            "state": {
+                "status": "completed",
+                "output": {"stdout": "a.txt\nb.txt", "stderr": "", "output": "a.txt\nb.txt"},
+                "outputText": "a.txt\nb.txt"
+            }
+        }))
+        .unwrap();
+        let tc = effect_tool_call(&entry);
+        assert_eq!(tc.tool_name, "file_system.bash");
+        assert_eq!(tc.kind, "shell");
+        assert_eq!(tc.title, "ls Astrafox");
+        assert!(matches!(tc.status, ToolStatus::Done));
+        assert_eq!(tc.input_json.as_deref().unwrap(), "{\"command\":\"ls Astrafox\"}");
+        let out = tc.output.clone().unwrap();
+        assert!(out.contains("a.txt"), "{out}");
     }
 
     /// Round 4 (E12): the session snapshot's tokenUsage/contextUsage must

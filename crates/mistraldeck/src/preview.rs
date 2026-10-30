@@ -206,19 +206,31 @@ fn parse_docx_rels(xml: &str) -> std::collections::HashMap<String, (String, Stri
     out
 }
 
+/// Heading level from a paragraph style id/name. Round 5 (R4): Word style
+/// ids are not always "Heading1" — localized builds use "Nagłówek 1",
+/// "Überschrift 1" etc., and some docs use "Heading 1" with a space, so
+/// normalize away everything but letters+digits and match known prefixes.
 fn heading_level(style: &str) -> Option<u32> {
     let s = style.trim();
-    if s.eq_ignore_ascii_case("title") {
+    if s.eq_ignore_ascii_case("title") || s.eq_ignore_ascii_case("tytuł") || s.eq_ignore_ascii_case("título") {
         return Some(1);
     }
-    let lower = s.to_ascii_lowercase();
-    let rest = lower.strip_prefix("heading")?;
-    let n: u32 = rest.trim().parse().ok()?;
-    if (1..=9).contains(&n) {
-        Some(n.min(6))
-    } else {
-        None
+    let mut norm = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() {
+            norm.push(ch.to_ascii_lowercase());
+        }
     }
+    for prefix in ["heading", "nagłówek", "naglowek", "überschrift", "ueberschrift", "titre", "titolo", "encabezado", "überschrift"] {
+        if let Some(rest) = norm.strip_prefix(prefix) {
+            if let Ok(n) = rest.parse::<u32>() {
+                if (1..=9).contains(&n) {
+                    return Some(n.min(6));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// One run: rich formatting (round 4, C3: underline/color/highlight/size/
@@ -325,6 +337,7 @@ fn docx_xml_full(
 
     // paragraph state
     let mut para_style = String::new();
+    let mut para_outline: Option<u32> = None;
     let mut para_list = false;
     let mut para_num = false;
     let mut para_html = String::new();
@@ -366,7 +379,8 @@ fn docx_xml_full(
                     }
                 } else {
                     blocks += 1;
-                    let level = heading_level(&para_style);
+                    // round 5 (R4): w:outlineLvl wins over the style name
+                    let level = para_outline.or_else(|| heading_level(&para_style));
                     if let Some(level) = level {
                         heading_counter += 1;
                         // remember plain text of the heading for the TOC
@@ -417,6 +431,7 @@ fn docx_xml_full(
                 match name.as_str() {
                     "p" => {
                         para_style.clear();
+                        para_outline = None;
                         para_list = false;
                         para_num = false;
                         para_html.clear();
@@ -475,6 +490,13 @@ fn docx_xml_full(
                     "br" if in_run => run.text.push('\n'),
                     "pStyle" if in_para => {
                         para_style = attr(&e, "val").unwrap_or_default();
+                    }
+                    "outlineLvl" if in_para => {
+                        // round 5 (R4): w:outlineLvl is the reliable level
+                        // (0-based) — Word sets it on every heading style
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<u32>().ok()) {
+                            para_outline = Some((v + 1).min(6));
+                        }
                     }
                     "numPr" if in_para => {
                         para_list = true;
@@ -624,6 +646,11 @@ fn docx_xml_full(
                     }
                     "pStyle" if in_para => {
                         para_style = attr(&e, "val").unwrap_or_default();
+                    }
+                    "outlineLvl" if in_para => {
+                        if let Some(v) = attr(&e, "val").and_then(|v| v.parse::<u32>().ok()) {
+                            para_outline = Some((v + 1).min(6));
+                        }
                     }
                     "numPr" if in_para => {
                         para_list = true;
@@ -1177,9 +1204,10 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
     let mut workbook =
         calamine::open_workbook_auto(path).map_err(|e| format!("workbook: {e}"))?;
     let names = workbook.sheet_names().to_vec();
-    // Round 4 (C4): workbook cell styles (xl/styles.xml) so the preview
-    // keeps bold/italic/colors/fills instead of a plain table.
-    let style_css: Vec<String> = xlsx_style_table(path).unwrap_or_default();
+    // Round 4 (C4) + round 5 (R6): workbook cell styles (xl/styles.xml +
+    // theme palette) so the preview keeps bold/italic/colors/fills AND
+    // number formats instead of a plain table.
+    let style_table: Vec<XlsxStyle> = xlsx_style_table(path).unwrap_or_default();
     let mut out: Vec<SheetData> = Vec::new();
     for name in names {
         if out.len() >= SHEET_MAX {
@@ -1189,17 +1217,29 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
             Ok(r) => r,
             Err(_) => continue,
         };
+        let idx_map = xlsx_sheet_style_index(path, &name).unwrap_or_default();
         let rows: Vec<Vec<String>> = range
             .rows()
             .take(SHEET_MAX_ROWS)
-            .map(|row| {
+            .enumerate()
+            .map(|(r, row)| {
                 row.iter()
                     .take(SHEET_MAX_COLS)
-                    .map(cell_string)
+                    .enumerate()
+                    .map(|(c, data)| {
+                        let numfmt = idx_map
+                            .get(r)
+                            .and_then(|rr| rr.get(c))
+                            .copied()
+                            .flatten()
+                            .and_then(|i| style_table.get(i))
+                            .map(|st| st.numfmt.as_str())
+                            .unwrap_or("");
+                        format_cell(data, numfmt)
+                    })
                     .collect()
             })
             .collect();
-        let idx_map = xlsx_sheet_style_index(path, &name).unwrap_or_default();
         let styles: Vec<Vec<Option<String>>> = rows
             .iter()
             .enumerate()
@@ -1212,7 +1252,8 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
                             .and_then(|rr| rr.get(c))
                             .copied()
                             .flatten()
-                            .and_then(|i| style_css.get(i).cloned())
+                            .and_then(|i| style_table.get(i))
+                            .map(|st| st.css.clone())
                     })
                     .collect()
             })
@@ -1225,27 +1266,141 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
     Ok(out)
 }
 
+/// One cellXfs entry: inline CSS + the number-format code (for display).
+struct XlsxStyle {
+    css: String,
+    numfmt: String,
+}
+
+/// Apply a number-format code to a calamine value (round 5, R6): percent,
+/// fixed decimals, thousands separator, currency prefix/suffix. Date
+/// formats are left to calamine (it already converts them to DateTime).
+fn format_cell(data: &calamine::Data, numfmt: &str) -> String {
+    let f = match data {
+        calamine::Data::Float(f) => Some(*f),
+        calamine::Data::Int(i) => Some(*i as f64),
+        _ => None,
+    };
+    let Some(v) = f else {
+        return cell_string(data);
+    };
+    let code = numfmt.trim_matches('"').to_string();
+    if code.is_empty() || code.eq_ignore_ascii_case("general") {
+        return cell_string(data);
+    }
+    // builtin ids
+    let code = match code.as_str() {
+        "9" => "0%".to_string(),
+        "10" => "0.00%".to_string(),
+        "1" => "0".to_string(),
+        "2" => "0.00".to_string(),
+        "3" => "#,##0".to_string(),
+        "4" => "#,##0.00".to_string(),
+        "11" => "0.00E+00".to_string(),
+        "37" => "#,##0;-#,##0".to_string(),
+        "39" => "#,##0.00;-#,##0.00".to_string(),
+        "44" | "42" | "43" => code,
+        other => other.to_string(),
+    };
+    let is_pct = code.contains('%');
+    let has_thousands = code.contains("#,##0");
+    // decimal places from the pattern after '.'
+    let decimals = code
+        .split('.')
+        .nth(1)
+        .and_then(|frac| {
+            let digits: String = frac.chars().take_while(|c| *c == '0' || *c == '#').collect();
+            if digits.is_empty() { None } else { Some(digits.chars().filter(|c| *c == '0').count()) }
+        })
+        .unwrap_or(if has_thousands || code.contains("0.") { 2 } else { 0 });
+    let val = if is_pct { v * 100.0 } else { v };
+    let mut num = if decimals > 0 {
+        format!("{:.*}", decimals, val)
+    } else {
+        format!("{:.0}", val)
+    };
+    if has_thousands {
+        // insert thousand separators into the integer part
+        let (int_part, frac_part) = match num.split_once('.') {
+            Some((i, f)) => (i.to_string(), format!(".{f}")),
+            None => (num.clone(), String::new()),
+        };
+        let neg = int_part.starts_with('-');
+        let digits = int_part.trim_start_matches('-');
+        let mut grouped = String::new();
+        for (i, ch) in digits.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                grouped.push(',');
+            }
+            grouped.push(ch);
+        }
+        let grouped: String = grouped.chars().rev().collect();
+        num = format!("{}{}{}", if neg { "-" } else { "" }, grouped, frac_part);
+    }
+    // currency / literal prefix-suffix from the code (strip quoted literals)
+    let prefix: String = code.chars().take_while(|c| !c.is_ascii_digit() && *c != '0' && *c != '#' && *c != '.' && *c != '%' && *c != ',').collect::<String>()
+        .trim_matches(|c: char| c == '"' || c == '\\' || c == ' ')
+        .to_string();
+    let suffix = if is_pct { "%" } else { "" };
+    let prefix = prefix.replace('"', "");
+    // round 5 (R6): numeric patterns (decimals/thousands/percent/currency)
+    // always format the value — not only when a literal prefix exists
+    if is_pct || has_thousands || decimals > 0 || !prefix.is_empty() {
+        return format!("{}{}{}", prefix, num, suffix);
+    }
+    cell_string(data)
+}
+
 // ---------------------------------------------------------------------------
 // XLSX styles (xl/styles.xml + per-cell `s` attribute) — round 4 (C4)
 // ---------------------------------------------------------------------------
 
-/// `cellXfs` index → inline CSS (font weight/style/color/size, fill).
-fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
+/// `cellXfs` index → style (inline CSS + number format). Round 5 (R6):
+/// theme colors (xl/theme/theme1.xml), indexed colors and tint are
+/// resolved, so formatted tables keep their real background/font colors.
+fn xlsx_style_table(path: &Path) -> Option<Vec<XlsxStyle>> {
     let xml = read_zip_entry(path, "xl/styles.xml").ok()?;
     let xml = String::from_utf8_lossy(&xml).into_owned();
+    let theme = xlsx_theme_palette(path).unwrap_or_default();
+    let mut indexed: Vec<String> = xlsx_indexed_colors().into_iter().map(|c| c).collect();
     let mut reader = XmlReader::from_str(&xml);
     let mut buf = Vec::new();
 
     let mut numfmts: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
     let mut fonts: Vec<(bool, bool, String, f64)> = Vec::new(); // (bold, italic, color, size)
     let mut fills: Vec<String> = Vec::new(); // css background-color
-    let mut cellxfs: Vec<String> = Vec::new();
+    let mut cellxfs: Vec<XlsxStyle> = Vec::new();
 
     let mut section = String::new();
     let mut cur_font = (false, false, String::new(), 11.0);
     let mut cur_fill = String::new();
     let mut in_font = false;
     let mut in_fill = false;
+    let mut in_indexed = false;
+
+    // resolve a color element's rgb/theme/indexed/tint into a css color
+    fn resolve_color(e: &BytesStart, theme: &[String], indexed: &[String]) -> String {
+        let rgb = attr(e, "rgb");
+        let theme_i = attr(e, "theme").and_then(|v| v.parse::<usize>().ok());
+        let indexed_i = attr(e, "indexed").and_then(|v| v.parse::<usize>().ok());
+        let tint = attr(e, "tint").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        let base = if let Some(rgb) = rgb {
+            xlsx_color(&rgb)
+        } else if let Some(t) = theme_i {
+            // OOXML theme attr: 0/1 are swapped dk1/lt1, then the rest in order
+            let idx = match t {
+                0 => 1,
+                1 => 0,
+                n => n,
+            };
+            theme.get(idx).cloned().unwrap_or_default()
+        } else if let Some(i) = indexed_i {
+            indexed.get(i).cloned().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        apply_tint(&base, tint)
+    }
 
     loop {
         buf.clear();
@@ -1278,8 +1433,9 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                         }
                     }
                     "color" if in_font => {
-                        if let Some(rgb) = attr(&e, "rgb") {
-                            cur_font.2 = xlsx_color(&rgb);
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            cur_font.2 = c;
                         }
                     }
                     "fills" => section = "fills".into(),
@@ -1288,15 +1444,32 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                         cur_fill = String::new();
                     }
                     "fgColor" if in_fill => {
-                        if let Some(rgb) = attr(&e, "rgb") {
-                            cur_fill = xlsx_color(&rgb);
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            cur_fill = c;
+                        }
+                    }
+                    "indexedColors" => {
+                        in_indexed = true;
+                        section = "indexed".into();
+                    }
+                    "indexedColor" if in_indexed => {
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            indexed.push(c);
                         }
                     }
                     "cellXfs" => section = "cellxfs".into(),
                     "xf" if section == "cellxfs" => {
                         let font_id = attr(&e, "fontId").and_then(|v| v.parse::<usize>().ok());
                         let fill_id = attr(&e, "fillId").and_then(|v| v.parse::<usize>().ok());
-                        let numfmt_id = attr(&e, "numFmtId").and_then(|v| v.parse::<u32>().ok());
+                        let numfmt_id = attr(&e, "numFmtId")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(0);
+                        let numfmt = numfmts
+                            .get(&numfmt_id)
+                            .cloned()
+                            .unwrap_or_else(|| builtin_numfmt(numfmt_id));
                         let mut css = String::new();
                         if let Some(f) = font_id.and_then(|i| fonts.get(i)) {
                             if f.0 {
@@ -1317,8 +1490,7 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                                 css.push_str(&format!("background-color:{};", fl));
                             }
                         }
-                        let _ = numfmt_id.and_then(|id| numfmts.get(&id));
-                        cellxfs.push(css);
+                        cellxfs.push(XlsxStyle { css, numfmt });
                     }
                     _ => {}
                 }
@@ -1326,6 +1498,14 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
             Ok(Event::Empty(e)) => {
                 let name = local(&e);
                 match name.as_str() {
+                    "numFmt" => {
+                        if let (Some(id), Some(code)) = (
+                            attr(&e, "numFmtId").and_then(|v| v.parse::<u32>().ok()),
+                            attr(&e, "formatCode"),
+                        ) {
+                            numfmts.insert(id, code);
+                        }
+                    }
                     "b" if in_font => cur_font.0 = true,
                     "i" if in_font => cur_font.1 = true,
                     "sz" if in_font => {
@@ -1334,18 +1514,33 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                         }
                     }
                     "color" if in_font => {
-                        if let Some(rgb) = attr(&e, "rgb") {
-                            cur_font.2 = xlsx_color(&rgb);
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            cur_font.2 = c;
                         }
                     }
                     "fgColor" if in_fill => {
-                        if let Some(rgb) = attr(&e, "rgb") {
-                            cur_fill = xlsx_color(&rgb);
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            cur_fill = c;
+                        }
+                    }
+                    "indexedColor" if in_indexed => {
+                        let c = resolve_color(&e, &theme, &indexed);
+                        if !c.is_empty() {
+                            indexed.push(c);
                         }
                     }
                     "xf" if section == "cellxfs" => {
                         let font_id = attr(&e, "fontId").and_then(|v| v.parse::<usize>().ok());
                         let fill_id = attr(&e, "fillId").and_then(|v| v.parse::<usize>().ok());
+                        let numfmt_id = attr(&e, "numFmtId")
+                            .and_then(|v| v.parse::<u32>().ok())
+                            .unwrap_or(0);
+                        let numfmt = numfmts
+                            .get(&numfmt_id)
+                            .cloned()
+                            .unwrap_or_else(|| builtin_numfmt(numfmt_id));
                         let mut css = String::new();
                         if let Some(f) = font_id.and_then(|i| fonts.get(i)) {
                             if f.0 {
@@ -1366,7 +1561,7 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                                 css.push_str(&format!("background-color:{};", fl));
                             }
                         }
-                        cellxfs.push(css);
+                        cellxfs.push(XlsxStyle { css, numfmt });
                     }
                     _ => {}
                 }
@@ -1382,6 +1577,7 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
                         fills.push(cur_fill.clone());
                         in_fill = false;
                     }
+                    "indexedColors" => in_indexed = false,
                     _ => {}
                 }
             }
@@ -1391,6 +1587,108 @@ fn xlsx_style_table(path: &Path) -> Option<Vec<String>> {
         }
     }
     Some(cellxfs)
+}
+
+/// Builtin number-format ids → format code.
+fn builtin_numfmt(id: u32) -> String {
+    match id {
+        1 => "0".into(),
+        2 => "0.00".into(),
+        3 => "#,##0".into(),
+        4 => "#,##0.00".into(),
+        9 => "0%".into(),
+        10 => "0.00%".into(),
+        11 => "0.00E+00".into(),
+        14 => "m/d/yyyy".into(),
+        37 => "#,##0;-#,##0".into(),
+        38 => "#,##0;[Red]-#,##0".into(),
+        39 => "#,##0.00;-#,##0.00".into(),
+        40 => "#,##0.00;[Red]-#,##0.00".into(),
+        44 => "$#,##0.00".into(),
+        49 => "@".into(),
+        _ => String::new(),
+    }
+}
+
+/// The standard indexed color palette (styles.xml `indexedColors` default).
+fn xlsx_indexed_colors() -> Vec<String> {
+    let raw = [
+        "FF000000", "FFFFFFFF", "FFFF0000", "FF00FF00", "FF0000FF", "FFFFFF00", "FFFF00FF",
+        "FF00FFFF", "FF000000", "FFFFFFFF", "FFFF0000", "FF00FF00", "FF0000FF", "FFFFFF00",
+        "FFFF00FF", "FF00FFFF", "FF800000", "FF008000", "FF000080", "FF808000", "FF800080",
+        "FF008080", "FFC0C0C0", "FF808080", "FF9999FF", "FF993366", "FFFFFFCC", "FFCCFFFF",
+        "FF660066", "FFFF8080", "FF0066CC", "FFCCCCFF", "FF000080", "FFFF00FF", "FFFFFF00",
+        "FF00FFFF", "FF800080", "FF800000", "FF008080", "FF0000FF", "FF00CCFF", "FFCCFFFF",
+        "FFCCFFCC", "FFFFFF99", "FF99CCFF", "FFFF99CC", "FFCC99FF", "FFFFCC99", "FF3366FF",
+        "FF33CCCC", "FF99CC00", "FFFFCC00", "FFFF9900", "FFFF6600", "FF666699", "FF969696",
+        "FF003366", "FF339966", "FF003300", "FF333300", "FF993300", "FF993366", "FF333399",
+        "FF333333",
+    ];
+    raw.iter().map(|c| xlsx_color(c)).collect()
+}
+
+/// `xl/theme/theme1.xml` clrScheme → css colors in theme-index order.
+fn xlsx_theme_palette(path: &Path) -> Option<Vec<String>> {
+    let xml = read_zip_entry(path, "xl/theme/theme1.xml").ok()?;
+    let xml = String::from_utf8_lossy(&xml).into_owned();
+    let mut out: Vec<String> = Vec::new();
+    let mut reader = XmlReader::from_str(&xml);
+    let mut buf = Vec::new();
+    let mut in_scheme = false;
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let name = local(&e);
+                if name == "clrScheme" {
+                    in_scheme = true;
+                } else if in_scheme && name.ends_with("Clr") {
+                    // dk1, lt1, dk2, lt2, accent1..6, hlink, folHlink
+                    if let Some(srgb) = attr(&e, "srgbClr").or_else(|| attr(&e, "val")) {
+                        // sysClr has val="windowText" etc — map the two system ones
+                        if srgb.starts_with("FF") || srgb.len() == 6 {
+                            out.push(xlsx_color(&srgb));
+                        } else if let Some(sys) = attr(&e, "lastClr") {
+                            out.push(xlsx_color(&sys));
+                        }
+                    } else if let Some(last) = attr(&e, "lastClr") {
+                        out.push(xlsx_color(&last));
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                if local_end(&e) == "clrScheme" {
+                    in_scheme = false;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Apply an OOXML tint to a #RRGGBB color (tint>0 lightens, <0 darkens).
+fn apply_tint(hex: &str, tint: f64) -> String {
+    if tint == 0.0 || hex.len() != 7 {
+        return hex.to_string();
+    }
+    let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0);
+    let apply = |c: u8| -> u8 {
+        if tint > 0.0 {
+            (c as f64 + (255.0 - c as f64) * tint).round() as u8
+        } else {
+            (c as f64 * (1.0 + tint)).round() as u8
+        }
+    };
+    format!("#{:02X}{:02X}{:02X}", apply(r), apply(g), apply(b))
 }
 
 /// `FFRRGGBB`/`RRGGBB` ARGB → `#RRGGBB` css color.

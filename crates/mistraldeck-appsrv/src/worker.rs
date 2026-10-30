@@ -423,6 +423,10 @@ impl Worker {
                 if name.trim().is_empty() {
                     name = s.preview.unwrap_or_default();
                 }
+                if name.trim().is_empty() {
+                    // round 5 (R2): last fallback — the on-disk index preview
+                    name = mistraldeck_vibe::stats::index_preview(&s.id).unwrap_or_default();
+                }
                 if name.len() > 80 {
                     name = format!("{}…", &name[..name.len().min(80)]);
                 }

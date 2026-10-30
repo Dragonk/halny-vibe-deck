@@ -1325,6 +1325,24 @@ fn FilePreviewTab(
     let active_sheet = use_signal(|| 0usize);
     // Round 4 (C5): one-shot kick when the tab was opened via "Edit".
     let mut edit_kick = use_signal(|| false);
+    // Round 5 (R3): word-wrap toggle in the editor, persisted per install.
+    let mut wrap = use_signal(|| false);
+    {
+        let mut w = wrap.clone();
+        spawn(async move {
+            #[cfg(any(feature = "web", feature = "desktop"))]
+            {
+                if let Ok(v) = dioxus::document::eval(
+                    "return (localStorage.getItem('vdEditorWrap') || '0');",
+                )
+                .join::<String>()
+                .await
+                {
+                    w.set(v == "1");
+                }
+            }
+        });
+    }
 
     let is_editing = *editing.read();
     let is_saving = *saving.read();
@@ -1351,7 +1369,7 @@ fn FilePreviewTab(
             let inner: Element = if is_editing_c {
                 rsx! {
                     div { class: "preview-edit",
-                        CodeEditor { code: content, id: "pv".to_string() }
+                        CodeEditor { code: content, id: "pv".to_string(), file: Some(name.clone()), wrap: Some(*wrap.read()) }
                     }
                 }
             } else {
@@ -1596,6 +1614,24 @@ fn FilePreviewTab(
                         span { class: "file-preview-path", title: "{path_lbl}", "{path_lbl}" }
                         div { class: "file-preview-actions",
                             {save_status}
+                            if is_editing_c {
+                                button {
+                                    class: if *wrap.read() { "file-preview-btn active" } else { "file-preview-btn" },
+                                    title: "{loc2(&lang, \"Zawijaj wiersze\", \"Word wrap\")}",
+                                    onclick: move |_| {
+                                        let next = !*wrap.read();
+                                        wrap.set(next);
+                                        #[cfg(any(feature = "web", feature = "desktop"))]
+                                        spawn(async move {
+                                            let _ = dioxus::document::eval(&format!(
+                                                "try{{localStorage.setItem('vdEditorWrap','{}');}}catch(e){{}}",
+                                                if next { "1" } else { "0" }
+                                            )).await;
+                                        });
+                                    },
+                                    "↵ {loc2(&lang, \"Zawijanie\", \"Wrap\")}"
+                                }
+                            }
                             {edit_btn}
                             {save_btn}
                             // Z21: download a copy (works in the browser and

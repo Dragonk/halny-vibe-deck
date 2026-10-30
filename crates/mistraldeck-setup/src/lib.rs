@@ -134,7 +134,10 @@ pub fn detect_appserver() -> Option<PathBuf> {
     if found.is_none() {
         // `uv tool dir` covers non-default uv install roots.
         if let Some(uv) = find_binary("uv") {
-            if let Ok(out) = Command::new(uv).args(["tool", "dir"]).output() {
+            // round 5 (R8): probe without flashing a console window
+            let mut uv_cmd = Command::new(uv);
+            mistraldeck_core::util::no_window(&mut uv_cmd);
+            if let Ok(out) = uv_cmd.args(["tool", "dir"]).output() {
                 let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if out.status.success() && !dir.is_empty() {
                     let exe = if cfg!(windows) {

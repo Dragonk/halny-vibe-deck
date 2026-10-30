@@ -1085,6 +1085,29 @@ pub fn index_title(session_id: &str) -> Option<String> {
     index_entry_fields(&entry).0
 }
 
+/// First user prompt of a session from `.session-index.json`
+/// (`session.preview`) — the display-name fallback when the CLI has not
+/// generated a title yet (round 5, R2: sessions must not show "untitled"
+/// on the list before being opened).
+pub fn index_preview(session_id: &str) -> Option<String> {
+    let dir = sessions_log_dir().join("unified");
+    let raw = std::fs::read_to_string(dir.join(".session-index.json")).ok()?;
+    let idx: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let entry = find_index_entry(&idx, session_id)?;
+    let sess = entry.get("session")?;
+    let p = sess
+        .get("preview")
+        .or_else(|| entry.get("preview"))
+        .and_then(|v| v.as_str())?
+        .trim()
+        .to_string();
+    if p.is_empty() {
+        None
+    } else {
+        Some(p)
+    }
+}
+
 /// Find one entry of `.session-index.json` by session id (identity block
 /// first, flat-field fallback) - shared by the disk preview and the SSH
 /// remote preview (Nexus `readSessionIndexEntry`).

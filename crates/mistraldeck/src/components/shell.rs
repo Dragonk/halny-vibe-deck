@@ -332,7 +332,7 @@ pub(crate) const MERMAID_JS: &str = r#"
       try {
         window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: theme() });
         var src = el.getAttribute('data-src') || '';
-        var id = 'vdGraph' + (el.__vdId || (el.__vdId = Math.random().to_string(36).slice(2)));
+        var id = 'vdGraph' + (el.__vdId || (el.__vdId = Math.random().toString(36).slice(2)));
         var r;
         try { r = window.mermaid.render(id, src); } catch (e) { return fail(el, e); }
         if (r && typeof r.then === 'function') {

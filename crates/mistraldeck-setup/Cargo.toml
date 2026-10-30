@@ -10,3 +10,4 @@ repository.workspace = true
 anyhow = { workspace = true }
 dirs = { workspace = true }
 serde = { workspace = true }
+mistraldeck-core = { workspace = true }

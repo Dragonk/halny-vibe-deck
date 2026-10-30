@@ -1059,7 +1059,9 @@ mod imp {
         }
         match ctx {
             GitCtx::Local(cwd) => {
-                let out = std::process::Command::new("git")
+                let mut g = std::process::Command::new("git");
+                mistraldeck_core::util::no_window(&mut g);
+                let out = g
                     .arg("-C")
                     .arg(cwd)
                     .args(args)
@@ -1379,12 +1381,8 @@ pub async fn api_open_externally(token: String, path: String) -> Result<(), Serv
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    // round 5 (R8): never flash a console window
+    mistraldeck_core::util::no_window(&mut cmd);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| ServerFnError::new(e.to_string()))
