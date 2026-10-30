@@ -13,6 +13,7 @@ All 11 reported defects fixed; root cause + fix per row in `docs/next-bugs-round
 - **Thinking blocks**: `history/entryUpdated` patch paths are entry-relative; they are now prefixed before applying to the projection, so reasoning deltas stream correctly in active sessions.
 - **Window resize**: edge/corner resize wins over the header drag region (top-left corner fixed); clicks inside a scrollbar zone no longer start a window resize (panel handles also no longer overlap scrollbars).
 - **DOCX/XLSX on real files**: heading levels resolved from `word/styles.xml` (localized style ids, basedOn chains) with a generated TOC; XLSX renders merged cells (colspan/rowspan), column widths, theme/indexed/tint colors and number formats.
+- **CI-only flaky test fixed**: the session-token signing secret is now generated once per process (`OnceLock`) and written atomically (`create_new`), so concurrent logins/tests on a fresh install can no longer mint tokens under different keys (`revoked_token_is_rejected` failed only on clean CI runners).
 
 ## 1.99.11 — user-reported defects round 5 (2026-10-29)
 

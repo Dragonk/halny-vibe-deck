@@ -24,7 +24,7 @@
 //! password hashing already uses.
 
 use sha2::{Digest, Sha256};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Sliding validity window and the absolute cap (stable: 180 d / 1 year).
 const WINDOW_SECS: u64 = 180 * 24 * 60 * 60;
@@ -110,34 +110,70 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     outer.finalize().to_vec()
 }
 
-/// Persistent signing key (`session-key` next to `config.json`), mixed with
-/// the credential hash so a password change invalidates old tokens.
-fn signing_key() -> Vec<u8> {
-    let dir = dirs::config_dir().map(|d| d.join("halny-vibe-deck"));
-    let key_path = dir.as_ref().map(|d| d.join("session-key"));
-    let stored = key_path
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let secret = match stored {
-        Some(s) => s,
-        None => {
-            let fresh = crate::config::random_hex(32);
-            if let Some(path) = &key_path {
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(path, &fresh);
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+/// Process-wide cache of the on-disk secret. Generated/read exactly once per
+/// process: without it, two threads hitting `signing_key()` on a fresh install
+/// (no `session-key` file yet) would each mint a different key and overwrite
+/// the file, invalidating tokens issued moments earlier (seen as a flaky
+/// `revoked_token_is_rejected` failure under `cargo test` on clean machines).
+static SECRET: OnceLock<String> = OnceLock::new();
+
+/// The persistent signing secret (`session-key` next to `config.json`, 0600).
+/// Created atomically with `create_new` so two concurrent processes can never
+/// clobber each other's key; the loser adopts the winner's file content.
+fn secret() -> &'static str {
+    SECRET.get_or_init(|| {
+        let dir = dirs::config_dir().map(|d| d.join("halny-vibe-deck"));
+        let key_path = dir.as_ref().map(|d| d.join("session-key"));
+        if let Some(path) = &key_path {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                let s = s.trim().to_string();
+                if !s.is_empty() {
+                    return s;
                 }
             }
-            fresh
         }
-    };
+        let fresh = crate::config::random_hex(32);
+        if let Some(path) = &key_path {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            use std::io::Write;
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut f) => {
+                    let _ = f.write_all(fresh.as_bytes());
+                    drop(f);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(
+                            path,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
+                    }
+                    return fresh;
+                }
+                Err(_) => {
+                    // Another process created the file first: adopt its key.
+                    if let Ok(s) = std::fs::read_to_string(path) {
+                        let s = s.trim().to_string();
+                        if !s.is_empty() {
+                            return s;
+                        }
+                    }
+                }
+            }
+        }
+        fresh
+    })
+}
+
+/// Effective signing key: the persistent secret mixed with the credential hash,
+/// so a password change invalidates old tokens.
+fn signing_key() -> Vec<u8> {
     // Bind the key to the current credentials: a password change rotates the
     // effective mac key, so every previously issued token stops validating.
     let cred = crate::config::EngineConfig::load()
@@ -145,7 +181,7 @@ fn signing_key() -> Vec<u8> {
         .map(|a| format!("{}{}", a.salt, a.password_hash))
         .unwrap_or_default();
     let mut h = Sha256::new();
-    h.update(secret.as_bytes());
+    h.update(secret().as_bytes());
     h.update(cred.as_bytes());
     h.finalize().to_vec()
 }
