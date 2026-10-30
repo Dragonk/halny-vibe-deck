@@ -695,6 +695,12 @@ pub struct PreviewToolCall {
     /// v0.13 subagent meta (agents.spawn / task) when the effect says so.
     #[serde(default)]
     pub subagent: Option<PreviewSubagent>,
+    /// round 11: input/output carried through so pre-resume tool cards are
+    /// not empty shells (title-only cards looked like blank gaps)
+    #[serde(default)]
+    pub input_json: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
 }
 
 /// One message of a session preview (Nexus `SubagentWorkData.messages`).
@@ -970,12 +976,30 @@ fn build_preview_messages(entries: &[serde_json::Value]) -> Vec<PreviewMessage> 
                         if success { "done" } else { "error" }
                     }
                 };
+                // round 11: carry input/output text so the resumed card shows
+                // what the tool was called with and what it returned
+                let input_json = det
+                    .and_then(|d| d.get("input"))
+                    .map(|v| v.to_string());
+                let output = state
+                    .and_then(|s| s.get("output"))
+                    .and_then(|o| {
+                        o.as_str().map(str::to_string).or_else(|| {
+                            o.get("text")
+                                .or_else(|| o.get("stdout"))
+                                .or_else(|| o.get("message"))
+                                .and_then(|x| x.as_str())
+                                .map(str::to_string)
+                        })
+                    });
                 if let Some(ai) = &mut cur_ai {
                     ai.tool_calls.push(PreviewToolCall {
                         title: title.to_string(),
                         status: status.to_string(),
                         tool_name,
                         subagent,
+                        input_json,
+                        output,
                     });
                 }
             }

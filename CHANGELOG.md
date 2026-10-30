@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.99.18 — user-reported defects round 11 (2026-10-30)
+
+Root cause + fix per row in `docs/next-bugs-round11.md`.
+
+- **Pre-resume tool calls** now carry input/output (were empty shells).
+- **Lease badge**: our own agent child PID is filtered out — "open elsewhere"
+  only for a genuinely different process.
+- **Perf/stall regression fixed**: `turn/queueUpdated`/`runtime/updated` no
+  longer force a full `session/resume` per event (round-10 resync storm made
+  streaming slow and could break a running turn).
+- **Slash picker layout fixed** (glyph left, `/name` label, kind chip right)
+  and commands with `input_hint` now offer sub-arguments (`/mcp status|login|…`).
+- **Tool-call path chips** resolve on Windows (separator + drive-case
+  normalization) — no more `os error 2` on preview open.
+- **Editor keeps a visible scrollbar** in edit mode via a custom overlay
+  scrollbar driven by the textarea (wrap parity preserved).
+- **md previews/chat**: list indentation tightened (1.5em) to match prose.
+- **DOCX**: generated TOC renders at the TOC field's position (not forced to
+  page top); mid-paragraph page breaks split in place — no more empty pages
+  between a heading and an image.
+- **Settings raw TOML**: going back to config.toml repaints the editor with
+  the freshly loaded config instead of the last opened file.
+
 ## 1.99.17 — teleport to Vibe Code Web + loops/log/worktree/artifacts admin (2026-10-30)
 
 - **`/teleport [prompt]`** — full TUI parity with the installed v3.0.4 wire:

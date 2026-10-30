@@ -3210,15 +3210,24 @@ rsx! {
                             let cfg_err = cfg_err.clone();
                             let sc = sc.clone();
                             let raw_sel3 = raw_sel.clone();
+                            let raw_toml3 = raw_toml.clone();
                             move |_| {
                                 let state = state.clone();
                                 let cfg = cfg.clone();
                                 let cfg_err = cfg_err.clone();
                                 let sc = sc.clone();
                                 let mut raw_sel3 = raw_sel3.clone();
+                                let mut raw_toml3 = raw_toml3.clone();
                                 async move {
                                     raw_sel3.set(String::new());
-                                    reload_cfg(state, cfg, cfg_err, sc).await;
+                                    reload_cfg(state, cfg.clone(), cfg_err, sc).await;
+                                    // round 11: the editor is bound to raw_toml —
+                                    // repaint it with the freshly loaded config,
+                                    // otherwise it kept showing the last opened
+                                    // agent/prompt/skill file
+                                    if let Some(d) = cfg.read().as_ref() {
+                                        raw_toml3.set(d.raw_toml.clone());
+                                    }
                                 }
                             }
                         },

@@ -4747,6 +4747,30 @@ code {
     line-height: 1.6;
     color: var(--text);
 }
+/* round 11: browser-default list padding (40px) made list items stick out
+   far right of the surrounding text — tighten to match the prose indent */
+.preview-markdown ul,
+.preview-markdown ol {
+    margin: 6px 0;
+    padding-left: 1.5em;
+}
+.preview-markdown ul ul,
+.preview-markdown ol ol,
+.preview-markdown ul ol,
+.preview-markdown ol ul {
+    margin: 2px 0;
+    padding-left: 1.3em;
+}
+.preview-markdown li { margin: 2px 0; }
+.preview-markdown li > p { margin: 2px 0; }
+.preview-markdown blockquote {
+    margin: 6px 0;
+    padding-left: 12px;
+    border-left: 3px solid var(--border);
+    color: var(--text-muted);
+}
+.preview-markdown > :first-child { margin-top: 0; }
+.preview-markdown > :last-child { margin-bottom: 0; }
 .preview-mermaid {
     display: flex;
     justify-content: center;
@@ -7663,3 +7687,21 @@ img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); bo
 .session-badge { font-size: 10px; }
 .session-badge.unseen-dot { color: var(--accent, #ff6a00); }
 .log-view { max-height: 46vh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; white-space: pre-wrap; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px; color: var(--text); }
+
+/* round 11: custom overlay scrollbar for the code editor (the textarea's
+   own scrollbar stays hidden so wrap matches the highlight layer) */
+.code-editor .ed-scrollbar { position: absolute; top: 0; right: 0; bottom: 0; width: 9px; display: none; z-index: 6; cursor: default; }
+.code-editor .ed-scrollbar-thumb { position: absolute; right: 1px; width: 6px; border-radius: 3px; background: var(--border); min-height: 24px; cursor: pointer; }
+.code-editor .ed-scrollbar-thumb:hover { background: var(--text-dim); }
+.code-editor .code-hl { padding-right: 16px; }
+.code-editor .code-ta { padding-right: 16px; }
+
+/* round 11: same list-indent fix for chat-rendered markdown */
+.markdown-content ul,
+.markdown-content ol { margin: 6px 0; padding-left: 1.5em; }
+.markdown-content ul ul,
+.markdown-content ol ol,
+.markdown-content ul ol,
+.markdown-content ol ul { margin: 2px 0; padding-left: 1.3em; }
+.markdown-content li { margin: 2px 0; }
+.markdown-content blockquote { margin: 6px 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--text-muted); }

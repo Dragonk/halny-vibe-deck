@@ -3284,8 +3284,9 @@ fn preview_to_messages(messages: &[mistraldeck_vibe::PreviewMessage]) -> Vec<Mes
                         },
                         kind: "tool".to_string(),
                         status,
-                        input_json: None,
-                        output: None,
+                        // round 11: pre-resume cards keep input/output
+                        input_json: tc.input_json.clone(),
+                        output: tc.output.clone(),
                         file_changes: Vec::new(),
                         diffs: Vec::new(),
                         tool_name: tc.tool_name.clone(),

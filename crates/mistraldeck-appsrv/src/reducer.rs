@@ -44,6 +44,9 @@ pub struct Projection {
     /// the answer can be wrapped in the wire's UserQuestionResult shape
     /// (`answers: [{question, answer, isOther}]`)
     pub callback_questions: HashMap<String, Vec<String>>,
+    /// PID of our own agent child process — a lease held by this PID is
+    /// OURS, not "another process" (the "open elsewhere" badge).
+    pub own_pid: Option<u32>,
 }
 
 impl Projection {
@@ -353,17 +356,20 @@ impl Projection {
             }
             "turn/queueUpdated" => {
                 // native queue — the GUI queues locally and drains on turn
-                // end, so just make sure the next resync picks up the
-                // authoritative queue state
+                // end. Round 11 regression: forcing a full session/resume
+                // here stormed the server on every queue update (slow
+                // streaming, busy conflicts mid-turn) — log only.
                 events.push(AgentEvent::DebugLog(
                     "app-server: turn queue updated".into(),
                 ));
-                self.resync_needed = true;
             }
             "runtime/updated" => {
-                // runtime snapshot changed (models/agents/skills/commands) —
-                // pull it so the chips and the / picker stay current
-                self.resync_needed = true;
+                // Round 11 regression: a resync per runtime/updated stormed
+                // the server the same way — the periodic snapshot already
+                // picks runtime changes up; log only.
+                events.push(AgentEvent::DebugLog(
+                    "app-server: runtime updated".into(),
+                ));
             }
             "turn/retrying" => {
                 // TUI shows a "retrying" banner from the snapshot's
@@ -397,9 +403,18 @@ impl Projection {
             }
             "session/lease/updated" | "session/lease/ended" => {
                 // wire: SessionLeaseUpdate {sessionId, leaseHolder|null};
-                // "ended" carries no holder → released
+                // "ended" carries no holder → released. A holder whose
+                // processId is OUR OWN agent child is not "elsewhere".
+                let holder_pid = params
+                    .get("leaseHolder")
+                    .and_then(|h| h.get("processId").or_else(|| h.get("process_id")))
+                    .and_then(Value::as_u64);
                 let held = method == "session/lease/updated"
-                    && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false);
+                    && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false)
+                    && match (holder_pid, self.own_pid) {
+                        (Some(hp), Some(own)) => hp != own as u64,
+                        _ => true,
+                    };
                 events.push(AgentEvent::LeaseUpdated {
                     session_id: self.session_id.clone(),
                     held_elsewhere: held,
@@ -1573,6 +1588,26 @@ mod tests {
         }));
         assert!(evs.iter().any(|e| matches!(
             e, AgentEvent::LeaseUpdated { held_elsewhere: false, .. }
+        )));
+    }
+
+    /// Round 11: a lease held by OUR OWN agent child pid is not "elsewhere".
+    #[test]
+    fn lease_own_pid_not_elsewhere() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        p.own_pid = Some(4242);
+        let evs = p.consume("session/lease/updated", &json!({
+            "eventId": 6, "sessionId": "s1", "leaseHolder": {"processId": 4242}
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e, AgentEvent::LeaseUpdated { held_elsewhere: false, .. }
+        )));
+        let evs = p.consume("session/lease/updated", &json!({
+            "eventId": 7, "sessionId": "s1", "leaseHolder": {"processId": 9999}
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e, AgentEvent::LeaseUpdated { held_elsewhere: true, .. }
         )));
     }
 

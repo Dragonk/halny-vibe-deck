@@ -168,6 +168,13 @@ impl Conn {
         Ok(())
     }
 
+    /// PID of the agent child process — used to tell OUR OWN lease apart
+    /// from another process's ("open elsewhere" badge must never light up
+    /// for ourselves).
+    pub fn child_pid(&self) -> Option<u32> {
+        Some(self.child.id())
+    }
+
     /// Non-blocking process-exit probe.
     pub fn exited(&mut self) -> Option<i32> {
         match self.child.try_wait() {

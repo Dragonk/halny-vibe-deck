@@ -120,12 +120,14 @@ fn insert_at_marker(draft: &str, path: &str, is_dir: bool) -> String {
 }
 
 /// Replace the trailing `/query` token. Commands insert `/name hint `;
-/// skills and prompts insert their whole content followed by a newline
-/// (Nexus insertSlashItem).
+/// skills and prompts insert their whole content followed by a newline;
+/// sub-options (kind "sub") insert `/cmd option ` (Nexus input hints).
 fn insert_slash_item(draft: &str, item: &SlashItem) -> String {
     let slash_pos = draft.rfind('/').unwrap_or(draft.len());
     let head = &draft[..slash_pos];
-    if item.kind == "command" {
+    if item.kind == "sub" {
+        format!("{}{} ", head, item.content)
+    } else if item.kind == "command" {
         let hint = item.hint.trim();
         if hint.is_empty() {
             format!("{}{} ", head, item.content)
@@ -136,6 +138,23 @@ fn insert_slash_item(draft: &str, item: &SlashItem) -> String {
         let nl = if item.content.ends_with('\n') { "" } else { "\n" };
         format!("{}{}{}", head, item.content, nl)
     }
+}
+
+/// If the draft is past the command name (`/mcp st…`), return
+/// (command, partial-arg) so the picker can offer the command's input
+/// hints (e.g. `status | login <alias> | logout <alias>`) like the TUI.
+fn slash_command_args(text: &str) -> Option<(String, String)> {
+    let toks: Vec<&str> = text.split_whitespace().collect();
+    let last = *toks.last()?;
+    if last.starts_with('/') || toks.len() < 2 {
+        return None;
+    }
+    let cmd = toks[toks.len() - 2];
+    let c = cmd.strip_prefix('/')?;
+    if c.is_empty() || c.contains('/') || c.contains('@') {
+        return None;
+    }
+    Some((c.to_string(), last.to_string()))
 }
 
 fn loc(lang: &str, pl: &str, en: &str) -> String {
@@ -452,7 +471,38 @@ pub fn InputBar() -> Element {
         let full = slash_items.read().clone();
         match slash_query(&d) {
             Some(q) => filter_slash(&full, &q),
-            None => full,
+            None => {
+                // round 11: command already complete (`/mcp st`) → offer the
+                // command's input-hint sub-options like the TUI does
+                match slash_command_args(&d) {
+                    Some((cmd, arg)) => {
+                        let hint = full
+                            .iter()
+                            .find(|i| i.kind == "command" && i.label == cmd)
+                            .map(|i| i.hint.clone())
+                            .unwrap_or_default();
+                        if hint.is_empty() {
+                            Vec::new()
+                        } else {
+                            let al = arg.to_lowercase();
+                            hint.split('|')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .filter(|s| al.is_empty() || s.to_lowercase().contains(&al))
+                                .map(|opt| SlashItem {
+                                    id: format!("sub:{cmd}:{opt}"),
+                                    label: opt.clone(),
+                                    kind: "sub",
+                                    content: format!("/{cmd} {opt}"),
+                                    description: String::new(),
+                                    hint: String::new(),
+                                })
+                                .collect()
+                        }
+                    }
+                    None => full,
+                }
+            }
         }
     };
     let slash_item_els: Vec<Element> = slash_filtered
@@ -469,6 +519,21 @@ pub fn InputBar() -> Element {
                 "input-picker-item"
             };
             let has_desc = !item.description.is_empty();
+            // round 11: the icon cell shows a glyph, the LABEL goes left
+            // (`.picker-item-label`), the kind chip rides right — the old
+            // markup put the raw kind ("command") left and pushed the name
+            // to the right edge
+            let icon = match item.kind {
+                "command" => "/",
+                "skill" => "⚡",
+                "sub" => "›",
+                _ => "❯",
+            };
+            let label = if item.kind == "command" || item.kind == "skill" {
+                format!("/{}", item.label)
+            } else {
+                item.label.clone()
+            };
             rsx! {
                 button {
                     class: "{item_cls}",
@@ -478,13 +543,14 @@ pub fn InputBar() -> Element {
                         draft.set(new_draft);
                         slash_open.set(false);
                     },
-                    span { class: "picker-item-icon", "{item.kind}" }
+                    span { class: "picker-item-icon", "{icon}" }
                     span { class: "picker-item-body",
-                        span { class: "picker-item-kind", "{item.label}" }
+                        span { class: "picker-item-label", "{label}" }
                         if has_desc {
                             span { class: "picker-item-desc", "{item.description}" }
                         }
                     }
+                    span { class: "picker-item-kind", "{item.kind}" }
                 }
             }
         })
@@ -1084,6 +1150,13 @@ pub fn InputBar() -> Element {
                                         slash_idx.set(0);
                                     }
                                 });
+                            } else if slash_command_args(&v).is_some() {
+                                // round 11: `/mcp ` with args started — keep the
+                                // picker open for the command's sub-hints
+                                slash_open.set(true);
+                                at_open.set(false);
+                                attach_open.set(false);
+                                slash_idx.set(0);
                             } else {
                                 at_open.set(false);
                                 slash_open.set(false);

@@ -21,12 +21,58 @@ const EDITOR_JS: &str = r#"
 (function () {
   if (window.__vdEdInit) return;
   window.__vdEdInit = true;
+  // round 11: the textarea's own scrollbar is hidden (wrap parity with the
+  // highlight layer), so a custom overlay scrollbar is driven by the
+  // textarea's scrollTop — editing keeps a visible, usable scrollbar
+  window.vdEdScrollbar = function (id) {
+    var t = document.getElementById('vd-ed-ta-' + id);
+    var sb = document.getElementById('vd-ed-sb-' + id);
+    if (!t || !sb) return;
+    var th = document.getElementById('vd-ed-sbt-' + id);
+    if (t.scrollHeight <= t.clientHeight + 2) { sb.style.display = 'none'; return; }
+    sb.style.display = 'block';
+    var h = sb.clientHeight;
+    var maxScroll = t.scrollHeight - t.clientHeight;
+    var thH = Math.max(24, Math.round(h * t.clientHeight / t.scrollHeight));
+    var top = maxScroll > 0 ? Math.round((t.scrollTop / maxScroll) * (h - thH)) : 0;
+    th.style.height = thH + 'px';
+    th.style.top = top + 'px';
+    if (!sb.__vdInit) {
+      sb.__vdInit = true;
+      var drag = null;
+      th.addEventListener('mousedown', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        drag = { y: e.clientY, top: t.scrollTop };
+        var move = function (ev) {
+          if (!drag) return;
+          var dh = sb.clientHeight - thH;
+          var dy = ev.clientY - drag.y;
+          t.scrollTop = drag.top + (dh > 0 ? (dy / dh) * maxScroll : 0);
+        };
+        var up = function () {
+          drag = null;
+          document.removeEventListener('mousemove', move);
+          document.removeEventListener('mouseup', up);
+        };
+        document.addEventListener('mousemove', move);
+        document.addEventListener('mouseup', up);
+      });
+      sb.addEventListener('mousedown', function (e) {
+        if (e.target === th) return;
+        e.preventDefault();
+        var r = sb.getBoundingClientRect();
+        var inUpper = e.clientY < r.top + top + thH / 2;
+        t.scrollTop += (inUpper ? -1 : 1) * t.clientHeight * 0.9;
+      });
+    }
+  };
   window.vdEdSync = function (id) {
     var t = document.getElementById('vd-ed-ta-' + id);
     if (!t) return;
     var h = document.getElementById('vd-ed-hl-' + id);
     var g = document.getElementById('vd-ed-gut-' + id);
     if (h) { h.scrollTop = t.scrollTop; h.scrollLeft = t.scrollLeft; }
+    if (window.vdEdScrollbar) window.vdEdScrollbar(id);
     if (!g) return;
     var wrap = t.classList.contains('wrap');
     g.classList.toggle('wrap', wrap);
@@ -126,6 +172,11 @@ pub fn CodeEditor(
         div { class: "{ed_cls}",
             div { class: "{gut_cls}", id: "vd-ed-gut-{id}", dangerous_inner_html: "{gut}" }
             pre { class: "code-hl", id: "vd-ed-hl-{id}", dangerous_inner_html: "{hl}" }
+            // round 11: custom overlay scrollbar (the textarea's own is
+            // hidden for wrap parity) — driven by vdEdSync
+            div { class: "ed-scrollbar", id: "vd-ed-sb-{id}",
+                div { class: "ed-scrollbar-thumb", id: "vd-ed-sbt-{id}" }
+            }
             textarea {
                 class: "{ta_cls}",
                 id: "vd-ed-ta-{id}",

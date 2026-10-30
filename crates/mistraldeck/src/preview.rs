@@ -496,6 +496,9 @@ fn docx_xml_full(
     // document carries a TOC field/SDT.
     let mut headings: Vec<(u32, String)> = Vec::new();
     let mut toc_marker = false;
+    // round 11: insert the generated TOC where the TOC field/SDT actually
+    // sits in the document (not forced to the top of the first page)
+    let mut toc_insert_pos: Option<usize> = None;
     let mut heading_counter = 0usize;
 
     let mut in_table = false;
@@ -504,6 +507,33 @@ fn docx_xml_full(
     let mut row_html = String::new();
 
     let mut blocks = 0usize;
+
+    // round 11: a page break in the MIDDLE of a paragraph (e.g. heading +
+    // break + image in one w:p) must split there — otherwise the image
+    // renders on the old page and an empty sheet appears between them
+    macro_rules! page_break_here {
+        () => {
+            if page_break_pending {
+                if in_para && !in_cell && !para_html.is_empty() {
+                    if list_open {
+                        out.push_str(if list_num { "</ol>" } else { "</ul>" });
+                        list_open = false;
+                    }
+                    out.push_str(&format!("<p style=\"{para_css}\">{para_html}</p>"));
+                    out.push_str("</div>");
+                    last_page_open = out.len();
+                    out.push_str(&page_open_tag);
+                    para_html.clear();
+                    para_css.clear();
+                    page_break_pending = false;
+                } else if in_para && !in_cell {
+                    // break-only paragraph: close the page after it
+                } else {
+                    // inside a table cell: defer to the next flush_para
+                }
+            }
+        };
+    }
 
     macro_rules! flush_para {
         () => {
@@ -733,6 +763,7 @@ fn docx_xml_full(
                         if let Some(v) = attr(&e, "val") {
                             if is_toc_gallery(&v) {
                                 toc_marker = true;
+                                if toc_insert_pos.is_none() { toc_insert_pos = Some(out.len()); }
                             }
                         }
                     }
@@ -744,6 +775,7 @@ fn docx_xml_full(
                         if let Some(v) = attr(&e, "instr") {
                             if v.contains("TOC") {
                                 toc_marker = true;
+                                if toc_insert_pos.is_none() { toc_insert_pos = Some(out.len()); }
                             }
                         }
                     }
@@ -777,12 +809,14 @@ fn docx_xml_full(
                         // round 7 (R5): explicit page break starts a new sheet
                         if attr(&e, "type").as_deref() == Some("page") {
                             page_break_pending = true;
+                            page_break_here!();
                         }
                         run.text.push('\n');
                     }
                     "lastRenderedPageBreak" if in_run => {
                         // Word's soft page break marker — render as a page too
                         page_break_pending = true;
+                        page_break_here!();
                     }
                     "tab" if in_run => run.text.push('\t'),
                     "b" if in_run => {
@@ -868,6 +902,7 @@ fn docx_xml_full(
                         if let Some(v) = attr(&e, "val") {
                             if is_toc_gallery(&v) {
                                 toc_marker = true;
+                                if toc_insert_pos.is_none() { toc_insert_pos = Some(out.len()); }
                             }
                         }
                     }
@@ -875,6 +910,7 @@ fn docx_xml_full(
                         if let Some(v) = attr(&e, "instr") {
                             if v.contains("TOC") {
                                 toc_marker = true;
+                                if toc_insert_pos.is_none() { toc_insert_pos = Some(out.len()); }
                             }
                         }
                     }
@@ -888,6 +924,7 @@ fn docx_xml_full(
                     let instr = t.xml10_content();
                     if instr.contains("TOC") {
                         toc_marker = true;
+                        if toc_insert_pos.is_none() { toc_insert_pos = Some(out.len()); }
                     }
                 }
             }
@@ -985,7 +1022,8 @@ fn docx_xml_full(
             last_level = lvl;
         }
         toc.push_str("</ul></div>");
-        out.insert_str(first_page_start, &toc);
+        let at = toc_insert_pos.unwrap_or(first_page_start);
+        out.insert_str(at, &toc);
     }
     out
 }
@@ -2365,6 +2403,40 @@ mod tests {
 </w:body>";
         let html = docx_xml(xml);
         assert!(html.contains("doc-toc"), "{html}");
+    }
+
+    #[test]
+    fn docx_mid_paragraph_page_break_splits_in_place() {
+        // round 11: heading + page break + image in ONE paragraph must not
+        // leave an empty sheet between them
+        let xml = "<w:body>\
+<w:p><w:r><w:t>Heading</w:t></w:r>\
+<w:r><w:br w:type=\"page\"/></w:r>\
+<w:r><w:t>after break</w:t></w:r></w:p>\
+</w:body>";
+        let html = docx_xml(xml);
+        assert_eq!(html.matches("class=\"doc-page\"").count(), 2, "{html}");
+        // the text after the break lands on the SECOND page, not before it
+        let second = html.rsplit("class=\"doc-page\"").next().unwrap();
+        assert!(second.contains("after break"), "{html}");
+        assert!(!second.contains("Heading"), "{html}");
+    }
+
+    #[test]
+    fn docx_toc_inserted_at_field_position() {
+        // round 11: the generated TOC goes where the TOC field sits, not
+        // forced to the very top
+        let xml = "<w:body>\
+<w:p><w:r><w:t>Cover page</w:t></w:r></w:p>\
+<w:sdt><w:sdtPr><w:docPartGallery w:val=\"Table of Contents\"/></w:sdtPr></w:sdt>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>A</w:t></w:r></w:p>\
+<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>B</w:t></w:r></w:p>\
+</w:body>";
+        let html = docx_xml(xml);
+        assert!(html.contains("doc-toc"), "{html}");
+        let cover = html.find("Cover page").unwrap();
+        let toc = html.find("doc-toc").unwrap();
+        assert!(cover < toc, "TOC must come after the cover paragraph: {html}");
     }
 
     #[test]

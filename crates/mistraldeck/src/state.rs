@@ -1027,14 +1027,28 @@ pub async fn open_path(mut state: Signal<ClientState>, raw: &str) {
     }
     // Dock paths are working-directory relative (file rows, breadcrumbs,
     // preview-tab dedupe); absolute paths stay only outside the root.
+    // round 11: normalize separators + drive-letter case before comparing —
+    // a tool-call path like `C:\…\proj/README.md` against cwd `C:/…/proj`
+    // used to fail the strip, leak an absolute path into the confined read
+    // and end as os error 2.
     if !cwd.is_empty() {
         let base = cwd.trim_end_matches(['/', '\\']);
-        if path == cwd {
+        let base_n = base.replace('\\', "/");
+        let path_n = path.replace('\\', "/");
+        let ci = cfg!(windows);
+        let eq = if ci { path_n.eq_ignore_ascii_case(&base_n) } else { path_n == base_n };
+        let strip = if ci {
+            path_n.len() > base_n.len()
+                && path_n[..base_n.len() + 1].eq_ignore_ascii_case(&format!("{base_n}/"))
+        } else {
+            path_n.starts_with(&format!("{base_n}/"))
+        };
+        if eq {
             path = String::new();
-        } else if let Some(rest) = path.strip_prefix(&format!("{base}/")) {
-            path = rest.to_string();
-        } else if let Some(rest) = path.strip_prefix(&format!("{base}\\")) {
-            path = rest.to_string();
+        } else if strip {
+            // dock paths are '/'-relative — take the rest from the
+            // normalized form so mixed separators can't leak through
+            path = path_n[base_n.len() + 1..].to_string();
         }
     }
     // A successful listing means the path is a directory inside the root

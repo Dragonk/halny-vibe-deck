@@ -509,10 +509,21 @@ impl Worker {
                     Ok(res) => {
                         if let Some(held) = res.get("held").and_then(Value::as_array) {
                             for h in held {
+                                let holder_pid = h
+                                    .get("leaseHolder")
+                                    .and_then(|l| {
+                                        l.get("processId").or_else(|| l.get("process_id"))
+                                    })
+                                    .and_then(Value::as_u64);
+                                // our own child holding the lease is not "elsewhere"
                                 let other = h
                                     .get("leaseHolder")
                                     .map(|l| !l.is_null())
-                                    .unwrap_or(false);
+                                    .unwrap_or(false)
+                                    && match (holder_pid, self.proj.own_pid) {
+                                        (Some(hp), Some(own)) => hp != own as u64,
+                                        _ => true,
+                                    };
                                 self.emit(AgentEvent::LeaseUpdated {
                                     session_id: session_id.clone(),
                                     held_elsewhere: other,
@@ -546,6 +557,7 @@ impl Worker {
         self.last_argv = argv.clone();
         match Conn::spawn(&argv) {
             Ok(conn) => {
+                self.proj.own_pid = conn.child_pid();
                 self.inbox = conn.inbox.clone();
                 self.conn = Some(conn);
             }
