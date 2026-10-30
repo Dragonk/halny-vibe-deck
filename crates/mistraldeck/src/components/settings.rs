@@ -2906,7 +2906,8 @@ pub fn SettingsView() -> Element {
                     div { class: "field-hint", "{loc(&lang, \"ask = pyta przed użyciem, allow = zawsze pozwól, deny = blokuj.\", \"ask = confirm before use, allow = always run, deny = block.\")}" }
                     {err_el}
                   }
-                  div { class: "tools-list-panel",
+                  div {
+                    class: if *tools_list_collapsed.read() { "tools-list-panel collapsed" } else { "tools-list-panel" },
                     div { class: "settings-section-header",
                         h3 { class: "settings-section-title", "{tr(&lang, \"availableTools\")}" }
                         button {
@@ -4401,6 +4402,18 @@ fn skills_panel(
     let files = skill_files.read().clone();
     let cur_path = skill_path.read().clone();
 
+    // Round 6 (R4): the system file picker reader — installed once.
+    #[cfg(any(feature = "web", feature = "desktop"))]
+    {
+        let mut pick_init = use_signal(|| false);
+        if !*pick_init.read() {
+            pick_init.set(true);
+            spawn(async move {
+                let _ = dioxus::document::eval(SKILL_PICK_JS).await;
+            });
+        }
+    }
+
     let open_skill = {
         let state = state.clone();
         let sc = sc.clone();
@@ -4512,7 +4525,11 @@ fn skills_panel(
 
     rsx! {
         div { class: "settings-section",
-            div { class: "settings-section-header",
+            // Round 6 (R4): ONE header row — title, name+Create, import
+            // folder, import .zip, open folder — so nothing wastes vertical
+            // space; imports use the system file picker (hidden inputs),
+            // not a typed path.
+            div { class: "settings-section-header skills-header",
                 div { class: "settings-section-title", "{tr(&lang, \"skills\")}" }
                 div { class: "config-item-header-row",
                     input {
@@ -4567,154 +4584,132 @@ fn skills_panel(
                         },
                         "{loc(&lang, \"Utwórz\", \"Create\")}"
                     }
-                }
-            }
-            // import row: a path on this host (folder or .zip)
-            div { class: "field-row",
-                input {
-                    class: "field-input",
-                    r#type: "text",
-                    style: "flex:1;font-family:monospace;font-size:12px;",
-                    placeholder: "{loc(&lang, \"Ścieżka do folderu lub pliku .zip\", \"Path to a folder or .zip\")}",
-                    value: "{skill_import.read()}",
-                    oninput: move |e| skill_import.set(e.value()),
-                }
-                button {
-                    class: "field-btn",
-                    onclick: {
-                        let state = state.clone();
-                        let sc = sc.clone();
-                        move |_| {
-                            let src = skill_import.read().trim().to_string();
-                            if src.is_empty() {
-                                return;
-                            }
-                            let state = state.clone();
-                            let sc = sc.clone();
-                            let mut skills = skills;
+                    button {
+                        class: "field-btn",
+                        title: "{loc(&lang, \"Wybierz folder umiejętności w oknie systemowym\", \"Pick a skill folder in the system dialog\")}",
+                        onclick: move |_| {
+                            #[cfg(any(feature = "web", feature = "desktop"))]
                             spawn(async move {
-                                // Round 4 (A4): pick the importer by extension —
-                                // a .zip path must go to the zip importer.
-                                let is_zip = src.to_lowercase().ends_with(".zip");
-                                let res = if is_zip {
-                                    crate::vibeconfig::api_import_skill_zip(
-                                        token(&state),
-                                        sc.scope.clone(),
-                                        sc.cwd.clone(),
-                                        sc.conn.clone(),
-                                        src,
-                                        String::new(),
-                                    )
-                                    .await
-                                    .map(|n| n)
-                                } else {
-                                    crate::vibeconfig::api_import_skill_folder(
-                                        token(&state),
-                                        sc.scope.clone(),
-                                        sc.cwd.clone(),
-                                        sc.conn.clone(),
-                                        src,
-                                        String::new(),
-                                    )
-                                    .await
-                                };
-                                match res {
-                                    Ok(name) => {
-                                        skill_msg.set(format!("✅ {name}"));
-                                        skill_import.set(String::new());
-                                        if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
-                                            token(&state),
-                                            sc.scope.clone(),
-                                            sc.cwd.clone(),
-                                            sc.conn.clone(),
-                                            "skills".to_string(),
-                                        )
-                                        .await
-                                        {
-                                            skills.set(list);
-                                        }
-                                    }
-                                    Err(e) => skill_msg.set(format!("❌ {e}")),
-                                }
+                                let _ = dioxus::document::eval("var i=document.getElementById('vd-skill-dir-input'); if(i){i.value=''; i.click();}").await;
                             });
                         }
                     },
                     "{loc(&lang, \"Importuj folder\", \"Import folder\")}"
-                }
-                button {
-                    class: "field-btn",
-                    onclick: {
-                        let state = state.clone();
-                        let sc = sc.clone();
-                        move |_| {
-                            let src = skill_import.read().trim().to_string();
-                            if src.is_empty() {
-                                return;
-                            }
-                            let state = state.clone();
-                            let sc = sc.clone();
-                            let mut skills = skills;
+                    button {
+                        class: "field-btn",
+                        title: "{loc(&lang, \"Wybierz plik .zip w oknie systemowym\", \"Pick a .zip file in the system dialog\")}",
+                        onclick: move |_| {
+                            #[cfg(any(feature = "web", feature = "desktop"))]
                             spawn(async move {
-                                let res = crate::vibeconfig::api_import_skill_zip(
-                                    token(&state),
-                                    sc.scope.clone(),
-                                    sc.cwd.clone(),
-                                    sc.conn.clone(),
-                                    src,
-                                    String::new(),
-                                ).await.map(|n| n);
-                                match res {
-                                    Ok(name) => {
-                                        skill_msg.set(format!("✅ {name}"));
-                                        skill_import.set(String::new());
-                                        if let Ok(list) = crate::vibeconfig::api_list_vibe_files(
-                                            token(&state),
-                                            sc.scope.clone(),
-                                            sc.cwd.clone(),
-                                            sc.conn.clone(),
-                                            "skills".to_string(),
-                                        ).await {
-                                            skills.set(list);
-                                        }
-                                    }
-                                    Err(e) => skill_msg.set(format!("❌ {e}")),
-                                }
+                                let _ = dioxus::document::eval("var i=document.getElementById('vd-skill-zip-input'); if(i){i.value=''; i.click();}").await;
                             });
                         }
                     },
                     "{loc(&lang, \"Importuj .zip\", \"Import .zip\")}"
-                }
-                button {
-                    class: "field-btn",
-                    onclick: {
-                        let state = state.clone();
-                        let sc = sc.clone();
-                        move |_| {
+                    button {
+                        class: "field-btn",
+                        onclick: {
                             let state = state.clone();
                             let sc = sc.clone();
-                            spawn(async move {
-                                match crate::vibeconfig::api_skills_dir(
-                                    token(&state),
-                                    sc.scope.clone(),
-                                    sc.cwd.clone(),
-                                    sc.conn.clone(),
-                                )
-                                .await
-                                {
-                                    Ok(dir) => {
-                                        let _ = crate::fsgit::api_open_externally(
-                                            token(&state),
-                                            dir,
-                                        )
-                                        .await;
+                            move |_| {
+                                let state = state.clone();
+                                let sc = sc.clone();
+                                spawn(async move {
+                                    match crate::vibeconfig::api_skills_dir(
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                    ).await {
+                                        Ok(dir) => {
+                                            let _ = crate::fsgit::api_open_externally(token(&state), dir).await;
+                                        }
+                                        Err(e) => skill_msg.set(e.to_string()),
                                     }
-                                    Err(e) => skill_msg.set(e.to_string()),
-                                }
-                            });
+                                });
+                            }
                         }
                     },
                     "{tr(&lang, \"previewOpenExternally\")}"
                 }
+            }
+            // hidden system file pickers + bridge (round 6, R4)
+            input {
+                r#type: "file",
+                id: "vd-skill-zip-input",
+                accept: ".zip,application/zip",
+                style: "display:none;",
+                onchange: move |_| {
+                    #[cfg(any(feature = "web", feature = "desktop"))]
+                    spawn(async move {
+                        let _ = dioxus::document::eval("window.__vdReadPickedFile && window.__vdReadPickedFile('vd-skill-zip-input', false);").await;
+                    });
+                },
+            }
+            input {
+                r#type: "file",
+                id: "vd-skill-dir-input",
+                style: "display:none;",
+                onchange: move |_| {
+                    #[cfg(any(feature = "web", feature = "desktop"))]
+                    spawn(async move {
+                        let _ = dioxus::document::eval("window.__vdReadPickedFile && window.__vdReadPickedFile('vd-skill-dir-input', true);").await;
+                    });
+                },
+            }
+            button {
+                id: "vd-skill-pick-bridge",
+                style: "display:none;",
+                onclick: move |_| {
+                    let state = state.clone();
+                    let sc = sc.clone();
+                    let mut skills = skills;
+                    spawn(async move {
+                        #[cfg(any(feature = "web", feature = "desktop"))]
+                        {
+                            let raw = match dioxus::document::eval("return window.__vdSkillPick || '';").join::<String>().await {
+                                Ok(v) => v,
+                                Err(_) => String::new(),
+                            };
+                            let _ = dioxus::document::eval("window.__vdSkillPick='';").await;
+                            if raw.is_empty() { return; }
+                            let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&raw);
+                            let Ok(list) = parsed else { return; };
+                            if list.is_empty() { return; }
+                            let is_zip = list.len() == 1 && list[0].get("rel").and_then(|v| v.as_str()).map(|s| s.to_lowercase().ends_with(".zip")).unwrap_or(false);
+                            let res = if is_zip {
+                                let f = &list[0];
+                                crate::vibeconfig::api_import_skill_zip_data(
+                                    token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                    f.get("name").and_then(|v| v.as_str()).unwrap_or("skill.zip").to_string(),
+                                    f.get("data").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                                ).await.map(|n| n)
+                            } else {
+                                let folder = list[0].get("rel").and_then(|v| v.as_str()).unwrap_or("skill")
+                                    .split('/').next().unwrap_or("skill").to_string();
+                                let files: Vec<(String, String)> = list.iter().filter_map(|f| {
+                                    let rel = f.get("rel").and_then(|v| v.as_str())?.to_string();
+                                    // strip the root folder from webkitRelativePath
+                                    let rel = rel.split_once('/').map(|(_, r)| r.to_string()).unwrap_or(rel);
+                                    let data = f.get("data").and_then(|v| v.as_str())?.to_string();
+                                    Some((rel, data))
+                                }).collect();
+                                crate::vibeconfig::api_import_skill_folder_data(
+                                    token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(),
+                                    folder, files,
+                                ).await.map(|n| n)
+                            };
+                            match res {
+                                Ok(name) => {
+                                    skill_msg.set(format!("✅ {name}"));
+                                    if let Ok(l) = crate::vibeconfig::api_list_vibe_files(
+                                        token(&state), sc.scope.clone(), sc.cwd.clone(), sc.conn.clone(), "skills".to_string(),
+                                    ).await {
+                                        skills.set(l);
+                                    }
+                                }
+                                Err(e) => skill_msg.set(format!("❌ {e}")),
+                            }
+                        }
+                    });
+                },
             }
             if !skill_msg.read().is_empty() {
                 div { class: "field-hint", "{skill_msg.read()}" }
@@ -4920,3 +4915,38 @@ fn skills_panel(
     }
 }
 }
+
+/// Round 6 (R4): read the files chosen in a hidden `<input type=file>` into
+/// `window.__vdSkillPick` (JSON [{name, rel, data(base64)}]) and click the
+/// bridge button so the Rust handler uploads them.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const SKILL_PICK_JS: &str = r#"
+(function () {
+  if (window.__vdSkillPickInit) return;
+  window.__vdSkillPickInit = true;
+  // folder picker: webkitdirectory must be set as a raw attribute
+  var d = document.getElementById('vd-skill-dir-input');
+  if (d) d.setAttribute('webkitdirectory', '');
+  window.__vdReadPickedFile = function (inputId, multi) {
+    var inp = document.getElementById(inputId);
+    if (!inp || !inp.files || !inp.files.length) return;
+    var files = Array.prototype.slice.call(inp.files);
+    var pending = files.length;
+    var out = [];
+    files.forEach(function (f) {
+      var r = new FileReader();
+      r.onload = function () {
+        var data = String(r.result || '').split(',')[1] || '';
+        out.push({ name: f.name, rel: f.webkitRelativePath || f.name, data: data });
+        if (--pending === 0) {
+          window.__vdSkillPick = JSON.stringify(out);
+          var b = document.getElementById('vd-skill-pick-bridge');
+          if (b) b.click();
+        }
+      };
+      r.onerror = function () { if (--pending === 0) { var b = document.getElementById('vd-skill-pick-bridge'); if (b) b.click(); } };
+      r.readAsDataURL(f);
+    });
+  };
+})();
+"#;

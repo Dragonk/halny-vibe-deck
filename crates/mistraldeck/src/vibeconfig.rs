@@ -1688,6 +1688,86 @@ pub async fn api_import_skill_zip(
     .map_err(|e| ServerFnError::new(e.to_string()))?
 }
 
+/// Import a skill from an uploaded `.zip` (browser/webview file picker —
+/// round 6, R4: no typing a path; the bytes arrive as base64). The upload
+/// lands in a temp file, the existing zip importer runs, the temp is removed.
+#[server]
+pub async fn api_import_skill_zip_data(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    file_name: String,
+    data_base64: String,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_base64.trim())
+            .map_err(|e| ServerFnError::new(format!("bad base64: {e}")))?;
+        let stem = std::path::Path::new(&file_name)
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("skill")
+            .to_string();
+        let tmp = std::env::temp_dir().join(format!("vd-skill-{}.zip", mistraldeck_core::types::now_ms()));
+        std::fs::write(&tmp, &bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
+        let res = imp::import_skill_zip(&scope, &cwd, conn.as_ref(), tmp.to_str().unwrap_or(""), &stem);
+        let _ = std::fs::remove_file(&tmp);
+        res
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
+/// Import a skill from an uploaded FOLDER (webkitdirectory picker — round 6,
+/// R4). `files` = (relative path, base64 content); they are materialized in a
+/// temp dir and the existing folder importer copies them over.
+#[server]
+pub async fn api_import_skill_folder_data(
+    token: String,
+    scope: String,
+    cwd: String,
+    conn: Option<mistraldeck_core::snapshot::RemoteConnection>,
+    folder_name: String,
+    files: Vec<(String, String)>,
+) -> Result<String, ServerFnError> {
+    imp::check(&token)?;
+    tokio::task::spawn_blocking(move || {
+        use base64::Engine as _;
+        if files.is_empty() {
+            return Err(ServerFnError::new("empty folder"));
+        }
+        let tmp = std::env::temp_dir().join(format!("vd-skill-{}", mistraldeck_core::types::now_ms()));
+        std::fs::create_dir_all(&tmp).map_err(|e| ServerFnError::new(e.to_string()))?;
+        for (rel, b64) in &files {
+            let rel = rel.trim_start_matches('/');
+            if rel.is_empty() || rel.contains("..") {
+                continue;
+            }
+            let dest = tmp.join(rel);
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .map_err(|e| ServerFnError::new(format!("bad base64: {e}")))?;
+            std::fs::write(&dest, &bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
+        }
+        let name = if folder_name.trim().is_empty() {
+            String::new()
+        } else {
+            folder_name.trim().to_string()
+        };
+        let res = imp::import_skill_folder(&scope, &cwd, conn.as_ref(), tmp.to_str().unwrap_or(""), &name);
+        let _ = std::fs::remove_dir_all(&tmp);
+        res
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+}
+
 /// Set one tool permission (`[tools.<name>] permission`) — Z15.
 #[server]
 pub async fn api_set_tool_permission(

@@ -1326,8 +1326,13 @@ fn FilePreviewTab(
     // Round 4 (C5): one-shot kick when the tab was opened via "Edit".
     let mut edit_kick = use_signal(|| false);
     // Round 5 (R3): word-wrap toggle in the editor, persisted per install.
+    // Round 6 (R1): the read must be one-shot — an unguarded spawn in the
+    // component body re-rendered forever (signal set -> render -> spawn)
+    // and froze the app the moment edit mode opened.
     let mut wrap = use_signal(|| false);
-    {
+    let mut wrap_init = use_signal(|| false);
+    if !*wrap_init.read() {
+        wrap_init.set(true);
         let mut w = wrap.clone();
         spawn(async move {
             #[cfg(any(feature = "web", feature = "desktop"))]
@@ -1430,7 +1435,7 @@ fn FilePreviewTab(
                         let html = crate::md::to_html(&data.text);
                         rsx! { div { class: "preview-markdown", dangerous_inner_html: html } }
                     }
-                    "csv" => sheet_table(&parse_csv(&data.text), &[]),
+                    "csv" => sheet_table(&crate::fsgit::SheetData { name: String::new(), rows: parse_csv(&data.text), styles: Vec::new(), merges: Vec::new(), col_widths: Vec::new() }),
                     "xlsx" => {
                         if data.sheets.is_empty() {
                             rsx! { div { class: "preview-loading", "{tr(&lang, \"previewLoading\")}" } }
@@ -1456,7 +1461,7 @@ fn FilePreviewTab(
                             rsx! {
                                 div { class: "preview-sheet",
                                     div { class: "sheet-tabs", {tab_el_tabs.iter().cloned()} }
-                                    {sheet_table(&sheet.rows, &sheet.styles)}
+                                    {sheet_table(&sheet)}
                                 }
                             }
                         }
@@ -1712,9 +1717,26 @@ fn FilePreviewTab(
     body_el
 }
 
-/// Render one sheet. `styles` (round 4, C4) carries per-cell inline CSS
-/// extracted from the workbook (bold/italic/color/fill).
-fn sheet_table(rows: &[Vec<String>], styles: &[Vec<Option<String>>]) -> Element {
+/// Render one sheet. `styles` (round 4, C4) carries per-cell inline CSS;
+/// `merges`/`col_widths` (round 6, R11) keep merged header cells and the
+/// real column widths.
+fn sheet_table(sheet: &crate::fsgit::SheetData) -> Element {
+    let rows = &sheet.rows;
+    let styles = &sheet.styles;
+    // covered-by-merge lookup: (row, col) -> anchor (r1, c1) or None
+    let mut covered: std::collections::HashMap<(usize, usize), (usize, usize)> = std::collections::HashMap::new();
+    let mut anchor_span: std::collections::HashMap<(usize, usize), (usize, usize)> = std::collections::HashMap::new();
+    for m in &sheet.merges {
+        let (r1, c1, r2, c2) = (m[0], m[1], m[2], m[3]);
+        anchor_span.insert((r1, c1), (c2 - c1 + 1, r2 - r1 + 1));
+        for r in r1..=r2 {
+            for c in c1..=c2 {
+                if (r, c) != (r1, c1) {
+                    covered.insert((r, c), (r1, c1));
+                }
+            }
+        }
+    }
     let row_els: Vec<Element> = rows
         .iter()
         .enumerate()
@@ -1722,6 +1744,7 @@ fn sheet_table(rows: &[Vec<String>], styles: &[Vec<Option<String>>]) -> Element 
             let cells: Vec<Element> = row
                 .iter()
                 .enumerate()
+                .filter(|(ci, _)| !covered.contains_key(&(ri, *ci)))
                 .map(|(ci, c)| {
                     let extra = styles
                         .get(ri)
@@ -1729,10 +1752,11 @@ fn sheet_table(rows: &[Vec<String>], styles: &[Vec<Option<String>>]) -> Element 
                         .cloned()
                         .flatten()
                         .unwrap_or_default();
+                    let (colspan, rowspan) = anchor_span.get(&(ri, ci)).copied().unwrap_or((1, 1));
                     if ri == 0 {
-                        rsx! { th { class: "sheet-header-cell", style: "border:1px solid var(--border);padding:4px 8px;text-align:left;font-weight:600;{extra}", "{c}" } }
+                        rsx! { th { class: "sheet-header-cell", colspan: "{colspan}", rowspan: "{rowspan}", style: "border:1px solid var(--border);padding:4px 8px;text-align:left;font-weight:600;{extra}", "{c}" } }
                     } else {
-                        rsx! { td { style: "border:1px solid var(--border);padding:4px 8px;{extra}", "{c}" } }
+                        rsx! { td { colspan: "{colspan}", rowspan: "{rowspan}", style: "border:1px solid var(--border);padding:4px 8px;{extra}", "{c}" } }
                     }
                 })
                 .collect();
@@ -1740,10 +1764,24 @@ fn sheet_table(rows: &[Vec<String>], styles: &[Vec<Option<String>>]) -> Element 
             rsx! { tr { class: "{zebra}", {cells.iter().cloned()} } }
         })
         .collect();
+    let col_els: Vec<Element> = sheet
+        .col_widths
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| **w > 0.0)
+        .map(|(i, w)| {
+            // character width ≈ 7px + padding
+            let px = (*w * 7.0 + 16.0).round() as u32;
+            rsx! { col { key: "c{i}", style: "width:{px}px;" } }
+        })
+        .collect();
     rsx! {
         div { class: "preview-sheet",
             div { class: "sheet-table-wrap",
                 table { class: "sheet-table",
+                    if !col_els.is_empty() {
+                        colgroup { {col_els.iter().cloned()} }
+                    }
                     {row_els.iter().cloned()}
                 }
             }

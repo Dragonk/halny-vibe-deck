@@ -1623,10 +1623,27 @@ fn read_file_block(tc: &mistraldeck_core::types::ToolCall, lang: &str) -> Elemen
         rsx! { pre { class: "tool-file-content", "{content_text}" } }
     };
 
+    // Round 6 (R5): the file path is a button — clicking opens the file in
+    // the preview dock (same flow as markdown path links).
+    let state = use_context::<Signal<ClientState>>();
+    let raw_path = input_path.clone();
     rsx! {
         div { class: "tool-rich-read",
             if !chip.is_empty() {
-                div { class: "tool-file-path", "{chip}" }
+                button {
+                    class: "tool-file-path tool-file-path-link",
+                    title: "{tr(&lang, \"previewOpen\")}",
+                    onclick: move |_| {
+                        let st = state.clone();
+                        let p = raw_path.clone();
+                        spawn(async move {
+                            if !p.is_empty() {
+                                crate::state::open_path(st, &p).await;
+                            }
+                        });
+                    },
+                    "{chip}"
+                }
             }
             {meta_els.iter().cloned()}
             {content_el}

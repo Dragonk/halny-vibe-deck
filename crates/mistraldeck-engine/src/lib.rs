@@ -1451,10 +1451,12 @@ impl Engine {
     /// is replaced, the UI receives the backfilled history on its refresh.
     pub fn resync_current_session(&self) {
         let st = self.state.lock().unwrap();
+        // Round 6 (R6, session isolation): resync ONLY the current session's
+        // own slot. The old fallback picked an arbitrary slot, whose worker
+        // then emitted another session's history into this one.
         let target = st
             .current_session()
             .and_then(|s| st.slot_of_session(&s.id))
-            .or_else(|| st.slots.iter().next().map(|(id, _)| *id))
             .and_then(|id| st.slots.get(&id).map(|slot| slot.cmd.clone()));
         let agent_session_id = st
             .current_session()
@@ -1707,6 +1709,28 @@ impl Engine {
     // ---------------- state machine (per-slot) ----------------
 
     /// Apply one agent worker event to the owning slot + session.
+/// Index of the session an agent event belongs to. Round 6 (R6, session
+/// isolation): when duplicate mirrors share one agent id, prefer the
+/// CURRENT session so events never land in a different open tab's session.
+fn agent_session_idx(
+    sessions: &[mistraldeck_core::types::ChatSession],
+    current: Option<usize>,
+    agent_id: &str,
+) -> Option<usize> {
+    if let Some(i) = current {
+        if sessions
+            .get(i)
+            .map(|s| s.agent_session_id.as_deref() == Some(agent_id))
+            .unwrap_or(false)
+        {
+            return Some(i);
+        }
+    }
+    sessions
+        .iter()
+        .position(|s| s.agent_session_id.as_deref() == Some(agent_id))
+}
+
     pub(crate) fn apply_slot_event(&'static self, slot_id: u64, event: AgentEvent) {
         mistraldeck_appsrv::trace(format!("slot {slot_id} event {event:?}"));
         let event_out = event.clone();
@@ -1738,10 +1762,7 @@ impl Engine {
             // slot death and feeds the UsageBar of lazy-resumed sessions
             // whose preview usage came from disk (Nexus `session.usage`).
             if let AgentEvent::UsageUpdate { session_id, .. } = &event {
-                if let Some(session) = st
-                    .sessions
-                    .iter_mut()
-                    .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                 {
                     let _ = session.usage.apply(&event);
                 }
@@ -2042,10 +2063,15 @@ impl Engine {
                     if let Some(k) = slot_key.as_deref() {
                         st.stopping.remove(k);
                     }
-                    // Nexus §2.2: session/load failed (CLI session gone
+                    // Nexus §2.2: the lazy wake failed (CLI session gone
                     // from disk) — silently fall back to a fresh session
                     // in the same cwd; the pending prompt resends there.
-                    if context == "load_session" {
+                    // Round 6 (R7): the worker reports wake failures with
+                    // context "session/resume" (LoadSession maps to
+                    // resume_session), not only "load_session" — without
+                    // this the pending prompt was dropped and the chat
+                    // showed no busy marker at all.
+                    if context == "load_session" || context == "session/resume" {
                         if let Some(prompt) = slot.pending_prompt.take() {
                             match &slot.purpose {
                                 SlotPurpose::LoadBackend { cwd, .. }
@@ -2099,10 +2125,7 @@ impl Engine {
                             message_id,
                             text: out_text.clone(),
                         });
-                        if let Some(session) = st
-                            .sessions
-                            .iter_mut()
-                            .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                        if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                         {
                             // v0.13.7: a new agent messageId starts a new
                             // agent message (Nexus `streamingState.agentMsgId`
@@ -2139,10 +2162,7 @@ impl Engine {
                             block_id,
                             text: out_text.clone(),
                         });
-                        if let Some(session) = st
-                            .sessions
-                            .iter_mut()
-                            .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                        if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                         {
                             // v0.13.7: reasoning that arrives after a
                             // streamed text opens the NEXT agent message -
@@ -2166,10 +2186,7 @@ impl Engine {
                     }
                 }
                 AgentEvent::ThinkingComplete { session_id } => {
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                    if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                     {
                         if let Some(msg) = session.messages.last_mut() {
                             let now = mistraldeck_core::types::now_ms();
@@ -2186,10 +2203,7 @@ impl Engine {
                     session_id,
                     tool_call,
                 } => {
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                    if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                     {
                         ensure_ai_message(session).tool_calls.push(tool_call);
                         // v0.10.2: tool activity means thinking is over
@@ -2204,10 +2218,7 @@ impl Engine {
                     output,
                     subagent,
                 } => {
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                    if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                     {
                         for msg in session.messages.iter_mut().rev() {
                             for tc in &mut msg.tool_calls {
@@ -2312,10 +2323,7 @@ impl Engine {
                     if let Some(k) = slot_key.as_deref() {
                         st.stopping.remove(k);
                     }
-                    if let Some(session) = st
-                        .sessions
-                        .iter_mut()
-                        .find(|s| s.agent_session_id.as_deref() == Some(session_id.as_str()))
+                    if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                     {
                         for msg in &mut session.messages {
                             if msg.sender == MessageSender::Ai {

@@ -29,6 +29,13 @@ pub struct SheetData {
     /// now survive into the preview instead of a plain table.
     #[serde(default)]
     pub styles: Vec<Vec<Option<String>>>,
+    /// Merged ranges `[row1, col1, row2, col2]` (0-based, inclusive) —
+    /// round 6 (R11): formatted tables merge header cells.
+    #[serde(default)]
+    pub merges: Vec<[usize; 4]>,
+    /// Column widths in character units (0 = default) — round 6 (R11).
+    #[serde(default)]
+    pub col_widths: Vec<f64>,
 }
 
 /// One entry of a zip archive listing (Nexus FilePreview ZipView).

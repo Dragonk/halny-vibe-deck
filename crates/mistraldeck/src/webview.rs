@@ -148,6 +148,10 @@ const BOOT_JS: &str = r#"
     document.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
       if (e.target.closest(NO_DRAG)) return;
+      // round 6 (R9): near a window edge the corner/edge must RESIZE, not
+      // drag — the top-left corner sat inside the header drag region and
+      // only moved the window.
+      if (dirAt(e)) return;
       if (e.target.closest('.header')) post('vd-drag');
     });
     document.addEventListener('dblclick', function (e) {
@@ -179,9 +183,27 @@ const BOOT_JS: &str = r#"
       armDir = (over || !e.target.closest) ? dirAt(e) : null;
       document.body.style.cursor = armDir ? cursors[armDir] : '';
     });
+    // round 6 (R10): a click in a scrollable element's scrollbar zone must
+    // scroll, not resize the window — the preview dock's scrollbar sits at
+    // the window's right edge, so right-edge clicks there were eaten by the
+    // edge-resize arm.
+    function onScrollbar(e) {
+      var el = e.target;
+      while (el && el !== document.body) {
+        if (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) {
+          var r = el.getBoundingClientRect();
+          if (e.clientX >= r.right - 18) return true;   // vertical scrollbar
+          if (e.clientY >= r.bottom - 18) return true;  // horizontal scrollbar
+        }
+        el = el.parentElement;
+      }
+      return false;
+    }
     document.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
-      if (armDir) post('vd-resize:' + armDir);
+      if (!armDir) return;
+      if (onScrollbar(e)) return; // let the scrollbar handle the click
+      post('vd-resize:' + armDir);
     });
   });
 })();

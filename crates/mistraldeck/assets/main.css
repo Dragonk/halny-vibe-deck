@@ -2119,6 +2119,10 @@ code {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    /* round 6 (R3): the section fills the content area so the master-detail
+       editor (prompts/skills/agents) can stretch to the window height */
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .settings-section.tools-section {
@@ -2170,6 +2174,18 @@ code {
     .tools-config-panel {
         width: 100%;
     }
+}
+/* round 6 (R2): collapsed = only the slim header row stays (like the
+   Agents tab's collapsible panel with display:none) — the empty bordered
+   block must not keep occupying the screen */
+.tools-list-panel.collapsed {
+    max-height: none;
+    padding: 6px 10px;
+    background: none;
+    border: none;
+}
+.tools-list-panel.collapsed .tools-list {
+    display: none;
 }
 
 .tool-item {
@@ -2286,8 +2302,9 @@ code {
 .master-detail {
     display: flex;
     gap: 16px;
-    height: 100%;
+    flex: 1 1 auto;
     min-height: 400px;
+    min-width: 0;
 }
 
 .master-list {
@@ -5320,6 +5337,18 @@ code {
     font-weight: 600;
     background: var(--panel);
 }
+
+/* round 6 (R5): the read_file path chip is a clickable link opening the preview */
+.tool-file-path-link {
+    cursor: pointer;
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--accent);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    text-align: left;
+}
+.tool-file-path-link:hover { text-decoration: underline; }
 
 /* --- v0.3.1: tool diff path links, hints, cache hit meta --- */
 .tool-file-path-row {

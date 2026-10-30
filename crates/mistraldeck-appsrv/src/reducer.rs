@@ -179,21 +179,40 @@ impl Projection {
                 let Some(entry_id) = params.get("entryId").and_then(Value::as_str) else {
                     return events;
                 };
-                let ops: Vec<PatchOp> = params
+                let raw_ops: Vec<PatchOp> = params
                     .get("patch")
                     .and_then(Value::as_array)
                     .map(|a| a.iter().cloned())
                     .unwrap_or_default()
                     .filter_map(|v| serde_json::from_value(v).ok())
                     .collect();
-                let path = format!("/history/{}", self.index_of(entry_id));
+                // Round 6 (R8): the wire patch ops are ENTRY-RELATIVE
+                // (`/text`, `/content/0/text`) — prefix them with the
+                // entry's path in the mirror doc, otherwise they never land
+                // and reasoning deltas (thinking) are lost.
+                let idx = self.index_of(entry_id);
+                let base = format!("/history/{idx}");
+                let ops: Vec<PatchOp> = raw_ops
+                    .into_iter()
+                    .map(|mut op| {
+                        if op.path.starts_with("/history/") {
+                            op
+                        } else if op.path.is_empty() || op.path == "/" {
+                            op.path = base.clone();
+                            op
+                        } else {
+                            op.path = format!("{base}{}", op.path);
+                            op
+                        }
+                    })
+                    .collect();
                 if apply_all(&mut self.doc, &ops).is_err() {
                     self.resync_needed = true;
                 }
                 let Some(entry) = self.entry_by_id(entry_id) else {
                     return events;
                 };
-                events.extend(self.deltas_for(&path, entry_id, &entry));
+                events.extend(self.deltas_for(&base, entry_id, &entry));
             }
             "turn/started" => {
                 if let Ok(t) = serde_json::from_value::<Turn>(
@@ -626,6 +645,57 @@ fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
                 .map(str::to_string),
             child_session_id: Some(cid.to_string()),
         });
+    // Round 6 (R5): file_edit effects carry git-style diffs — build
+    // DiffHunks from state.output.occurrences (or the old/new string pair)
+    // so the chat renders the edit as a diff block, not raw JSON.
+    let (diffs, previous_content) = if kind == "file_edit" {
+        let out = state.get("output");
+        let path = detail
+            .pointer("/input/filePath")
+            .or_else(|| detail.pointer("/input/file_path"))
+            .and_then(Value::as_str)
+            .or_else(|| out.and_then(|o| o.get("file")).and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string();
+        let mut hunks = Vec::new();
+        if let Some(occs) = out.and_then(|o| o.get("occurrences")).and_then(Value::as_array) {
+            for o in occs {
+                let get_str = |keys: &[&str]| -> Option<String> {
+                    keys.iter().find_map(|k| o.get(*k).and_then(Value::as_str)).map(str::to_string)
+                };
+                let get_i64 = |keys: &[&str]| -> Option<i64> {
+                    keys.iter().find_map(|k| o.get(*k).and_then(Value::as_i64))
+                };
+                hunks.push(mistraldeck_core::types::DiffHunk {
+                    path: path.clone(),
+                    old_text: get_str(&["oldText", "old_text"]),
+                    new_text: get_str(&["newText", "new_text"]).unwrap_or_default(),
+                    start_line: get_i64(&["startLine", "start_line"]),
+                    new_start_line: get_i64(&["newStartLine", "new_start_line"]),
+                });
+            }
+        }
+        if hunks.is_empty() {
+            let old = out.and_then(|o| o.get("oldString")).and_then(Value::as_str);
+            let new = out.and_then(|o| o.get("newString")).and_then(Value::as_str);
+            if let (Some(old), Some(new)) = (old, new) {
+                hunks.push(mistraldeck_core::types::DiffHunk {
+                    path: path.clone(),
+                    old_text: Some(old.to_string()),
+                    new_text: new.to_string(),
+                    start_line: None,
+                    new_start_line: None,
+                });
+            }
+        }
+        let prev = out
+            .and_then(|o| o.get("previousContent"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        (hunks, prev)
+    } else {
+        (Vec::new(), None)
+    };
     ToolCall {
         id,
         title,
@@ -634,9 +704,9 @@ fn effect_tool_call(entry: &HistoryEntry) -> ToolCall {
         input_json,
         output,
         file_changes: Vec::new(),
-        diffs: Vec::new(),
+        diffs,
         tool_name,
-        previous_content: None,
+        previous_content,
         raw_output_json: None,
         subagent,
         started_at: 0,

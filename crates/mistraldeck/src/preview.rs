@@ -146,7 +146,12 @@ pub fn docx_to_html(path: &Path) -> Result<String, String> {
     let rels_xml = read_zip_entry(path, "word/_rels/document.xml.rels").unwrap_or_default();
     let rels_xml = String::from_utf8_lossy(&rels_xml).into_owned();
     let rels = parse_docx_rels(&rels_xml);
-    Ok(docx_xml_full(&xml, |rid| rels.get(rid).cloned(), |target| {
+    // Round 6 (R11): styleId → (outline level, is-TOC) from styles.xml, so
+    // localized Word builds ("Nagwek1", "Überschrift 2", …) get real
+    // heading levels, and TOC-entry paragraphs are replaced by the
+    // generated TOC.
+    let style_info = docx_style_info(path);
+    Ok(docx_xml_full(&xml, |rid| rels.get(rid).cloned(), &style_info, |target| {
         // media targets are relative to word/
         let inner = if target.starts_with('/') {
             target.trim_start_matches('/').to_string()
@@ -326,6 +331,7 @@ fn highlight_color(name: &str) -> String {
 fn docx_xml_full(
     xml: &str,
     resolve_rel: impl Fn(&str) -> Option<(String, String)>,
+    style_info: &std::collections::HashMap<String, (Option<u32>, bool)>,
     resolve_media: impl Fn(&str) -> Option<(String, Vec<u8>)>,
 ) -> String {
     let mut out = String::from("<div class=\"doc-render\">");
@@ -379,8 +385,22 @@ fn docx_xml_full(
                     }
                 } else {
                     blocks += 1;
-                    // round 5 (R4): w:outlineLvl wins over the style name
-                    let level = para_outline.or_else(|| heading_level(&para_style));
+                    // round 6 (R11): TOC-entry paragraphs are replaced by the
+                    // generated TOC at the top
+                    let (style_level, is_toc_style) = style_info
+                        .get(&para_style)
+                        .cloned()
+                        .unwrap_or((None, false));
+                    let skip_para = is_toc_style && toc_marker;
+                    if skip_para {
+                        in_para = false;
+                    }
+                    // round 5 (R4) + round 6 (R11): direct w:outlineLvl wins,
+                    // then the styles.xml level, then the style-name parse
+                    let level = para_outline
+                        .or(style_level)
+                        .or_else(|| heading_level(&para_style));
+                    if !skip_para {
                     if let Some(level) = level {
                         heading_counter += 1;
                         // remember plain text of the heading for the TOC
@@ -416,6 +436,7 @@ fn docx_xml_full(
                         } else {
                             out.push_str(&format!("<p style=\"{para_css}\">{para_html}</p>"));
                         }
+                    }
                     }
                 }
                 in_para = false;
@@ -807,7 +828,105 @@ fn strip_tags(html: &str) -> String {
 
 /// Backward-compatible wrapper used by the unit tests (no rels/media).
 fn docx_xml(xml: &str) -> String {
-    docx_xml_full(xml, |_| None, |_| None)
+    docx_xml_full(xml, |_| None, &std::collections::HashMap::new(), |_| None)
+}
+
+/// `word/styles.xml` → styleId → (outline level 1-based, is TOC style).
+/// Follows one `basedOn` hop when the style itself has no outlineLvl.
+fn docx_style_info(path: &Path) -> std::collections::HashMap<String, (Option<u32>, bool)> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(xml) = read_zip_entry(path, "word/styles.xml") else {
+        return out;
+    };
+    let xml = String::from_utf8_lossy(&xml).into_owned();
+    // first pass: collect raw style defs
+    struct Def {
+        id: String,
+        name: String,
+        outline: Option<u32>,
+        based_on: Option<String>,
+    }
+    let mut defs: Vec<Def> = Vec::new();
+    {
+        let mut reader = XmlReader::from_str(&xml);
+        let mut buf = Vec::new();
+        let mut cur: Option<Def> = None;
+        loop {
+            buf.clear();
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let name = local(&e);
+                    match name.as_str() {
+                        "style" => {
+                            cur = Some(Def {
+                                id: attr(&e, "styleId").unwrap_or_default(),
+                                name: String::new(),
+                                outline: None,
+                                based_on: None,
+                            });
+                        }
+                        "name" => {
+                            if let Some(d) = cur.as_mut() {
+                                d.name = attr(&e, "val").unwrap_or_default();
+                            }
+                        }
+                        "outlineLvl" => {
+                            if let Some(d) = cur.as_mut() {
+                                d.outline = attr(&e, "val").and_then(|v| v.parse::<u32>().ok());
+                            }
+                        }
+                        "basedOn" => {
+                            if let Some(d) = cur.as_mut() {
+                                d.based_on = attr(&e, "val");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    if local_end(&e) == "style" {
+                        if let Some(d) = cur.take() {
+                            if !d.id.is_empty() {
+                                defs.push(d);
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+    for d in &defs {
+        let lvl = d.outline.map(|v| (v + 1).min(6)).or_else(|| {
+            // fall back to the name ("heading 2" → 2), then to basedOn
+            let n = d.name.trim().to_ascii_lowercase();
+            let norm: String = n.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            for prefix in ["heading", "naglowek", "nagłówek", "nagwek", "überschrift", "ueberschrift", "titre", "titolo", "encabezado"] {
+                if let Some(rest) = norm.strip_prefix(prefix) {
+                    if let Ok(n) = rest.parse::<u32>() {
+                        if (1..=9).contains(&n) {
+                            return Some(n.min(6));
+                        }
+                    }
+                }
+            }
+            d.based_on
+                .as_ref()
+                .and_then(|b| defs.iter().find(|x| &x.id == b))
+                .and_then(|b| b.outline.map(|v| (v + 1).min(6)))
+        });
+        let norm_name: String = d
+            .name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_lowercase();
+        let is_toc = norm_name.contains("toc") || norm_name.contains("spistreci") || norm_name.contains("tableofcontents");
+        out.insert(d.id.clone(), (lvl, is_toc));
+    }
+    out
 }
 
 fn out_row_cell(row_html: &mut String, cell_html: &str) {
@@ -1217,7 +1336,7 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
             Ok(r) => r,
             Err(_) => continue,
         };
-        let idx_map = xlsx_sheet_style_index(path, &name).unwrap_or_default();
+        let geom = xlsx_sheet_geom(path, &name).unwrap_or_default();
         let rows: Vec<Vec<String>> = range
             .rows()
             .take(SHEET_MAX_ROWS)
@@ -1227,7 +1346,8 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
                     .take(SHEET_MAX_COLS)
                     .enumerate()
                     .map(|(c, data)| {
-                        let numfmt = idx_map
+                        let numfmt = geom
+                            .styles
                             .get(r)
                             .and_then(|rr| rr.get(c))
                             .copied()
@@ -1247,7 +1367,7 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
                 row.iter()
                     .enumerate()
                     .map(|(c, _)| {
-                        idx_map
+                        geom.styles
                             .get(r)
                             .and_then(|rr| rr.get(c))
                             .copied()
@@ -1258,7 +1378,7 @@ pub fn xlsx_sheets(path: &Path) -> Result<Vec<SheetData>, String> {
                     .collect()
             })
             .collect();
-        out.push(SheetData { name, rows, styles });
+        out.push(SheetData { name, rows, styles, merges: geom.merges, col_widths: geom.col_widths });
     }
     if out.is_empty() {
         return Err("no sheets with data".into());
@@ -1704,9 +1824,17 @@ fn xlsx_color(rgb: &str) -> String {
     format!("#{}{}{}", r, g, b)
 }
 
-/// Sheet name → `xl/worksheets/sheetN.xml`, then per-cell style indices:
-/// `Vec<row><col> = Some(cellXfs index)`.
-fn xlsx_sheet_style_index(path: &Path, sheet_name: &str) -> Option<Vec<Vec<Option<usize>>>> {
+/// Geometry of one sheet: per-cell style indices + merged ranges + column
+/// widths (round 6, R11 — formatted tables keep their merges/widths).
+#[derive(Default)]
+struct SheetGeom {
+    styles: Vec<Vec<Option<usize>>>,
+    merges: Vec<[usize; 4]>,
+    col_widths: Vec<f64>,
+}
+
+/// Sheet name → `xl/worksheets/sheetN.xml`, then per-cell style indices.
+fn xlsx_sheet_geom(path: &Path, sheet_name: &str) -> Option<SheetGeom> {
     let wb = read_zip_entry(path, "xl/workbook.xml").ok()?;
     let wb = String::from_utf8_lossy(&wb).into_owned();
     let rels = read_zip_entry(path, "xl/_rels/workbook.xml.rels").ok()?;
@@ -1771,25 +1899,58 @@ fn xlsx_sheet_style_index(path: &Path, sheet_name: &str) -> Option<Vec<Vec<Optio
     let xml = read_zip_entry(path, &sheet_path).ok()?;
     let xml = String::from_utf8_lossy(&xml).into_owned();
 
-    let mut out: Vec<Vec<Option<usize>>> = Vec::new();
+    let mut geom = SheetGeom::default();
+    let mut in_cols = false;
     let mut reader = XmlReader::from_str(&xml);
     let mut buf = Vec::new();
     loop {
         buf.clear();
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                if local(&e) == "c" {
-                    if let (Some(r), Some(s)) = (attr(&e, "r"), attr(&e, "s")) {
-                        if let (Some((row, col)), Some(si)) = (cell_ref(&r), s.parse::<usize>().ok()) {
-                            while out.len() <= row {
-                                out.push(Vec::new());
+                let name = local(&e);
+                match name.as_str() {
+                    "c" => {
+                        if let (Some(r), Some(s)) = (attr(&e, "r"), attr(&e, "s")) {
+                            if let (Some((row, col)), Some(si)) = (cell_ref(&r), s.parse::<usize>().ok()) {
+                                while geom.styles.len() <= row {
+                                    geom.styles.push(Vec::new());
+                                }
+                                while geom.styles[row].len() <= col {
+                                    geom.styles[row].push(None);
+                                }
+                                geom.styles[row][col] = Some(si);
                             }
-                            while out[row].len() <= col {
-                                out[row].push(None);
-                            }
-                            out[row][col] = Some(si);
                         }
                     }
+                    "mergeCell" => {
+                        if let Some(r) = attr(&e, "ref") {
+                            // "A1:F1" or "A1"
+                            let mut parts = r.split(':');
+                            let a = parts.next().unwrap_or("");
+                            let b = parts.next().unwrap_or(a);
+                            if let (Some((r1, c1)), Some((r2, c2))) = (cell_ref(a), cell_ref(b)) {
+                                geom.merges.push([r1, c1, r2, c2]);
+                            }
+                        }
+                    }
+                    "cols" => in_cols = true,
+                    "col" if in_cols => {
+                        let min = attr(&e, "min").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1);
+                        let max = attr(&e, "max").and_then(|v| v.parse::<usize>().ok()).unwrap_or(min);
+                        let w = attr(&e, "width").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+                        for c in min..=max {
+                            while geom.col_widths.len() < c {
+                                geom.col_widths.push(0.0);
+                            }
+                            geom.col_widths[c - 1] = w;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                if local_end(&e) == "cols" {
+                    in_cols = false;
                 }
             }
             Ok(Event::Eof) => break,
@@ -1797,7 +1958,7 @@ fn xlsx_sheet_style_index(path: &Path, sheet_name: &str) -> Option<Vec<Vec<Optio
             _ => {}
         }
     }
-    Some(out)
+    Some(geom)
 }
 
 /// `B12` → (row=11, col=1) zero-based.

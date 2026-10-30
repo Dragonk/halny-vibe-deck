@@ -1,0 +1,15 @@
+# Next-branch bug report — user-reported defects (round 6)
+
+| ID | Issue (as reported) | Status |
+|---|---|---|
+| R1 | Preview → edit mode FREEZES the app | [x] — unguarded `spawn` in the wrap-toggle init re-rendered forever (signal set → render → spawn); now one-shot guarded (dock.rs) |
+| R2 | Settings→Tools: collapsing the available-tools list hid the rows but left the big empty panel on screen | [x] — collapsed state now renders only the slim header row (`.tools-list-panel.collapsed`, like the Agents tab's `display:none` panel) |
+| R3 | Prompts tab: content editor area far shorter than the window | [x] — settings chain now fills: `.settings-section` flex:1, `.master-detail` flex:1, editor box stretches (main.css) |
+| R4 | Skills tab: no screen fit; import required typing a path; header scattered | [x] — system file pickers (hidden `<input type=file>` / webkitdirectory + base64 upload API `api_import_skill_zip_data`/`api_import_skill_folder_data`); one header row (name+Create+Import folder+Import .zip+Open); compact detail; CodeEditor fills |
+| R5 | Chat: tool calls lack output/formatting (git-style edit diffs), read_file path not clickable | [x] — wire file_edit effects build DiffHunks from `state.output.occurrences`/`oldString/newString` + `previousContent`; read_file path chip is a button opening the preview dock (`open_path`) |
+| R6 | Session isolation: messages from a working session leak into another open session | [x] — resync no longer falls back to an arbitrary slot; agent events prefer the CURRENT session when duplicate mirrors share an agent id (`agent_session_idx`) |
+| R7 | Resume broken: sent prompt vanished, no busy marker, send button active | [x] — wake failures arrive with context `session/resume`, not `load_session`; the respawn fallback now matches both, so the pending prompt respawns in a fresh session instead of being dropped |
+| R8 | Thinking blocks not displayed properly in an active session | [x] — `history/entryUpdated` patch ops are entry-relative (`/text`); they are now prefixed with `/history/N` before applying to the mirror doc, so reasoning deltas actually land |
+| R9 | Window can't be resized from the top-left corner on Windows | [x] — the header drag region ate corner mousedowns; edge-resize now wins over drag near window edges (BOOT_JS) |
+| R10 | Preview/list scrollbar can't be grabbed — click starts window resize | [x] — two layers fixed: panel handles no longer overlap scrollbars (5px reserved strip + clipped ::after, round 5), and window edge-resize ignores clicks inside a scrollable element's scrollbar zone (BOOT_JS `onScrollbar`) |
+| R11 | DOCX headings / XLSX formatted tables still wrong (test files in /tmp/nexus-attachments) | [x] — DOCX: styleId→level map parsed from `word/styles.xml` (localized ids like `Nagwek1`/`Überschrift 2`, basedOn chains), TOC-entry paragraphs replaced by the generated TOC; verified on the test files (h1/h2 render, TOC, images, 16 tables). XLSX: merged cells (`mergeCell` → colspan/rowspan) + column widths (`<cols>`) + theme/indexed/tint colors + numFmt |

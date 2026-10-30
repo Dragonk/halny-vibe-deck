@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.99.12 — user-reported defects round 6 (2026-10-30)
+
+All 11 reported defects fixed; root cause + fix per row in `docs/next-bugs-round6.md`.
+
+- **Preview edit freeze**: the word-wrap toggle init spawned on every render (infinite signal loop) — one-shot guarded.
+- **Tools tab**: the collapsed available-tools panel no longer leaves an empty block on screen (slim header only, like Agents).
+- **Prompts/skills editors fill the window** (settings section → master-detail → editor box now stretch end-to-end); skills imports use the system file picker (hidden file inputs + base64 upload API) with the whole header in one row.
+- **Chat tool calls**: wire `file_edit` effects now build git-style `DiffHunk`s (occurrences / old-new pair / previousContent); the read_file path chip is clickable and opens the file in the preview dock.
+- **Session isolation**: resync targets only the current session's own slot; agent events prefer the current session when duplicate mirrors share an agent id.
+- **Resume**: wake failures with context `session/resume` now trigger the respawn fallback — the pending prompt is no longer dropped with no busy marker.
+- **Thinking blocks**: `history/entryUpdated` patch paths are entry-relative; they are now prefixed before applying to the projection, so reasoning deltas stream correctly in active sessions.
+- **Window resize**: edge/corner resize wins over the header drag region (top-left corner fixed); clicks inside a scrollbar zone no longer start a window resize (panel handles also no longer overlap scrollbars).
+- **DOCX/XLSX on real files**: heading levels resolved from `word/styles.xml` (localized style ids, basedOn chains) with a generated TOC; XLSX renders merged cells (colspan/rowspan), column widths, theme/indexed/tint colors and number formats.
+
+## 1.99.11 — user-reported defects round 5 (2026-10-29)
+
 ## 1.99.11 — user-reported defects round 5 (2026-10-29)
 
 All 13 reported defects fixed; root cause + fix per row in `docs/next-bugs-round5.md`.
