@@ -103,12 +103,15 @@ pub fn CodeEditor(
     let gut_cls = if wrap { "code-gutter wrap" } else { "code-gutter" };
 
     // Round 7 (R1): install the sync script once and re-sync after every
-    // render so the gutter tracks wrapping (and any content change).
+    // render so the gutter tracks wrapping and any content change (reading
+    // `code` inside the effect makes it re-run on each keystroke).
     #[cfg(any(feature = "web", feature = "desktop"))]
     {
-        let js_id = id.clone();
+        let code_dep = code;
+        let id_dep = id.clone();
         use_effect(move || {
-            let js_id = js_id.clone();
+            let _text = code_dep.read().clone(); // dependency: re-sync on change
+            let js_id = id_dep.clone();
             spawn(async move {
                 let _ = dioxus::document::eval(EDITOR_JS).await;
                 let _ = dioxus::document::eval(&format!(
