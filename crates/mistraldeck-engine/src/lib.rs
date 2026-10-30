@@ -32,6 +32,9 @@ pub const SLASH_HELP: &str = "\
 - `/status` — session statistics
 - `/version` — app + CLI versions
 - `/delete` — delete the current session
+- `/teleport [prompt]` — move this session to Vibe Code Web (cloud)
+- `/loops` — list scheduled loops (delete/clear from the dialog)
+- `/log` — show the session log and diagnostics
 - `/help` — show this list
 - `!<command>` — run a shell command in the session and show its output
 - `/<skill>` — invoke a skill (resolved by the agent)
@@ -1409,6 +1412,28 @@ impl Engine {
                 }
                 true
             }
+            "teleport" => {
+                // TUI /teleport: open the Vibe Code project picker and start
+                // the cloud handoff; args become the handoff prompt
+                let prompt = if args.is_empty() { None } else { Some(args.to_string()) };
+                if self.teleport_open(prompt) {
+                    self.local_notice("Opening Vibe Code project picker…");
+                } else {
+                    self.local_notice("No live agent session — start a session first.");
+                }
+                true
+            }
+            "loops" => {
+                // loops admin (the TUI schedules via the model's cron tool;
+                // the GUI can also manage them directly — loops/* methods)
+                self.loops_list();
+                true
+            }
+            "log" => {
+                self.session_log_read();
+                self.diagnostics_logs_read();
+                true
+            }
             _ => false,
         }
     }
@@ -1509,6 +1534,137 @@ impl Engine {
                 session_id: session_id.to_string(),
             });
         });
+    }
+
+    // --- teleport to Vibe Code Web (TUI /teleport) ---
+
+    /// `/teleport [prompt]` — open the Vibe Code project picker.
+    pub fn teleport_open(&self, prompt: Option<String>) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportOpen {
+            session_id: sid.to_string(),
+            prompt,
+        })
+    }
+
+    pub fn teleport_select(&self, picker_id: &str, project_id: &str, prompt: Option<String>) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportSelect {
+            session_id: sid.to_string(),
+            picker_id: picker_id.to_string(),
+            project_id: project_id.to_string(),
+            prompt,
+        })
+    }
+
+    pub fn teleport_create(&self, picker_id: &str, name: &str, default_branch: &str) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportCreate {
+            session_id: sid.to_string(),
+            picker_id: picker_id.to_string(),
+            name: name.to_string(),
+            default_branch: default_branch.to_string(),
+        })
+    }
+
+    pub fn teleport_load_more(&self, picker_id: &str) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportLoadMore {
+            session_id: sid.to_string(),
+            picker_id: picker_id.to_string(),
+        })
+    }
+
+    pub fn teleport_picker_cancel(&self, picker_id: &str) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportPickerCancel {
+            session_id: sid.to_string(),
+            picker_id: picker_id.to_string(),
+        })
+    }
+
+    pub fn teleport_push_respond(&self, operation_id: &str, approved: bool) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportPushRespond {
+            session_id: sid.to_string(),
+            operation_id: operation_id.to_string(),
+            approved,
+        })
+    }
+
+    pub fn teleport_abort(&self, operation_id: &str) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::TeleportAbort {
+            session_id: sid.to_string(),
+            operation_id: operation_id.to_string(),
+        })
+    }
+
+    // --- loops admin, logs, worktrees, artifacts ---
+
+    pub fn loops_list(&self) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::LoopsList {
+            session_id: sid.to_string(),
+        })
+    }
+
+    pub fn loops_delete(&self, loop_id: &str) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::LoopsDelete {
+            session_id: sid.to_string(),
+            loop_id: loop_id.to_string(),
+        })
+    }
+
+    pub fn loops_clear(&self) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::LoopsClear {
+            session_id: sid.to_string(),
+        })
+    }
+
+    pub fn session_log_read(&self) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::SessionLogRead {
+            session_id: sid.to_string(),
+        })
+    }
+
+    pub fn diagnostics_logs_read(&self) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::DiagnosticsLogsRead {
+            session_id: sid.to_string(),
+            limit: 200,
+            offset: 0,
+        })
+    }
+
+    pub fn worktrees_list(&self, cwd: &str) -> bool {
+        // prefer the current session's slot (remote sessions list on the host)
+        let st = self.state.lock().unwrap();
+        let sent = if let Some(session) = st.current_session() {
+            let key = session.id.clone();
+            st.slot_of_session(&key)
+                .and_then(|id| st.slots.get(&id))
+                .map(|slot| {
+                    slot.cmd.send(AgentCommand::WorktreesList {
+                        cwd: cwd.to_string(),
+                    })
+                })
+                .is_some()
+        } else {
+            false
+        };
+        let sent = sent || {
+            st.slots
+                .values()
+                .next()
+                .map(|slot| {
+                    slot.cmd
+                        .send(AgentCommand::WorktreesList {
+                            cwd: cwd.to_string(),
+                        })
+                        .is_ok()
+                })
+                .unwrap_or(false)
+        };
+        drop(st);
+        sent
+    }
+
+    pub fn artifacts_list(&self) -> bool {
+        self.agent_cmd_slot(|sid| AgentCommand::ArtifactsList {
+            session_id: sid.to_string(),
+        })
     }
 
     fn current_agent_pair(&self) -> Option<(String, String)> {

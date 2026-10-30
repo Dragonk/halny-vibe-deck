@@ -380,6 +380,21 @@ impl Projection {
                     });
                 }
             }
+            "vibeCode/teleport/event" => {
+                // teleport progress (summarizing_context → checking_git →
+                // push_required → pushing → starting_workflow → complete|failed)
+                if let Some(ev) = params.get("event") {
+                    events.push(AgentEvent::TeleportProgress {
+                        session_id: self.session_id.clone(),
+                        event_json: ev.to_string(),
+                    });
+                }
+            }
+            "artifacts/created" | "artifacts/updated" => {
+                events.push(AgentEvent::ArtifactsChanged {
+                    session_id: self.session_id.clone(),
+                });
+            }
             "session/lease/updated" | "session/lease/ended" => {
                 // wire: SessionLeaseUpdate {sessionId, leaseHolder|null};
                 // "ended" carries no holder → released
@@ -1559,6 +1574,32 @@ mod tests {
         assert!(evs.iter().any(|e| matches!(
             e, AgentEvent::LeaseUpdated { held_elsewhere: false, .. }
         )));
+    }
+
+    /// Round 11: `vibeCode/teleport/event` progress events are forwarded raw.
+    #[test]
+    fn teleport_event_forwarded() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("vibeCode/teleport/event", &json!({
+            "eventId": 6,
+            "event": {"kind": "complete", "operationId": "op-1", "url": "https://code.mistral.ai/x"}
+        }));
+        assert!(evs.iter().any(|e| matches!(
+            e,
+            AgentEvent::TeleportProgress { event_json, .. } if event_json.contains("\"complete\"")
+        )));
+    }
+
+    /// Round 11: artifacts/created|updated trigger a refetch event.
+    #[test]
+    fn artifacts_changed_event() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let evs = p.consume("artifacts/created", &json!({
+            "eventId": 6, "artifact": {"id": "a1", "kind": "pull_request"}
+        }));
+        assert!(evs.iter().any(|e| matches!(e, AgentEvent::ArtifactsChanged { .. })));
     }
 
     /// Round 10: snapshots carry childSessions into the SessionReady event.

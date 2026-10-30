@@ -218,6 +218,46 @@ pub enum AgentEvent {
         session_id: String,
         held_elsewhere: bool,
     },
+    /// `vibeCode/projects/open|select|create|loadMore` picker view (raw JSON).
+    TeleportPicker {
+        session_id: String,
+        picker_id: String,
+        view_json: String,
+    },
+    /// `vibeCode/teleport/event` notification (raw event JSON).
+    TeleportProgress {
+        session_id: String,
+        event_json: String,
+    },
+    /// `loops/list` result (raw JSON array of ScheduledLoop).
+    LoopsListResult {
+        session_id: String,
+        loops_json: String,
+    },
+    /// `session/log/read` result (raw SessionLogSummary JSON).
+    SessionLog {
+        session_id: String,
+        log_json: String,
+    },
+    /// `diagnostics/logs/read` result (raw DebugLogPage JSON).
+    DiagnosticsLogs {
+        session_id: String,
+        logs_json: String,
+    },
+    /// `workspace/git/worktrees/list` result (raw JSON).
+    WorktreesResult {
+        cwd: String,
+        items_json: String,
+    },
+    /// `artifacts/list` result (raw JSON).
+    ArtifactsResult {
+        session_id: String,
+        artifacts_json: String,
+    },
+    /// `artifacts/created|updated` — refetch.
+    ArtifactsChanged {
+        session_id: String,
+    },
     /// Slash commands offered by the agent for this session.
     AvailableCommands {
         session_id: String,
@@ -383,6 +423,57 @@ pub enum AgentCommand {
     LeaseSubscribe {
         session_id: String,
     },
+    // --- teleport to Vibe Code Web (TUI /teleport) ---
+    /// `vibeCode/projects/open` (purpose "teleport") → picker view.
+    TeleportOpen {
+        session_id: String,
+        prompt: Option<String>,
+    },
+    /// `vibeCode/projects/select` + `vibeCode/teleport/start`.
+    TeleportSelect {
+        session_id: String,
+        picker_id: String,
+        project_id: String,
+        prompt: Option<String>,
+    },
+    /// `vibeCode/projects/create`.
+    TeleportCreate {
+        session_id: String,
+        picker_id: String,
+        name: String,
+        default_branch: String,
+    },
+    /// `vibeCode/projects/loadMore`.
+    TeleportLoadMore {
+        session_id: String,
+        picker_id: String,
+    },
+    /// `vibeCode/projects/cancel`.
+    TeleportPickerCancel {
+        session_id: String,
+        picker_id: String,
+    },
+    /// `vibeCode/teleport/push/respond` — answer a push_required event.
+    TeleportPushRespond {
+        session_id: String,
+        operation_id: String,
+        approved: bool,
+    },
+    /// `vibeCode/teleport/cancel`.
+    TeleportAbort {
+        session_id: String,
+        operation_id: String,
+    },
+    // --- loops admin (loops/* are Desktop/GUI-only per the TUI report) ---
+    LoopsList { session_id: String },
+    LoopsDelete { session_id: String, loop_id: String },
+    LoopsClear { session_id: String },
+    // --- logs / debug console ---
+    SessionLogRead { session_id: String },
+    DiagnosticsLogsRead { session_id: String, limit: i64, offset: i64 },
+    // --- worktrees + artifacts ---
+    WorktreesList { cwd: String },
+    ArtifactsList { session_id: String },
 
     // --- L1: setup / konto (metody globalne app-servera, nie sesyjne) ---
     /// setup/status — seed wizarda (supportsBrowserSignIn, hasApiKey, browserAuth*).

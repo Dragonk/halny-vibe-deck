@@ -325,6 +325,181 @@ impl Worker {
                 );
                 self.list_sessions();
             }
+            // --- teleport to Vibe Code Web ---
+            AgentCommand::TeleportOpen { session_id, prompt } => {
+                self.teleport_open(&session_id, prompt.as_deref())
+            }
+            AgentCommand::TeleportSelect {
+                session_id,
+                picker_id,
+                project_id,
+                prompt,
+            } => self.teleport_select(&session_id, &picker_id, &project_id, prompt.as_deref()),
+            AgentCommand::TeleportCreate {
+                session_id,
+                picker_id,
+                name,
+                default_branch,
+            } => self.teleport_create(&session_id, &picker_id, &name, &default_branch),
+            AgentCommand::TeleportLoadMore {
+                session_id,
+                picker_id,
+            } => {
+                if let Ok(res) = self.call(
+                    "vibeCode/projects/loadMore",
+                    json!({"sessionId": session_id, "pickerId": picker_id}),
+                    "vibeCode/projects/loadMore",
+                ) {
+                    if let (Some(pid), Some(view)) = (
+                        res.get("pickerId").or_else(|| res.get("picker_id")).and_then(Value::as_str),
+                        res.get("view"),
+                    ) {
+                        self.emit(AgentEvent::TeleportPicker {
+                            session_id,
+                            picker_id: pid.to_string(),
+                            view_json: view.to_string(),
+                        });
+                    }
+                }
+            }
+            AgentCommand::TeleportPickerCancel {
+                session_id,
+                picker_id,
+            } => {
+                let _ = self.call(
+                    "vibeCode/projects/cancel",
+                    json!({"sessionId": session_id, "pickerId": picker_id}),
+                    "vibeCode/projects/cancel",
+                );
+            }
+            AgentCommand::TeleportPushRespond {
+                session_id,
+                operation_id,
+                approved,
+            } => {
+                let _ = self.call(
+                    "vibeCode/teleport/push/respond",
+                    json!({"sessionId": session_id, "operationId": operation_id, "approved": approved}),
+                    "vibeCode/teleport/push/respond",
+                );
+            }
+            AgentCommand::TeleportAbort {
+                session_id,
+                operation_id,
+            } => {
+                let _ = self.call(
+                    "vibeCode/teleport/cancel",
+                    json!({"sessionId": session_id, "operationId": operation_id}),
+                    "vibeCode/teleport/cancel",
+                );
+            }
+            // --- loops admin ---
+            AgentCommand::LoopsList { session_id } => {
+                match self.call(
+                    "loops/list",
+                    json!({"sessionId": session_id}),
+                    "loops/list",
+                ) {
+                    Ok(res) => self.emit(AgentEvent::LoopsListResult {
+                        session_id,
+                        loops_json: res.get("loops").cloned().unwrap_or(json!([])).to_string(),
+                    }),
+                    Err(e) => self.error("loops/list", format!("{e:#}")),
+                }
+            }
+            AgentCommand::LoopsDelete { session_id, loop_id } => {
+                let _ = self.call(
+                    "loops/delete",
+                    json!({"sessionId": session_id, "loopId": loop_id}),
+                    "loops/delete",
+                );
+                if let Ok(res) = self.call(
+                    "loops/list",
+                    json!({"sessionId": session_id}),
+                    "loops/list",
+                ) {
+                    self.emit(AgentEvent::LoopsListResult {
+                        session_id,
+                        loops_json: res.get("loops").cloned().unwrap_or(json!([])).to_string(),
+                    });
+                }
+            }
+            AgentCommand::LoopsClear { session_id } => {
+                let _ = self.call(
+                    "loops/clear",
+                    json!({"sessionId": session_id}),
+                    "loops/clear",
+                );
+                match self.call("loops/list", json!({"sessionId": session_id}), "loops/list") {
+                    Ok(res) => self.emit(AgentEvent::LoopsListResult {
+                        session_id,
+                        loops_json: res.get("loops").cloned().unwrap_or(json!([])).to_string(),
+                    }),
+                    Err(_) => {}
+                }
+            }
+            // --- logs ---
+            AgentCommand::SessionLogRead { session_id } => {
+                match self.call(
+                    "session/log/read",
+                    json!({"sessionId": session_id}),
+                    "session/log/read",
+                ) {
+                    Ok(res) => self.emit(AgentEvent::SessionLog {
+                        session_id,
+                        log_json: res.get("log").cloned().unwrap_or(res).to_string(),
+                    }),
+                    Err(e) => self.error("session/log/read", format!("{e:#}")),
+                }
+            }
+            AgentCommand::DiagnosticsLogsRead {
+                session_id,
+                limit,
+                offset,
+            } => {
+                match self.call(
+                    "diagnostics/logs/read",
+                    json!({"sessionId": session_id, "limit": limit, "offset": offset}),
+                    "diagnostics/logs/read",
+                ) {
+                    Ok(res) => self.emit(AgentEvent::DiagnosticsLogs {
+                        session_id,
+                        logs_json: res.to_string(),
+                    }),
+                    Err(e) => self.error("diagnostics/logs/read", format!("{e:#}")),
+                }
+            }
+            // --- worktrees + artifacts ---
+            AgentCommand::WorktreesList { cwd } => {
+                match self.call(
+                    "workspace/git/worktrees/list",
+                    json!({"cwd": cwd, "includeDetails": true}),
+                    "workspace/git/worktrees/list",
+                ) {
+                    Ok(res) => self.emit(AgentEvent::WorktreesResult {
+                        cwd,
+                        items_json: res.get("worktrees").cloned().unwrap_or(json!([])).to_string(),
+                    }),
+                    Err(e) => self.error("workspace/git/worktrees/list", format!("{e:#}")),
+                }
+            }
+            AgentCommand::ArtifactsList { session_id } => {
+                match self.call(
+                    "artifacts/list",
+                    json!({"sessionId": session_id}),
+                    "artifacts/list",
+                ) {
+                    Ok(res) => self.emit(AgentEvent::ArtifactsResult {
+                        session_id,
+                        artifacts_json: res
+                            .get("artifacts")
+                            .cloned()
+                            .unwrap_or(json!([]))
+                            .to_string(),
+                    }),
+                    Err(e) => self.error("artifacts/list", format!("{e:#}")),
+                }
+            }
             AgentCommand::LeaseSubscribe { session_id } => {
                 match self.call(
                     "session/lease/subscribe",
@@ -793,6 +968,99 @@ impl Worker {
                 });
             }
             Err(e) => self.error("session/rewind/read", format!("{e:#}")),
+        }
+    }
+
+    /// `/teleport` — open the Vibe Code project picker (purpose "teleport").
+    fn teleport_open(&mut self, session_id: &str, prompt: Option<&str>) {
+        let mut params = json!({"sessionId": session_id, "purpose": "teleport"});
+        if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
+            params["prompt"] = json!(p);
+        }
+        match self.call("vibeCode/projects/open", params, "vibeCode/projects/open") {
+            Ok(res) => {
+                let picker_id = res
+                    .get("pickerId")
+                    .or_else(|| res.get("picker_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let view = res.get("view").cloned().unwrap_or(Value::Null);
+                self.emit(AgentEvent::TeleportPicker {
+                    session_id: session_id.to_string(),
+                    picker_id,
+                    view_json: view.to_string(),
+                });
+            }
+            Err(e) => self.error("vibeCode/projects/open", format!("{e:#}")),
+        }
+    }
+
+    /// Select a project in the picker → `vibeCode/teleport/start`.
+    fn teleport_select(
+        &mut self,
+        session_id: &str,
+        picker_id: &str,
+        project_id: &str,
+        prompt: Option<&str>,
+    ) {
+        if let Err(e) = self.call(
+            "vibeCode/projects/select",
+            json!({"sessionId": session_id, "pickerId": picker_id, "projectId": project_id}),
+            "vibeCode/projects/select",
+        ) {
+            self.error("vibeCode/projects/select", format!("{e:#}"));
+            return;
+        }
+        let mut params = json!({
+            "sessionId": session_id,
+            "pickerId": picker_id,
+            "operationId": format!("op-{}", mistraldeck_core::types::now_ms()),
+            "projectId": project_id,
+        });
+        if let Some(p) = prompt.filter(|p| !p.trim().is_empty()) {
+            params["prompt"] = json!(p);
+        }
+        let op_id = params["operationId"].as_str().unwrap_or_default().to_string();
+        match self.call("vibeCode/teleport/start", params, "vibeCode/teleport/start") {
+            Ok(_) => {
+                self.emit(AgentEvent::TeleportProgress {
+                    session_id: session_id.to_string(),
+                    event_json: json!({"kind": "started", "operationId": op_id}).to_string(),
+                });
+            }
+            Err(e) => self.error("vibeCode/teleport/start", format!("{e:#}")),
+        }
+    }
+
+    /// Create a new Vibe Code project from the picker.
+    fn teleport_create(
+        &mut self,
+        session_id: &str,
+        picker_id: &str,
+        name: &str,
+        default_branch: &str,
+    ) {
+        match self.call(
+            "vibeCode/projects/create",
+            json!({
+                "sessionId": session_id,
+                "pickerId": picker_id,
+                "name": name,
+                "defaultBranch": default_branch,
+            }),
+            "vibeCode/projects/create",
+        ) {
+            Ok(res) => {
+                if let Some(view) = res.get("view") {
+                    self.emit(AgentEvent::TeleportPicker {
+                        session_id: session_id.to_string(),
+                        picker_id: picker_id.to_string(),
+                        view_json: view.to_string(),
+                    });
+                }
+            }
+            Err(e) => self.error("vibeCode/projects/create", format!("{e:#}")),
         }
     }
 

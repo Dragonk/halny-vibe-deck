@@ -43,6 +43,8 @@ const BUILTIN_SLASH_COMMANDS: &[(&str, &str, &str)] = &[
     ("branch", "Fork the session at a checkpoint into a new session", "optional checkpoint"),
     ("fork", "Alias of /branch", ""),
     ("loop", "Schedule a recurring prompt", "schedule and prompt"),
+    ("loops", "List and manage scheduled loops", ""),
+    ("teleport", "Move this session to Vibe Code Web (cloud)", "optional handoff prompt"),
     ("delete", "Delete the current session", ""),
     ("diff", "Open the Git diff view", ""),
     ("theme", "Cycle the theme", "light | dark | auto"),

@@ -224,6 +224,8 @@ pub fn ChatView() -> Element {
                     // Subagent shelf (TUI subagent_list parity): live child
                     // sessions of the current session — click opens the child.
                     {subagent_bar(state, lang.clone())}
+                    // PR artifacts of this session (artifacts/list)
+                    {artifacts_bar(state)}
                     // v0.13.1: the error banner renders also when the chat
                     // already has messages (Nexus ChatView), not only in the
                     // empty state.
@@ -248,6 +250,465 @@ pub fn ChatView() -> Element {
             crate::components::input::InputBar {}
             // `/rewind` / `/branch` checkpoint picker modal
             {rewind_modal(state)}
+            // `/teleport` Vibe Code picker + progress, `/loops`, `/log`
+            {teleport_modal(state)}
+            {loops_modal(state)}
+            {log_modal(state)}
+        }
+    }
+}
+
+/// Session artifacts (PRs) chips — `artifacts/list`, click opens the PR.
+fn artifacts_bar(state: Signal<ClientState>) -> Element {
+    let arts = state.read().artifacts.clone();
+    if arts.is_empty() {
+        return VNode::empty();
+    }
+    rsx! {
+        div { class: "subagent-bar",
+            for a in arts.iter() {
+                {
+                    let v: serde_json::Value = serde_json::from_str(a).unwrap_or(serde_json::Value::Null);
+                    let url = v.get("externalUrl").or_else(|| v.get("external_url")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    let title = v.get("displayTitle").or_else(|| v.get("display_title")).and_then(|x| x.as_str()).unwrap_or("PR").to_string();
+                    let key = v.get("externalKey").or_else(|| v.get("external_key")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    rsx! {
+                        button {
+                            class: "subagent-chip",
+                            title: "{key}",
+                            onclick: move |_| {
+                                #[cfg(any(feature = "web", feature = "desktop"))]
+                                {
+                                    let u = url.clone();
+                                    spawn(async move {
+                                        let _ = dioxus::document::eval(&format!(
+                                            "window.open('{}','_blank','noopener');", u.replace('\'', ""))
+                                        ).await;
+                                    });
+                                }
+                            },
+                            "🔗 {title}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `/teleport` modal: Vibe Code project picker + handoff progress.
+fn teleport_modal(state: Signal<ClientState>) -> Element {
+    let (picker, progress) = {
+        let s = state.read();
+        (s.teleport_picker.clone(), s.teleport_progress.clone())
+    };
+    let Some(picker) = picker else {
+        // progress without picker (handoff running) — still show it
+        let Some(ev) = progress else { return VNode::empty() };
+        return teleport_progress_el(state, &ev);
+    };
+    let view: serde_json::Value = serde_json::from_str(&picker.view_json).unwrap_or(serde_json::Value::Null);
+    let ctx = &view["context"];
+    let repo_name = ctx.get("repoName").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let repo_url = ctx.get("repoUrl").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let saved = ctx.get("savedLink").cloned().unwrap_or(serde_json::Value::Null);
+    let saved_project_id = saved.get("projectId").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let projects = view["state"]["projects"].as_array().cloned().unwrap_or_default();
+    let has_more = view["state"].get("nextCursor").and_then(|x| x.as_str()).is_some();
+    let picker_id = picker.picker_id.clone();
+
+    // progress event overrides the picker view while a handoff runs
+    if let Some(ev) = &progress {
+        return teleport_progress_el(state, ev);
+    }
+
+    let mut create_name = use_signal(|| String::new());
+    let mut create_branch = use_signal(|| "main".to_string());
+
+    rsx! {
+        div {
+            class: "modal-overlay",
+            onclick: {
+                let state = state.clone();
+                let pid = picker_id.clone();
+                move |_| {
+                    let state = state.clone();
+                    let pid = pid.clone();
+                    spawn(async move {
+                        let _ = crate::api::api_teleport_picker_cancel(token(&state), pid).await;
+                        let mut st = state.clone();
+                        st.write().teleport_picker = None;
+                        st.write().teleport_progress = None;
+                    });
+                }
+            },
+            div {
+                class: "modal-box rewind-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "Teleport to Vibe Code Web" }
+                div { class: "rewind-paths", "Repo: {repo_name} ({repo_url})" }
+                if !saved_project_id.is_empty() {
+                    div { class: "rewind-paths", "Linked project: {saved_project_id}" }
+                }
+                div { class: "rewind-entry-list",
+                    if projects.is_empty() {
+                        div { class: "rewind-paths", "No projects yet — create one below." }
+                    }
+                    for p in projects.iter() {
+                        {
+                            let state = state.clone();
+                            let pid = picker_id.clone();
+                            let project_id = p.get("projectId").or_else(|| p.get("project_id")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("project").to_string();
+                            let ro = p.get("isReadOnly").or_else(|| p.get("is_read_only")).and_then(|x| x.as_bool()).unwrap_or(false);
+                            let ro_label = if ro { "☁ (read-only)" } else { "☁" };
+                            rsx! {
+                                button {
+                                    class: "ctx-menu-item",
+                                    disabled: ro,
+                                    onclick: move |_| {
+                                        let state = state.clone();
+                                        let pid = pid.clone();
+                                        let project_id = project_id.clone();
+                                        spawn(async move {
+                                            let _ = crate::api::api_teleport_select(token(&state), pid, project_id, None).await;
+                                        });
+                                    },
+                                    "{ro_label} {name}"
+                                }
+                            }
+                        }
+                    }
+                    if has_more {
+                        button {
+                            class: "ctx-menu-item",
+                            onclick: {
+                                let state = state.clone();
+                                let pid = picker_id.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let pid = pid.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_teleport_load_more(token(&state), pid).await;
+                                    });
+                                }
+                            },
+                            "Load more…"
+                        }
+                    }
+                }
+                div { class: "rewind-confirm",
+                    div { class: "rewind-paths", "Create a new project:" }
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        placeholder: "project name",
+                        value: "{create_name.read()}",
+                        oninput: move |e| create_name.set(e.value()),
+                    }
+                    input {
+                        class: "field-input",
+                        r#type: "text",
+                        placeholder: "default branch",
+                        value: "{create_branch.read()}",
+                        oninput: move |e| create_branch.set(e.value()),
+                    }
+                    div { class: "rewind-actions",
+                        button {
+                            class: "field-btn primary",
+                            disabled: create_name.read().trim().is_empty(),
+                            onclick: {
+                                let state = state.clone();
+                                let pid = picker_id.clone();
+                                move |_| {
+                                    let name = create_name.read().trim().to_string();
+                                    let branch = create_branch.read().trim().to_string();
+                                    let state = state.clone();
+                                    let pid = pid.clone();
+                                    spawn(async move {
+                                        if name.is_empty() { return; }
+                                        let _ = crate::api::api_teleport_create(token(&state), pid, name, branch).await;
+                                    });
+                                }
+                            },
+                            "Create"
+                        }
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let state = state.clone();
+                                let pid = picker_id.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let pid = pid.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_teleport_picker_cancel(token(&state), pid).await;
+                                        let mut st = state.clone();
+                                        st.write().teleport_picker = None;
+                                        st.write().teleport_progress = None;
+                                    });
+                                }
+                            },
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Teleport handoff progress (vibeCode/teleport/event kinds).
+fn teleport_progress_el(state: Signal<ClientState>, ev_json: &str) -> Element {
+    let ev: serde_json::Value = serde_json::from_str(ev_json).unwrap_or(serde_json::Value::Null);
+    let kind = ev.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let op_id = ev.get("operationId").or_else(|| ev.get("operation_id")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let (label, done) = match kind.as_str() {
+        "started" => ("Starting teleport…", false),
+        "summarizing_context" => ("Summarizing context…", false),
+        "checking_git" => ("Checking git state…", false),
+        "push_required" => ("Unpushed changes — push to continue?", false),
+        "pushing" => ("Pushing…", false),
+        "starting_workflow" => ("Starting Vibe Code workflow…", false),
+        "complete" => ("Teleported to Vibe Code Web", true),
+        "failed" => ("Teleport failed", true),
+        other => (other, false),
+    };
+    let url = ev.get("url").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let error = ev.get("error").cloned().unwrap_or(serde_json::Value::Null);
+    let err_msg = error.get("message").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    rsx! {
+        div {
+            class: "modal-overlay",
+            onclick: {
+                let mut st = state.clone();
+                move |_| { st.write().teleport_picker = None; st.write().teleport_progress = None; }
+            },
+            div {
+                class: "modal-box",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "Teleport to Vibe Code Web" }
+                div { class: "rewind-paths", "{label}" }
+                if kind == "push_required" {
+                    div { class: "rewind-actions",
+                        button {
+                            class: "field-btn primary",
+                            onclick: {
+                                let state = state.clone();
+                                let op = op_id.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let op = op.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_teleport_push_respond(token(&state), op, true).await;
+                                    });
+                                }
+                            },
+                            "Push and continue"
+                        }
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let state = state.clone();
+                                let op = op_id.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let op = op.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_teleport_push_respond(token(&state), op, false).await;
+                                    });
+                                }
+                            },
+                            "Skip push"
+                        }
+                    }
+                }
+                if !err_msg.is_empty() {
+                    div { class: "rewind-paths", "Error: {err_msg}" }
+                }
+                if done && !url.is_empty() {
+                    div { class: "rewind-actions",
+                        button {
+                            class: "field-btn primary",
+                            onclick: move |_| {
+                                #[cfg(any(feature = "web", feature = "desktop"))]
+                                {
+                                    let u = url.clone();
+                                    spawn(async move {
+                                        let _ = dioxus::document::eval(&format!(
+                                            "window.open('{}','_blank','noopener');", u.replace('\'', ""))
+                                        ).await;
+                                    });
+                                }
+                            },
+                            "Open in Vibe Code Web"
+                        }
+                    }
+                }
+                if !done {
+                    div { class: "rewind-actions",
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let state = state.clone();
+                                let op = op_id.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    let op = op.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_teleport_abort(token(&state), op).await;
+                                        let mut st = state.clone();
+                                        st.write().teleport_picker = None;
+                                        st.write().teleport_progress = None;
+                                    });
+                                }
+                            },
+                            "Abort"
+                        }
+                    }
+                }
+                if done {
+                    div { class: "rewind-actions",
+                        button {
+                            class: "field-btn",
+                            onclick: {
+                                let mut st = state.clone();
+                                move |_| { st.write().teleport_picker = None; st.write().teleport_progress = None; }
+                            },
+                            "Close"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `/loops` — scheduled loops admin modal (loops/list|delete|clear).
+fn loops_modal(state: Signal<ClientState>) -> Element {
+    let loops_json = state.read().loops_modal.clone();
+    let Some(loops_json) = loops_json else { return VNode::empty() };
+    let loops: Vec<serde_json::Value> =
+        serde_json::from_str(&loops_json).unwrap_or_default();
+    rsx! {
+        div {
+            class: "modal-overlay",
+            onclick: {
+                let mut st = state.clone();
+                move |_| { st.write().loops_modal = None; }
+            },
+            div {
+                class: "modal-box rewind-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "Scheduled loops" }
+                div { class: "rewind-entry-list",
+                    if loops.is_empty() {
+                        div { class: "rewind-paths", "No scheduled loops. Use /loop <schedule> <prompt> in chat to create one (via the agent)." }
+                    }
+                    for l in loops.iter() {
+                        {
+                            let state = state.clone();
+                            let id = l.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let prompt = l.get("prompt").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                            let sched = l.get("intervalSeconds").and_then(|x| x.as_i64()).map(|s| format!("every {s}s"))
+                                .or_else(|| l.get("cron").and_then(|x| x.as_str()).map(|c| format!("cron {c}")))
+                                .unwrap_or_default();
+                            let next = l.get("nextFireAt").and_then(|x| x.as_f64()).map(|t| format!("next {t:.0}")).unwrap_or_default();
+                            rsx! {
+                                div { class: "ctx-menu-item",
+                                    span { "⏰ {sched} · {next} — {prompt}" }
+                                    button {
+                                        class: "ctx-menu-item danger",
+                                        onclick: {
+                                            let state = state.clone();
+                                            let id = id.clone();
+                                            move |e| {
+                                                e.stop_propagation();
+                                                let state = state.clone();
+                                                let id = id.clone();
+                                                spawn(async move {
+                                                    let _ = crate::api::api_loops_delete(token(&state), id).await;
+                                                });
+                                            }
+                                        },
+                                        "✕"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                div { class: "rewind-actions",
+                    if !loops.is_empty() {
+                        button {
+                            class: "field-btn danger",
+                            onclick: {
+                                let state = state.clone();
+                                move |_| {
+                                    let state = state.clone();
+                                    spawn(async move {
+                                        let _ = crate::api::api_loops_clear(token(&state)).await;
+                                    });
+                                }
+                            },
+                            "Clear all"
+                        }
+                    }
+                    button {
+                        class: "field-btn",
+                        onclick: {
+                            let mut st = state.clone();
+                            move |_| { st.write().loops_modal = None; }
+                        },
+                        "Close"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// `/log` — session log + diagnostics modal.
+fn log_modal(state: Signal<ClientState>) -> Element {
+    let modal = state.read().log_modal.clone();
+    let Some((log_json, diag_json)) = modal else { return VNode::empty() };
+    let log: serde_json::Value = serde_json::from_str(&log_json).unwrap_or(serde_json::Value::Null);
+    let dir = log.get("dir").or_else(|| log.get("path")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let diag: serde_json::Value = serde_json::from_str(&diag_json).unwrap_or(serde_json::Value::Null);
+    let entries = diag.get("logs").and_then(|l| l.get("entries")).and_then(|x| x.as_array()).cloned().unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    for e in entries.iter().take(120) {
+        let lvl = e.get("level").and_then(|x| x.as_str()).unwrap_or("");
+        let msg = e.get("message").and_then(|x| x.as_str()).unwrap_or("");
+        let ts = e.get("timestamp").and_then(|x| x.as_str()).unwrap_or("");
+        lines.push(format!("{ts} [{lvl}] {msg}"));
+    }
+    rsx! {
+        div {
+            class: "modal-overlay",
+            onclick: {
+                let mut st = state.clone();
+                move |_| { st.write().log_modal = None; }
+            },
+            div {
+                class: "modal-box rewind-modal",
+                onclick: move |e| e.stop_propagation(),
+                div { class: "modal-title", "Session log" }
+                if !dir.is_empty() {
+                    div { class: "rewind-paths", "Log directory: {dir}" }
+                }
+                pre { class: "log-view", {lines.join("\n")} }
+                div { class: "rewind-actions",
+                    button {
+                        class: "field-btn",
+                        onclick: {
+                            let mut st = state.clone();
+                            move |_| { st.write().log_modal = None; }
+                        },
+                        "Close"
+                    }
+                }
+            }
         }
     }
 }

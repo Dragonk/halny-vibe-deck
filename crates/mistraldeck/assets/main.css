@@ -7662,3 +7662,4 @@ img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); bo
 .session-item.archived { opacity: 0.55; }
 .session-badge { font-size: 10px; }
 .session-badge.unseen-dot { color: var(--accent, #ff6a00); }
+.log-view { max-height: 46vh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; white-space: pre-wrap; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px; color: var(--text); }

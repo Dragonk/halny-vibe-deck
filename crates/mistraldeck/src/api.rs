@@ -287,6 +287,108 @@ pub async fn api_delete_backend_session(token: String, session_id: String) -> Re
     Ok(())
 }
 
+// --- teleport to Vibe Code Web ---
+
+#[server]
+pub async fn api_teleport_open(token: String, prompt: Option<String>) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_open(prompt);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_select(token: String, picker_id: String, project_id: String, prompt: Option<String>) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_select(&picker_id, &project_id, prompt);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_create(token: String, picker_id: String, name: String, default_branch: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_create(&picker_id, &name, &default_branch);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_load_more(token: String, picker_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_load_more(&picker_id);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_picker_cancel(token: String, picker_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_picker_cancel(&picker_id);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_push_respond(token: String, operation_id: String, approved: bool) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_push_respond(&operation_id, approved);
+    Ok(())
+}
+
+#[server]
+pub async fn api_teleport_abort(token: String, operation_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().teleport_abort(&operation_id);
+    Ok(())
+}
+
+// --- loops admin / logs / worktrees / artifacts ---
+
+#[server]
+pub async fn api_loops_list(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().loops_list();
+    Ok(())
+}
+
+#[server]
+pub async fn api_loops_delete(token: String, loop_id: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().loops_delete(&loop_id);
+    Ok(())
+}
+
+#[server]
+pub async fn api_loops_clear(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().loops_clear();
+    Ok(())
+}
+
+#[server]
+pub async fn api_session_log_read(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().session_log_read();
+    Ok(())
+}
+
+#[server]
+pub async fn api_diagnostics_logs_read(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().diagnostics_logs_read();
+    Ok(())
+}
+
+#[server]
+pub async fn api_worktrees_list(token: String, cwd: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().worktrees_list(&cwd);
+    Ok(())
+}
+
+#[server]
+pub async fn api_artifacts_list(token: String) -> Result<(), ServerFnError> {
+    check(&token)?;
+    mistraldeck_engine::Engine::global().artifacts_list();
+    Ok(())
+}
+
 #[server]
 pub async fn api_set_config_option(token: String, key: String, value: String) -> Result<(), ServerFnError> {
     check(&token)?;

@@ -46,3 +46,17 @@ teleport/vibeCode, review/*, imports/*, projectLinks, loops admin (loops still
 work via the model's cron tool), voice/narration, debug console, worktree
 admin (badge shown), artifacts/PR status. Session spawn request from the
 server is not advertised (same as the TUI).
+
+## Round 11 additions (1.99.17)
+
+- **Teleport** (`/teleport [prompt]`): `vibeCode/projects/open|select|create|
+  loadMore|cancel` picker modal + `vibeCode/teleport/start` handoff with live
+  `vibeCode/teleport/event` progress (push_required → `teleport/push/respond`,
+  abort → `teleport/cancel`, complete → cloud URL button).
+- `/loops` admin modal (`loops/list|delete|clear`), `/log` session-log +
+  diagnostics modal (`session/log/read`, `diagnostics/logs/read`),
+  worktrees list in the dock Git tab (`workspace/git/worktrees/list`),
+  PR artifact chips in chat (`artifacts/list` + `artifacts/created|updated`).
+
+Still intentionally absent: voice/narration (audio hardware), review/* UI,
+imports/*, projectLinks/* admin.

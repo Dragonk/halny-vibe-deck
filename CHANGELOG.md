@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.99.17 — teleport to Vibe Code Web + loops/log/worktree/artifacts admin (2026-10-30)
+
+- **`/teleport [prompt]`** — full TUI parity with the installed v3.0.4 wire:
+  `vibeCode/projects/open` (purpose "teleport") → project picker modal
+  (list/select/create/load-more via `vibeCode/projects/*`), then
+  `vibeCode/teleport/start`; progress events (`vibeCode/teleport/event`:
+  summarizing_context → checking_git → push_required (Push/Skip buttons via
+  `teleport/push/respond`) → pushing → starting_workflow → complete with the
+  cloud URL / failed) render live in a modal; abort via `teleport/cancel`.
+- **`/loops`** — scheduled-loop admin modal (`loops/list|delete|clear`).
+- **`/log`** — session log + diagnostics modal (`session/log/read`,
+  `diagnostics/logs/read`).
+- **Worktrees** — `workspace/git/worktrees/list` renders in the dock Git tab
+  (name/branch/+a/-d, click reveals the worktree in the file tree); worktree
+  badge on session rows.
+- **Artifacts** — `artifacts/list` on session open + `artifacts/created|updated`
+  → PR chips in the chat (click opens the PR).
+
 ## 1.99.16 — full TUI parity, verified against the installed CLI v3.0.4 (2026-10-30)
 
 Re-audited against the actual `vibe-rs` TUI binary and `vibe/app_server` 3.0.4

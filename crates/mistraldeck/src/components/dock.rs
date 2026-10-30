@@ -7,6 +7,7 @@
 
 use dioxus::prelude::*;
 
+use crate::api::api_worktrees_list;
 use crate::components::code_editor::CodeEditor;
 use crate::fsgit::{
     api_git_commit, api_git_diff, api_git_log, api_git_push, api_git_stage, api_git_status,
@@ -234,9 +235,11 @@ async fn git_refresh(
     if let Ok(s) = api_git_status(tok.clone(), cwd.clone(), rid.clone()).await {
         git.set(Some(s));
     }
-    if let Ok(l) = api_git_log(tok, cwd, rid, 30).await {
+    if let Ok(l) = api_git_log(tok.clone(), cwd.clone(), rid.clone(), 30).await {
         git_log.set(l);
     }
+    // linked worktrees of this repo (workspace/git/worktrees/list)
+    let _ = api_worktrees_list(tok, cwd).await;
 }
 
 /// Stage (or unstage) paths, then refresh (Nexus stagePaths/unstagePaths).
@@ -1956,6 +1959,45 @@ fn git_panel(
     let entries_len = entries.len();
     let has_unstaged = entries.iter().any(|e| !e.staged);
 
+    // linked worktrees (workspace/git/worktrees/list) — click reveals in Files
+    let worktrees: Vec<serde_json::Value> = state
+        .read()
+        .worktrees
+        .as_ref()
+        .and_then(|(_, j)| serde_json::from_str::<Vec<serde_json::Value>>(j).ok())
+        .unwrap_or_default();
+    let wt_els: Vec<Element> = worktrees
+        .iter()
+        .map(|w| {
+            let state = state.clone();
+            let name = w.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let branch = w.get("branch").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let wcwd = w.get("cwd").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let changes = w.get("branchChanges").and_then(|c| {
+                let a = c.get("additions").and_then(|x| x.as_i64()).unwrap_or(0);
+                let d = c.get("deletions").and_then(|x| x.as_i64()).unwrap_or(0);
+                if a + d > 0 { Some(format!("+{a}/-{d}")) } else { None }
+            });
+            rsx! {
+                button {
+                    class: "ctx-menu-item worktree-row",
+                    title: "{wcwd}",
+                    onclick: move |_| {
+                        let state = state.clone();
+                        let p = wcwd.clone();
+                        spawn(async move {
+                            crate::state::open_path(state, &p).await;
+                        });
+                    },
+                    "🌿 {name} ({branch})"
+                    if let Some(c) = &changes {
+                        span { class: "session-badge", " {c}" }
+                    }
+                }
+            }
+        })
+        .collect();
+
     // error banner: action error wins over the status error (Nexus
     // `{gitError ?? status.error}`)
     let shown_err = if extra_err.is_empty() {
@@ -2164,6 +2206,12 @@ fn git_panel(
             div { class: "git-section-label", "{tr(&lang, \"gitHistory\")}" }
             div { class: "git-log",
                 {history_el}
+            }
+            if !wt_els.is_empty() {
+                div { class: "git-section-label", "Worktrees" }
+                div { class: "git-log",
+                    {wt_els.iter().cloned()}
+                }
             }
         }
     }

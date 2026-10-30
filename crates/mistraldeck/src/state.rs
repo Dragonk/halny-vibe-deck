@@ -69,6 +69,25 @@ pub struct ClientState {
     pub rewind_pick: Option<RewindPick>,
     /// Last `session/rewind/read` answer — files a rewind would restore.
     pub rewind_info: Option<RewindInfoView>,
+    /// `/teleport` — Vibe Code project picker view (raw JSON) + picker id.
+    pub teleport_picker: Option<TeleportUi>,
+    /// `vibeCode/teleport/event` progress (raw event JSON).
+    pub teleport_progress: Option<String>,
+    /// `/loops` modal — raw loops JSON array.
+    pub loops_modal: Option<String>,
+    /// `/log` modal — (session log JSON, diagnostics logs JSON).
+    pub log_modal: Option<(String, String)>,
+    /// `workspace/git/worktrees/list` result — (cwd, items JSON).
+    pub worktrees: Option<(String, String)>,
+    /// Session artifacts (PRs) — raw JSON per artifact.
+    pub artifacts: Vec<String>,
+}
+
+/// Teleport picker modal state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TeleportUi {
+    pub picker_id: String,
+    pub view_json: String,
 }
 
 /// Checkpoint picker opened by `/rewind` or `/branch`.
@@ -144,6 +163,21 @@ pub async fn refresh(mut state: Signal<ClientState>) {
                 s.snapshot.current_messages = prev_messages;
             }
             s.loaded = true;
+            // fetch PR artifacts for the open session (artifacts/list)
+            let has_agent = s
+                .snapshot
+                .current
+                .and_then(|i| s.snapshot.sessions.get(i))
+                .map(|m| m.agent_session_id.is_some())
+                .unwrap_or(false);
+            drop(s);
+            if has_agent {
+                let st = state.clone();
+                spawn(async move {
+                    let tok = st.read().token.clone().unwrap_or_default();
+                    let _ = crate::api::api_artifacts_list(tok).await;
+                });
+            }
         }
         Err(_e) => { /* snapshot fetch failed; next event will retry */ }
     }
@@ -353,6 +387,55 @@ fn apply_agent_event(mut state: Signal<ClientState>, e: AgentEvent) -> bool {
                 let entries = mistraldeck_core::types::PlanEntry::parse_list(&entries_json);
                 state.write().snapshot.current_plan = entries;
             }
+            false
+        }
+        // teleport to Vibe Code Web: picker view + progress events
+        AgentEvent::TeleportPicker {
+            picker_id,
+            view_json,
+            ..
+        } => {
+            let mut s = state.write();
+            s.teleport_picker = Some(TeleportUi { picker_id, view_json });
+            s.teleport_progress = None;
+            false
+        }
+        AgentEvent::TeleportProgress { event_json, .. } => {
+            state.write().teleport_progress = Some(event_json);
+            false
+        }
+        AgentEvent::LoopsListResult { loops_json, .. } => {
+            state.write().loops_modal = Some(loops_json);
+            false
+        }
+        AgentEvent::SessionLog { log_json, .. } => {
+            let mut s = state.write();
+            let e = s.log_modal.take().unwrap_or_else(|| (String::new(), String::new()));
+            s.log_modal = Some((log_json, e.1));
+            false
+        }
+        AgentEvent::DiagnosticsLogs { logs_json, .. } => {
+            let mut s = state.write();
+            let e = s.log_modal.take().unwrap_or_else(|| (String::new(), String::new()));
+            s.log_modal = Some((e.0, logs_json));
+            false
+        }
+        AgentEvent::WorktreesResult { cwd, items_json } => {
+            state.write().worktrees = Some((cwd, items_json));
+            false
+        }
+        AgentEvent::ArtifactsResult { artifacts_json, .. } => {
+            let parsed: Vec<String> = serde_json::from_str::<Vec<serde_json::Value>>(&artifacts_json)
+                .map(|v| v.iter().map(|x| x.to_string()).collect())
+                .unwrap_or_default();
+            state.write().artifacts = parsed;
+            false
+        }
+        AgentEvent::ArtifactsChanged { .. } => {
+            let st = state.clone();
+            spawn(async move {
+                let _ = crate::api::api_artifacts_list(token(&st)).await;
+            });
             false
         }
         // rewind preview answer — the /rewind picker shows affected files
