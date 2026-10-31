@@ -1,4 +1,4 @@
-# Halny Vibe Deck (Rust edition) — an unofficial desktop GUI for Mistral Vibe CLI
+# Halny Vibe Deck — an unofficial GUI for the Mistral Vibe CLI
 
 > **⚠️ Unofficial community project.** Halny Vibe Deck is **not** an official Mistral AI
 > product and is **not** affiliated with, endorsed by, or supported by Mistral AI.
@@ -6,29 +6,17 @@
 > Halny Vibe Deck is an independent GUI for the open-source
 > **Mistral Vibe CLI** (it drives `vibe-app-server` over its JSON-RPC protocol).
 
-**Halny Vibe Deck (Rust edition)** is a single-binary GUI for the Mistral Vibe CLI,
-built with **Dioxus 0.7 (fullstack)**: the UI is compiled to WASM and served by an
-embedded Rust (Axum) server in the same process. It runs in two ways:
+**Halny Vibe Deck** is a single-binary GUI for the Mistral Vibe CLI, built with
+**Dioxus 0.7 (fullstack)**: the UI is compiled to WASM and served by an embedded
+Rust (Axum) server in the same process. One binary, two ways to run:
 
 - **Desktop app** — a native webview window (WebView2 on Windows, webkit2gtk on
   Linux) with a frameless title bar.
 - **Headless server** — the exact same UI served over **HTTPS** to any browser
   (PWA-installable), for local use, LAN, or remote machines.
 
-This is the **Rust edition** of [Dragonk/halny-vibe-deck](https://github.com/Dragonk/halny-vibe-deck),
-developed on the **`next`** branch as the future replacement of the Electron/TypeScript
-edition on `main`.
-
-> ℹ️ **Status: prerelease (1.99.x).** Until the Rust edition matures, official Halny Vibe
-> Deck releases come from the Electron edition on `main`. Builds from this branch are
-> published as **prereleases tagged v1.99.x** — usable, but expect rough edges.
-
-## Why the rewrite?
-
-The Electron edition ships a whole Chromium per window; the Rust edition is a single
-binary plus the OS webview, with the UI compiled to WASM and a Rust server in one
-process. Lower RAM, faster startup, one binary to update — and when it reaches parity,
-only this edition will be maintained.
+> ℹ️ **Status: prerelease (1.99.x).** Builds from the `next` branch are published as
+> prereleases tagged `v1.99.x` — usable, but expect rough edges.
 
 ## Download
 
@@ -68,11 +56,10 @@ unpack anywhere and run.
   `0.0.0.0` over HTTPS with a login page: `https://<host-ip>:8080`.
 - `./halny-vibe-deck-appserver` — the same headless server as a dedicated console
   binary (no webview code compiled in; the GUI is always disabled).
-- `--port 1234` — change the port; `HALNY_VIBE_DECK_PORT` env var overrides it
-  (legacy `MISTRALDECK_PORT` still works).
+- `--port 1234` — change the port; the `HALNY_VIBE_DECK_PORT` env var overrides it.
 
-Configuration lives in `~/.config/halny-vibe-deck/config.json`; existing
-`mistraldeck` / `vibedeck` configs are migrated automatically on first run.
+Configuration lives in `~/.config/halny-vibe-deck/config.json`; config from earlier
+builds is migrated automatically on first run.
 
 ## Features
 
@@ -129,12 +116,6 @@ Workspace layout (shipped binaries: `halny-vibe-deck` / `halny-vibe-deck-appserv
   agents, prompts, skills), session stats.
 - `crates/halny-vibe-deck-core` — shared domain types and protocol events.
 - `crates/halny-vibe-deck-setup` — first-run setup: detecting/installing `vibe-app-server`.
-
-## Versioning
-
-- `main` — the Electron edition (official releases, 1.x).
-- `next` — this Rust edition; **prereleases on the 1.99.x line** (v1.99.0, v1.99.1, …)
-  until it reaches parity, at which point it replaces the Electron edition on `main`.
 
 ## License
 
