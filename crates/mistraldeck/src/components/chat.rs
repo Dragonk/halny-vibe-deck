@@ -72,7 +72,21 @@ pub fn ChatView() -> Element {
     // session (`turn.error`) + the server's rateLimitAction CTA
     // (present only when an upgrade makes sense — plan API /
     // Mistral Code; CHAT Pro holders get no CTA).
-    let turn_failed = state.read().turn_failed.clone();
+    // Round 14: the failure banner is per-session — an error from a
+    // remote session must not leak into the local session after a
+    // switch, so only render it when it belongs to the visible session.
+    let current_agent_id = {
+        let s = state.read();
+        s.snapshot
+            .current
+            .and_then(|i| s.snapshot.sessions.get(i))
+            .and_then(|m| m.agent_session_id.clone())
+    };
+    let turn_failed = state
+        .read()
+        .turn_failed
+        .clone()
+        .filter(|(_, _, sid)| current_agent_id.as_deref() == Some(sid.as_str()));
     let rate_limit_action = state
         .read()
         .snapshot
@@ -81,13 +95,14 @@ pub fn ChatView() -> Element {
         .filter(|a| !a.unsupported)
         .and_then(|a| a.rate_limit_action.clone());
     let rate_limit_el: Element = match turn_failed.as_ref() {
-        Some((code, message)) => {
+        Some((code, message, _)) => {
             let is_rate_limit = code == "rate_limit";
             let cta = if is_rate_limit { rate_limit_action.clone() } else { None };
             rsx! {
                 div { class: "chat-error-banner",
                     span { "⚠" }
-                    " {tf(&lang, \"rateLimitBanner\", &[(\"message\", message.as_str())])}"
+                    span { class: "chat-error-text",
+                        " {tf(&lang, \"rateLimitBanner\", &[(\"message\", message.as_str())])}" }
                     if let Some(a) = cta {
                         if a.kind == "switch_api_key" {
                             button {
@@ -200,7 +215,7 @@ pub fn ChatView() -> Element {
                             div { class: "chat-empty-title", "{tr(&lang, \"appName\")}" }
                             div { class: "chat-empty-subtitle", "{subtitle}" }
                             if status == "error" && !agent_error.is_empty() {
-                                div { class: "chat-error-banner", span { "⚠" } " {agent_error}" }
+                                div { class: "chat-error-banner", span { "⚠" } span { class: "chat-error-text", " {agent_error}" } }
                             }
                         }
                     } else {
@@ -234,7 +249,7 @@ pub fn ChatView() -> Element {
                     // already has messages (Nexus ChatView), not only in the
                     // empty state.
                     if !messages.is_empty() && !agent_error.is_empty() {
-                        div { class: "chat-error-banner", span { "⚠" } " {agent_error}" }
+                        div { class: "chat-error-banner", span { "⚠" } span { class: "chat-error-text", " {agent_error}" } }
                     }
                     // L1: rate-limit banner (turn.error + rateLimitAction CTA).
                     {rate_limit_el}

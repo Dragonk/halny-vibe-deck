@@ -58,10 +58,11 @@ pub struct ClientState {
     pub update_error: Option<String>,
     /// Element 6: live self-update progress phase download/install/relaunch.
     pub update_progress: Option<mistraldeck_core::snapshot::UpdateProgress>,
-    /// L1: last failed turn of the current session (`turn.error`
-    /// from the wire — `AgentEvent::TurnFailed`), `(code, message)`.
-    /// Drives the rate-limit banner; cleared on the next submit.
-    pub turn_failed: Option<(String, String)>,
+    /// L1: last failed turn (`turn.error` from the wire —
+    /// `AgentEvent::TurnFailed`), `(code, message, agent_session_id)`.
+    /// Keyed by session so an error from session A never renders in
+    /// session B after a switch; cleared on the next submit.
+    pub turn_failed: Option<(String, String, String)>,
     /// L1: force the login wizard on top of the Shell ("Sign in
     /// again" in Settings / rate-limit CTA). Consumed by app.rs.
     pub login_requested: bool,
@@ -461,7 +462,7 @@ fn apply_agent_event(mut state: Signal<ClientState>, e: AgentEvent) -> bool {
             message,
         } => {
             if is_current(&session_id) {
-                state.write().turn_failed = Some((code, message));
+                state.write().turn_failed = Some((code, message, session_id));
             }
             false
         }

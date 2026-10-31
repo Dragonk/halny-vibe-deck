@@ -934,6 +934,9 @@ fn session_row(
                         } else {
                             let _ = crate::api::api_switch_session(tok, idx).await;
                         }
+                        // Round 14: a turn failure belongs to the session
+                        // that produced it — drop it when switching.
+                        { let mut st = state.clone(); st.write().turn_failed = None; }
                         crate::state::refresh(state).await;
                         { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);
@@ -1045,6 +1048,9 @@ fn backend_el(
                     let sid = sid.clone();
                     async move {
                         let _ = crate::api::api_open_backend_session(token(&state), sid).await;
+                        // Round 14: a turn failure belongs to the session
+                        // that produced it — drop it when switching.
+                        { let mut st = state.clone(); st.write().turn_failed = None; }
                         crate::state::refresh(state).await;
                         { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);

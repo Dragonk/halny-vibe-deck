@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.99.21 — user-reported defects round 14, re-verified in code (2026-10-30)
+
+Root cause + fix per row in `docs/next-bugs-round14.md`.
+
+- **Error banner**: long error text wraps inside the block (`.chat-error-text`
+  with `overflow-wrap:anywhere`, banner `width:100%`) — no more clipped block
+  with text spilling outside.
+- **Providers tab**: API key is masked (`type=password` + Show/Hide toggle,
+  6 languages); all vibe 3.0.4 `ProviderConfig` fields are now editable and
+  persisted — `extra_headers` (JSON), `browser_auth_base_url`,
+  `browser_auth_api_base_url`, `browser_auth_allow_origin_rewrite`,
+  `preserve_api_base`, `emits_finish_reason`.
+- **Models tab**: audited against `ModelConfig` — all fields already
+  configurable (no gap).
+- **Per-session error banner**: `turn_failed` is keyed by agent session id
+  and cleared on session switch — a rate-limit error from a remote session no
+  longer leaks into a local session.
+
 ## 1.99.20 — user-reported defects round 13, re-verified in code (2026-10-30)
 
 Root cause + fix per row in `docs/next-bugs-round13.md`.

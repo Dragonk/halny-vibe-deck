@@ -590,7 +590,7 @@ code {
 
 .chat-error-banner {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     padding: 10px 16px;
     background: rgba(220, 40, 40, 0.1);
@@ -598,7 +598,20 @@ code {
     border-radius: 8px;
     color: #e05050;
     font-size: 13px;
-    max-width: 480px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+/* Long unbroken error text (paths, tokens) must wrap inside the
+   banner instead of spilling past the block edge. */
+.chat-error-banner .chat-error-text {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: pre-wrap;
 }
 
 .message-list {
@@ -2500,6 +2513,16 @@ code {
     font-size: 13px;
     font-weight: 500;
     color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* API-key reveal toggle inside a field label */
+.field-label .key-toggle {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 2px 8px;
 }
 
 .field-hint {

@@ -18,6 +18,14 @@ pub struct ProviderRow {
     pub project_id: String,
     pub region: String,
     pub enabled: bool,
+    /// JSON object string, e.g. {"X-Custom": "1"} (`extra_headers`).
+    pub extra_headers: String,
+    pub browser_auth_base_url: String,
+    pub browser_auth_api_base_url: String,
+    pub browser_auth_allow_origin_rewrite: bool,
+    pub preserve_api_base: bool,
+    /// CLI default is true.
+    pub emits_finish_reason: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -384,6 +392,20 @@ mod imp {
                     project_id: p.project_id.unwrap_or_default(),
                     region: p.region.unwrap_or_default(),
                     enabled: p.enabled.unwrap_or(true),
+                    extra_headers: serde_json::to_string(
+                        &p.extra_headers
+                            .iter()
+                            .cloned()
+                            .collect::<std::collections::BTreeMap<_, _>>(),
+                    )
+                    .unwrap_or_else(|_| "{}".to_string()),
+                    browser_auth_base_url: p.browser_auth_base_url.unwrap_or_default(),
+                    browser_auth_api_base_url: p.browser_auth_api_base_url.unwrap_or_default(),
+                    browser_auth_allow_origin_rewrite: p
+                        .browser_auth_allow_origin_rewrite
+                        .unwrap_or(false),
+                    preserve_api_base: p.preserve_api_base.unwrap_or(false),
+                    emits_finish_reason: p.emits_finish_reason.unwrap_or(true),
                 })
                 .collect(),
             models: cfg
@@ -951,12 +973,29 @@ fn scan_kind(base: &std::path::Path, kind: &str) -> Vec<FileCard> {
                 api_key_env_var: opt(&row.api_key_env_var),
                 backend: opt(&row.backend),
                 api_style: opt(&row.api_style),
-                extra_headers: Vec::new(),
                 api_key: opt(&row.api_key),
                 reasoning_field_name: opt(&row.reasoning_field_name),
                 project_id: opt(&row.project_id),
                 region: opt(&row.region),
                 enabled: Some(row.enabled),
+                extra_headers: {
+                    let prev = cfg
+                        .providers()
+                        .into_iter()
+                        .find(|p| p.name == row.name.trim())
+                        .map(|p| p.extra_headers)
+                        .unwrap_or_default();
+                    serde_json::from_str::<std::collections::BTreeMap<String, String>>(
+                        row.extra_headers.trim(),
+                    )
+                    .map(|m| m.into_iter().collect())
+                    .unwrap_or(prev)
+                },
+                browser_auth_base_url: opt(&row.browser_auth_base_url),
+                browser_auth_api_base_url: opt(&row.browser_auth_api_base_url),
+                browser_auth_allow_origin_rewrite: Some(row.browser_auth_allow_origin_rewrite),
+                preserve_api_base: Some(row.preserve_api_base),
+                emits_finish_reason: Some(row.emits_finish_reason),
             });
         })
     }

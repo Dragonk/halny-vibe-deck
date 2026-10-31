@@ -1126,6 +1126,13 @@ pub fn SettingsView() -> Element {
     let mut p_reasoning = use_signal(String::new);
     let mut p_project = use_signal(String::new);
     let mut p_region = use_signal(String::new);
+    let mut p_headers = use_signal(String::new);
+    let mut p_auth_base = use_signal(String::new);
+    let mut p_auth_api = use_signal(String::new);
+    let mut p_auth_rewrite = use_signal(|| false);
+    let mut p_preserve = use_signal(|| false);
+    let mut p_emits = use_signal(|| true);
+    let mut p_key_visible = use_signal(|| false);
     let mut pv_sel = use_signal(String::new);
     let mut pv_loaded = use_signal(String::new);
     let mut pv_new = use_signal(|| false);
@@ -1662,6 +1669,13 @@ pub fn SettingsView() -> Element {
                     p_reasoning.set(s.reasoning_field_name.clone());
                     p_project.set(s.project_id.clone());
                     p_region.set(s.region.clone());
+                    p_headers.set(s.extra_headers.clone());
+                    p_auth_base.set(s.browser_auth_base_url.clone());
+                    p_auth_api.set(s.browser_auth_api_base_url.clone());
+                    p_auth_rewrite.set(s.browser_auth_allow_origin_rewrite);
+                    p_preserve.set(s.preserve_api_base);
+                    p_emits.set(s.emits_finish_reason);
+                    p_key_visible.set(false);
                     pv_enabled.set(s.enabled);
                 }
             }
@@ -1695,6 +1709,14 @@ pub fn SettingsView() -> Element {
             let baseurl_lbl = tr(&lang, "baseUrl");
             let apikeyenv_lbl = tr(&lang, "apiKeyEnv");
             let apikey_lbl = tr(&lang, "apiKey");
+            let show_key_lbl = tr(&lang, "showKey");
+            let hide_key_lbl = tr(&lang, "hideKey");
+            let headers_lbl = tr(&lang, "extraHeaders");
+            let auth_base_lbl = tr(&lang, "browserAuthBaseUrl");
+            let auth_api_lbl = tr(&lang, "browserAuthApiBaseUrl");
+            let auth_rewrite_lbl = tr(&lang, "browserAuthAllowOriginRewrite");
+            let preserve_lbl = tr(&lang, "preserveApiBase");
+            let emits_lbl = tr(&lang, "emitsFinishReason");
             let save_lbl = tr(&lang, "saveLabel");
             let empty_lbl = tr(&lang, "noProvidersConfigured");
             let detail: Element = if show_detail {
@@ -1755,9 +1777,17 @@ pub fn SettingsView() -> Element {
                                 oninput: move |e| p_key.set(e.value()) }
                         }
                         div { class: "field",
-                            div { class: "field-label", "{apikey_lbl}" }
-                            input { class: "field-input", r#type: "text",
+                            div { class: "field-label",
+                                "{apikey_lbl}"
+                                button { class: "field-btn key-toggle",
+                                    r#type: "button",
+                                    onclick: move |_| { let v = *p_key_visible.read(); p_key_visible.set(!v); },
+                                    if *p_key_visible.read() { "{hide_key_lbl}" } else { "{show_key_lbl}" }
+                                }
+                            }
+                            input { class: "field-input", r#type: if *p_key_visible.read() { "text" } else { "password" },
                                 placeholder: "sk-...", value: "{p_api_key.read()}",
+                                autocomplete: "off",
                                 oninput: move |e| p_api_key.set(e.value()) }
                         }
                         div { class: "field",
@@ -1795,6 +1825,48 @@ pub fn SettingsView() -> Element {
                                 oninput: move |e| p_region.set(e.value()) }
                         }
                         div { class: "field",
+                            div { class: "field-label", "{headers_lbl}" }
+                            textarea { class: "field-input mono",
+                                placeholder: "{{ \"X-Custom\": \"1\" }}",
+                                value: "{p_headers.read()}",
+                                oninput: move |e| p_headers.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{auth_base_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "https://auth.mistral.ai",
+                                value: "{p_auth_base.read()}",
+                                oninput: move |e| p_auth_base.set(e.value()) }
+                        }
+                        div { class: "field",
+                            div { class: "field-label", "{auth_api_lbl}" }
+                            input { class: "field-input", r#type: "text",
+                                placeholder: "https://auth.api.mistral.ai",
+                                value: "{p_auth_api.read()}",
+                                oninput: move |e| p_auth_api.set(e.value()) }
+                        }
+                        div { class: "field",
+                            label { class: "checkbox-label",
+                                input { r#type: "checkbox", checked: *p_auth_rewrite.read(),
+                                    onchange: move |e| p_auth_rewrite.set(e.checked()) }
+                                "{auth_rewrite_lbl}"
+                            }
+                        }
+                        div { class: "field",
+                            label { class: "checkbox-label",
+                                input { r#type: "checkbox", checked: *p_preserve.read(),
+                                    onchange: move |e| p_preserve.set(e.checked()) }
+                                "{preserve_lbl}"
+                            }
+                        }
+                        div { class: "field",
+                            label { class: "checkbox-label",
+                                input { r#type: "checkbox", checked: *p_emits.read(),
+                                    onchange: move |e| p_emits.set(e.checked()) }
+                                "{emits_lbl}"
+                            }
+                        }
+                        div { class: "field",
                             button { class: "save-btn",
                                 onclick: {
                                     let state = state.clone();
@@ -1818,6 +1890,12 @@ pub fn SettingsView() -> Element {
                                                 project_id: p_project.read().trim().to_string(),
                                                 region: p_region.read().trim().to_string(),
                                                 enabled: *pv_enabled.read(),
+                                                extra_headers: p_headers.read().trim().to_string(),
+                                                browser_auth_base_url: p_auth_base.read().trim().to_string(),
+                                                browser_auth_api_base_url: p_auth_api.read().trim().to_string(),
+                                                browser_auth_allow_origin_rewrite: *p_auth_rewrite.read(),
+                                                preserve_api_base: *p_preserve.read(),
+                                                emits_finish_reason: *p_emits.read(),
                                             };
                                             if row.name.is_empty() || row.api_base.is_empty() {
                                                 return;
@@ -1862,6 +1940,13 @@ pub fn SettingsView() -> Element {
                                 p_reasoning.set(String::new());
                                 p_project.set(String::new());
                                 p_region.set(String::new());
+                                p_headers.set("{}".to_string());
+                                p_auth_base.set(String::new());
+                                p_auth_api.set(String::new());
+                                p_auth_rewrite.set(false);
+                                p_preserve.set(false);
+                                p_emits.set(true);
+                                p_key_visible.set(false);
                                 pv_enabled.set(true);
                             },
                             "{add_provider_lbl}" }

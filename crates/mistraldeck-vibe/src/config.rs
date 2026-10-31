@@ -198,6 +198,18 @@ pub struct Provider {
     pub region: Option<String>,
     /// Toggle (`enabled`); None = enabled.
     pub enabled: Option<bool>,
+    /// Browser sign-in URLs (`browser_auth_base_url` / `browser_auth_api_base_url`).
+    pub browser_auth_base_url: Option<String>,
+    pub browser_auth_api_base_url: Option<String>,
+    /// Re-home returned sign-in URLs onto the configured hosts
+    /// (`browser_auth_allow_origin_rewrite`).
+    pub browser_auth_allow_origin_rewrite: Option<bool>,
+    /// Never overwrite api_base with the /whoami-advertised one
+    /// (`preserve_api_base`, split-horizon deployments).
+    pub preserve_api_base: Option<bool>,
+    /// Whether the provider emits a finish_reason (`emits_finish_reason`);
+    /// None = CLI default (true).
+    pub emits_finish_reason: Option<bool>,
 }
 
 /// A model preset (`[[models]]`).
@@ -850,6 +862,13 @@ fn provider_from_table(t: &Table) -> Provider {
         project_id: table_str(t, "project_id"),
         region: table_str(t, "region"),
         enabled: t.get("enabled").and_then(Value::as_bool),
+        browser_auth_base_url: table_str(t, "browser_auth_base_url"),
+        browser_auth_api_base_url: table_str(t, "browser_auth_api_base_url"),
+        browser_auth_allow_origin_rewrite: t
+            .get("browser_auth_allow_origin_rewrite")
+            .and_then(Value::as_bool),
+        preserve_api_base: t.get("preserve_api_base").and_then(Value::as_bool),
+        emits_finish_reason: t.get("emits_finish_reason").and_then(Value::as_bool),
     }
 }
 
@@ -885,6 +904,21 @@ fn provider_to_table(p: &Provider) -> Table {
     }
     if let Some(v) = p.enabled {
         t.insert("enabled".into(), Value::from(v));
+    }
+    if let Some(v) = &p.browser_auth_base_url {
+        t.insert("browser_auth_base_url".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = &p.browser_auth_api_base_url {
+        t.insert("browser_auth_api_base_url".into(), Value::from(v.as_str()));
+    }
+    if let Some(v) = p.browser_auth_allow_origin_rewrite {
+        t.insert("browser_auth_allow_origin_rewrite".into(), Value::from(v));
+    }
+    if let Some(v) = p.preserve_api_base {
+        t.insert("preserve_api_base".into(), Value::from(v));
+    }
+    if let Some(v) = p.emits_finish_reason {
+        t.insert("emits_finish_reason".into(), Value::from(v));
     }
     t
 }
@@ -1258,6 +1292,11 @@ enabled = true
             project_id: Some("proj-1".into()),
             region: Some("eu".into()),
             enabled: Some(false),
+            browser_auth_base_url: Some("https://auth.example.com".into()),
+            browser_auth_api_base_url: Some("https://auth-api.example.com".into()),
+            browser_auth_allow_origin_rewrite: Some(true),
+            preserve_api_base: Some(true),
+            emits_finish_reason: Some(false),
         });
         let out = cfg.providers();
         assert_eq!(out.len(), 1);
@@ -1268,6 +1307,17 @@ enabled = true
         assert_eq!(out[0].enabled, Some(false));
         assert_eq!(out[0].api_style.as_deref(), Some("google"));
         assert_eq!(out[0].api_key_env_var.as_deref(), Some("GEM_KEY"));
+        assert_eq!(
+            out[0].browser_auth_base_url.as_deref(),
+            Some("https://auth.example.com")
+        );
+        assert_eq!(
+            out[0].browser_auth_api_base_url.as_deref(),
+            Some("https://auth-api.example.com")
+        );
+        assert_eq!(out[0].browser_auth_allow_origin_rewrite, Some(true));
+        assert_eq!(out[0].preserve_api_base, Some(true));
+        assert_eq!(out[0].emits_finish_reason, Some(false));
     }
 
     #[test]
