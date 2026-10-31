@@ -84,6 +84,13 @@ const EDITOR_JS: &str = r#"
     }
     // wrap mode: position every number at its logical line's offset inside
     // the highlight layer (measured with DOM ranges over the text nodes).
+    // Round 15: cap the walk — on huge files one getBoundingClientRect per
+    // line froze the page when switching to edit / per keystroke.
+    if (kids.length > 4000) {
+      for (var q = 0; q < kids.length; q++) kids[q].style.top = '';
+      g.scrollTop = t.scrollTop;
+      return;
+    }
     var gRect = g.getBoundingClientRect();
     var range = document.createRange();
     var walker = document.createTreeWalker(h, NodeFilter.SHOW_TEXT, null);
@@ -141,8 +148,22 @@ pub fn CodeEditor(
 ) -> Element {
     let text = code.read().clone();
     let fname = file.clone().unwrap_or_default();
-    let hl = highlight::highlight_auto(&fname, &text);
-    let gut = highlight::gutter_html(&text);
+    // Round 15: cache the highlight + gutter per (file, text) — the editor
+    // body re-ran a FULL highlight on every parent re-render (streaming
+    // chat in the background froze editing of a large md).
+    let mut hl_cache = use_signal(|| (String::new(), String::new(), String::new(), String::new()));
+    let (hl, gut) = {
+        let c = hl_cache.read();
+        if c.0 == fname && c.1 == text {
+            (c.2.clone(), c.3.clone())
+        } else {
+            drop(c);
+            let h = highlight::highlight_auto(&fname, &text);
+            let g = highlight::gutter_html(&text);
+            hl_cache.set((fname.clone(), text.clone(), h.clone(), g.clone()));
+            (h, g)
+        }
+    };
     let wrap = wrap.unwrap_or(false);
     let ed_cls = if wrap { "code-editor wrap" } else { "code-editor" };
     let ta_cls = if wrap { "code-ta wrap" } else { "code-ta" };

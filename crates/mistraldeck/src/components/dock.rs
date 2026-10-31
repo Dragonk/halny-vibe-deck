@@ -9,6 +9,49 @@ use dioxus::prelude::*;
 
 use crate::api::api_worktrees_list;
 use crate::components::code_editor::CodeEditor;
+
+/// Round 15: sticky horizontal scrollbar for paged docs (docx/slides/pdf).
+/// A `position:sticky; bottom:0` bar inside the scroll container mirrors
+/// the container's scrollLeft, so the h-scrollbar is ALWAYS visible at the
+/// bottom of the preview (the container's own bar only shows at the very
+/// end of the document). Re-run on DOM mutations + resize.
+#[cfg(any(feature = "web", feature = "desktop"))]
+const DOC_HSCROLL_JS: &str = r#"
+(function(){
+  if (window.__vdDocHsInit) return; window.__vdDocHsInit = true;
+  window.__vdDocHScroll = function(){
+    document.querySelectorAll('.preview-doc').forEach(function(sc){
+      var sb = sc.querySelector(':scope > .doc-hscroll-sticky');
+      if (!sb) return;
+      var sp = sb.querySelector('.doc-hscroll-spacer');
+      if (sc.scrollWidth > sc.clientWidth + 2) {
+        sb.style.display = 'block';
+        if (sp) sp.style.width = sc.scrollWidth + 'px';
+      } else {
+        sb.style.display = 'none';
+      }
+      if (!sb.__vdBound) {
+        sb.__vdBound = true;
+        sc.addEventListener('scroll', function(){
+          if (sb.__sync) return; sb.__sync = 1; sb.scrollLeft = sc.scrollLeft; sb.__sync = 0;
+        });
+        sb.addEventListener('scroll', function(){
+          if (sc.__sync) return; sc.__sync = 1; sc.scrollLeft = sb.scrollLeft; sc.__sync = 0;
+        });
+      }
+      if (!sb.__sync) { sb.__sync = 1; sb.scrollLeft = sc.scrollLeft; sb.__sync = 0; }
+    });
+  };
+  var raf = 0;
+  var mo = new MutationObserver(function(){
+    if (raf) return;
+    raf = requestAnimationFrame(function(){ raf = 0; window.__vdDocHScroll(); });
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('resize', window.__vdDocHScroll);
+  window.__vdDocHScroll();
+})();
+"#;
 use crate::fsgit::{
     api_git_commit, api_git_diff, api_git_log, api_git_push, api_git_stage, api_git_status,
     api_git_unstage, api_list_dir, api_read_file, api_save_file, FileEntry, GitCommit, GitStatus,
@@ -1367,6 +1410,40 @@ fn FilePreviewTab(
     // every parent re-render made md previews slow and edit-mode entry freeze
     let md_html_cache = use_signal(|| (String::new(), String::new()));
     let code_html_cache = use_signal(|| (String::new(), String::new()));
+    // Round 15: docx/slides view mode — fit-to-width (default) or 1:1.
+    let mut doc_fit = use_signal(|| true);
+    let mut doc_fit_init = use_signal(|| false);
+    if !*doc_fit_init.read() {
+        doc_fit_init.set(true);
+        let mut f = doc_fit.clone();
+        spawn(async move {
+            #[cfg(any(feature = "web", feature = "desktop"))]
+            {
+                if let Ok(v) = dioxus::document::eval(
+                    "return (localStorage.getItem('vdDocFit') || '1');",
+                )
+                .join::<String>()
+                .await
+                {
+                    f.set(v != "0");
+                }
+            }
+        });
+    }
+    // Round 15: always-visible horizontal scrollbar for paged docs —
+    // install the sticky-bar sync once.
+    {
+        let mut hscroll_init = use_signal(|| false);
+        if !*hscroll_init.read() {
+            hscroll_init.set(true);
+            spawn(async move {
+                #[cfg(any(feature = "web", feature = "desktop"))]
+                {
+                    let _ = dioxus::document::eval(DOC_HSCROLL_JS).await;
+                }
+            });
+        }
+    }
     let mut wrap_init = use_signal(|| false);
     if !*wrap_init.read() {
         wrap_init.set(true);
@@ -1517,9 +1594,20 @@ fn FilePreviewTab(
                             }
                         }
                     }
-                    "doc" | "slides" => rsx! {
-                        div { class: "preview-doc", dangerous_inner_html: "{data.html}" }
-                    },
+                    "doc" | "slides" => {
+                        let fit_cls = if *doc_fit.read() { "preview-doc fit" } else { "preview-doc" };
+                        rsx! {
+                            div { class: "{fit_cls}",
+                                div { class: "doc-scroll-content", dangerous_inner_html: "{data.html}" }
+                                // Round 15: sticky horizontal scrollbar — always
+                                // visible at the bottom of the preview, not only
+                                // after scrolling to the very end.
+                                div { class: "doc-hscroll-sticky",
+                                    div { class: "doc-hscroll-spacer" }
+                                }
+                            }
+                        }
+                    }
                     "pdf" => {
                         if data.pages.is_empty() {
                             let lines: Vec<Element> = data
@@ -1691,6 +1779,28 @@ fn FilePreviewTab(
                         span { class: "file-preview-path", title: "{path_lbl}", "{path_lbl}" }
                         div { class: "file-preview-actions",
                             {save_status}
+                            // Round 15: docx/slides view mode — fit to width (default) vs 1:1
+                            if data.kind == "doc" || data.kind == "slides" {
+                                button {
+                                    class: if *doc_fit.read() { "file-preview-btn active" } else { "file-preview-btn" },
+                                    title: if *doc_fit.read() { "{loc2(&lang, \"Dopasuj do szerokości (1:1)\", \"Fit to width (1:1)\")}" } else { "{loc2(&lang, \"Widok 1:1 (dopasuj do szerokości)\", \"1:1 view (fit to width)\")}" },
+                                    onclick: move |_| {
+                                        let next = !*doc_fit.read();
+                                        doc_fit.set(next);
+                                        #[cfg(any(feature = "web", feature = "desktop"))]
+                                        spawn(async move {
+                                            let _ = dioxus::document::eval(&format!(
+                                                "try{{localStorage.setItem('vdDocFit','{}');}}catch(e){{}}",
+                                                if next { "1" } else { "0" }
+                                            )).await;
+                                            let _ = dioxus::document::eval(
+                                                "requestAnimationFrame(function(){window.__vdDocHScroll && window.__vdDocHScroll();});",
+                                            ).await;
+                                        });
+                                    },
+                                    if *doc_fit.read() { "{loc2(&lang, \"Dopasuj\", \"Fit\")}" } else { "1:1" }
+                                }
+                            }
                             // Round 12: the wrap toggle belongs to the EDITOR —
                             // hidden in plain preview mode.
                             if is_editing_c {

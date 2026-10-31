@@ -187,6 +187,19 @@ impl Conn {
 impl Drop for Conn {
     fn drop(&mut self) {
         self.stdin.lock().expect("conn stdin").take();
+        // Round 15: on Windows the direct child is only the launcher shim
+        // (uv .exe spawns python as a grandchild) — Child::kill() would
+        // leave the real agent running. Kill the whole tree via taskkill.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &self.child.id().to_string()])
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

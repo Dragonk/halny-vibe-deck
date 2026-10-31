@@ -516,15 +516,11 @@ impl Worker {
                                     })
                                     .and_then(Value::as_u64);
                                 // our own child holding the lease is not "elsewhere"
-                                let other = h
-                                    .get("leaseHolder")
-                                    .map(|l| !l.is_null())
-                                    .unwrap_or(false)
-                                    && match (holder_pid, self.proj.own_pid) {
-                                        (Some(hp), Some(own)) => hp != own as u64,
-                                        (Some(_), None) => true,
-                                        _ => false,
-                                    };
+                                let other = crate::reducer::lease_held_elsewhere(
+                                    h.get("leaseHolder").map(|l| !l.is_null()).unwrap_or(false),
+                                    holder_pid,
+                                    &self.proj.own_pids,
+                                );
                                 self.emit(AgentEvent::LeaseUpdated {
                                     session_id: session_id.clone(),
                                     held_elsewhere: other,
@@ -558,7 +554,13 @@ impl Worker {
         self.last_argv = argv.clone();
         match Conn::spawn(&argv) {
             Ok(conn) => {
-                self.proj.own_pid = conn.child_pid();
+                // Round 15: the direct child is only the launcher — on
+                // Windows the uv shim spawns python as a grandchild and
+                // the LEASE is held by that grandchild's PID, so record
+                // both (the real server PID arrives with initialize).
+                if let Some(pid) = conn.child_pid() {
+                    self.proj.own_pids.push(pid as u64);
+                }
                 self.inbox = conn.inbox.clone();
                 self.conn = Some(conn);
             }
@@ -582,6 +584,19 @@ impl Worker {
         });
         match self.call("initialize", params, "initialize") {
             Ok(res) => {
+                // Round 15: InitializeResponse.processId is the REAL
+                // app-server PID (os.getpid() in server.py) — on Windows
+                // it differs from the spawned launcher's PID, and it is
+                // this PID that holds the session lease.
+                if let Some(pid) = res
+                    .get("processId")
+                    .or_else(|| res.get("process_id"))
+                    .and_then(Value::as_u64)
+                {
+                    if !self.proj.own_pids.contains(&pid) {
+                        self.proj.own_pids.push(pid);
+                    }
+                }
                 // LSP-style completion: the server only enters the
                 // INITIALIZED state after this notification (server.py
                 // _handle_notification — undocumented in the protocol ref)

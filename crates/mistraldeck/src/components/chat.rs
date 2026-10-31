@@ -56,6 +56,19 @@ pub fn ChatView() -> Element {
                 .collect()
         })
         .unwrap_or_default();
+    // Round 15: a session switch was just clicked — show a loading marker
+    // immediately (the snapshot for the target session is still fetching).
+    let cur_meta_id = s
+        .snapshot
+        .current
+        .and_then(|i| s.snapshot.sessions.get(i))
+        .map(|m| m.id.clone())
+        .unwrap_or_default();
+    let is_switching = s
+        .switching_to
+        .as_ref()
+        .map(|t| *t != cur_meta_id)
+        .unwrap_or(false);
     drop(s);
     let is_resuming = current_agent_id
         .as_deref()
@@ -207,6 +220,16 @@ pub fn ChatView() -> Element {
                     });
                 }
             }
+            if is_switching {
+                div { class: "chat-messages",
+                    div { class: "chat-inner",
+                        div { class: "agent-busy-row",
+                            span { class: "agent-busy-spinner" }
+                            "{tr(&lang, \"loadingSessionLabel\")}"
+                        }
+                    }
+                }
+            } else {
             div { class: "chat-messages",
                 div { class: "chat-inner",
                     if messages.is_empty() && !is_resuming {
@@ -265,6 +288,7 @@ pub fn ChatView() -> Element {
                         }
                     }
                 }
+            }
             }
             crate::components::input::InputBar {}
             // `/rewind` / `/branch` checkpoint picker modal
@@ -3848,29 +3872,43 @@ const PATH_CLICK_JS: &str = r#"
 const SCROLL_JS: &str = r#"
 (function(){
   if (window.__vdScrollInit) return; window.__vdScrollInit = true;
+  // Round 15: user scroll intent — once the user scrolls UP, streaming
+  // updates must not yank the view back down until they return to the
+  // bottom themselves.
+  window.__vdUserUp = false;
   window.__vdScrollChat = function(force){
     var el = document.querySelector('.chat-messages');
     if (!el) return;
-    // round 5 (R13): only auto-scroll when the user is already near the
-    // bottom (or when forced on session open) — scrolling up to read must
-    // never be yanked back down by streaming updates.
-    var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (force || nearBottom) el.scrollTop = el.scrollHeight;
+    var dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (dist < 24) window.__vdUserUp = false;
+    var nearBottom = dist < 200;
+    if (force || (!window.__vdUserUp && nearBottom)) el.scrollTop = el.scrollHeight;
   };
+  document.addEventListener('wheel', function(e){
+    var el = document.querySelector('.chat-messages');
+    if (!el) return;
+    if (e.target && el.contains(e.target) && e.deltaY < 0) window.__vdUserUp = true;
+  }, { passive: true });
+  document.addEventListener('touchmove', function(e){
+    var el = document.querySelector('.chat-messages');
+    if (!el) return;
+    if (e.target && el.contains(e.target) && e.touches[0].clientY > (window.__vdLastTouchY || 0)) window.__vdUserUp = true;
+    window.__vdLastTouchY = e.touches[0].clientY;
+  }, { passive: true });
   // Observe <body> (never replaced by hydration/re-render, unlike the
   // SSR'd chat nodes) and scroll whenever the chat DOM changes.
   var mo = new MutationObserver(function(muts){
+    var inChat = false;
     for (var i = 0; i < muts.length; i++) {
       var t = muts[i].target;
-      if (t && t.closest && t.closest('.chat-messages')) {
-        if (window.__vdScrollRaf) return;
-        window.__vdScrollRaf = requestAnimationFrame(function(){
-          window.__vdScrollRaf = 0;
-          window.__vdScrollChat(false);
-        });
-        return;
-      }
+      if (t && t.closest && t.closest('.chat-messages')) { inChat = true; break; }
     }
+    if (!inChat) return;
+    if (window.__vdScrollRaf) return;
+    window.__vdScrollRaf = requestAnimationFrame(function(){
+      window.__vdScrollRaf = 0;
+      window.__vdScrollChat(false);
+    });
   });
   mo.observe(document.body, { childList: true, subtree: true, characterData: true });
   window.__vdScrollChat(true);

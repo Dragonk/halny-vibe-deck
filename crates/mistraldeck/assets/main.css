@@ -6261,6 +6261,27 @@ img.pdf-page { width: auto; max-width: 100%; border: 1px solid var(--border); bo
 .doc-render ol.doc-list-num { padding-left: 24px; margin: 8px 0; }
 .doc-render table.doc-table tr:first-child td { font-weight: 600; background: var(--panel-hover); }
 .preview-doc { flex: 1; overflow: auto; }
+/* round 15: paged docs — inner content keeps its real width so the
+   container scrolls horizontally; fit mode squeezes pages to the width */
+.preview-doc .doc-scroll-content { min-width: max-content; }
+.preview-doc.fit .doc-scroll-content { min-width: 0; }
+.preview-doc.fit .doc-page { width: 100% !important; max-width: 100% !important; }
+.preview-doc.fit .doc-pages { min-width: 0; }
+/* round 15: sticky h-scrollbar — pinned to the bottom of the scrollport,
+   always visible while the content is wider than the preview */
+.doc-hscroll-sticky {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    height: 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    display: none;
+    z-index: 6;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+}
+.doc-hscroll-spacer { height: 1px; width: 100%; }
 
 .slides-view { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .slide-card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--panel); }

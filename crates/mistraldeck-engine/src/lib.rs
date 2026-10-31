@@ -2871,7 +2871,14 @@ fn agent_session_idx(
                 } => {
                     if let Some(session) = Self::agent_session_idx(&st.sessions, st.current, &session_id).and_then(|i| st.sessions.get_mut(i))
                     {
-                        ensure_ai_message(session).tool_calls.push(tool_call);
+                        // Round 15: dedup by id — a replayed entryAdded (resync,
+                        // reconnect) must not duplicate the step in snapshots.
+                        let exists = session.messages.iter().any(|m| {
+                            m.tool_calls.iter().any(|t| t.id == tool_call.id)
+                        });
+                        if !exists {
+                            ensure_ai_message(session).tool_calls.push(tool_call);
+                        }
                         // v0.10.2: tool activity means thinking is over
                         // (Nexus `finalizeAllThinking` on ToolCall).
                         finalize_session_thinking(session);

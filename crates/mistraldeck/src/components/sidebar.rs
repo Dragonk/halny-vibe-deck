@@ -909,6 +909,11 @@ fn session_row(
     let agent_id = m.agent_session_id.clone();
     let busy = m.busy;
     let is_remote = m.remote_id.is_some();
+    // Round 15: "agent on" = the session's slot is busy streaming OR its
+    // agent process is connected (status from the snapshot). The green dot
+    // and the ✕ follow THIS, not which tab happens to be open.
+    let agent_on = m.busy || m.stopping || (m.status == "connected" && has_agent);
+    let m_id = m.id.clone();
 
     rsx! {
         button {
@@ -916,10 +921,15 @@ fn session_row(
             onclick: {
                 let state = state.clone();
                 let agent_id = agent_id.clone();
+                let m_id = m_id.clone();
                 move |_| {
                     let state = state.clone();
                     let agent_id = agent_id.clone();
+                    let m_id = m_id.clone();
                     async move {
+                        // Round 15: show the loading marker NOW — the switch
+                        // must feel instant, not freeze on the old session.
+                        { let mut st = state.clone(); st.write().switching_to = Some(m_id.clone()); }
                         let tok = token(&state);
                         // Round 4 (E1): a remote (SSH) mirror already IS the
                         // remote session — switching to it must never go
@@ -938,7 +948,7 @@ fn session_row(
                         // that produced it — drop it when switching.
                         { let mut st = state.clone(); st.write().turn_failed = None; }
                         crate::state::refresh(state).await;
-                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                        { let mut st = state.clone(); st.write().switching_to = None; st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);
                     }
                 }
@@ -963,8 +973,9 @@ fn session_row(
             },
             div { class: "session-item-content",
                 div { class: "session-item-row",
-                    // round 12: green dot marks the ACTIVE session (stable parity)
-                    if active {
+                    // round 15: green dot marks sessions where the agent is
+                    // REALLY on (busy/connected), not the open tab
+                    if agent_on {
                         span { class: "session-active-dot", title: "{tr(&lang, \"activeSession\")}" }
                     }
                     span { class: "session-name", "{name}" }
@@ -974,10 +985,11 @@ fn session_row(
                     span { class: "session-date", "{date}" }
                 }
             }
-            // round 12: ✕ is visible ONLY on a running session and stops it
-            // completely (cancel + kill the agent slot with subprocesses);
-            // the menu itself lives under right-click (PPM)
-            if busy {
+            // round 15: ✕ on every session whose agent is on (busy /
+            // stopping / connected) — it stops the session completely
+            // (cancel + kill the agent slot with its subprocesses);
+            // the full menu lives under right-click (PPM)
+            if agent_on {
                 span {
                     class: "session-cancel-btn",
                     title: "{tr(&lang, \"stopSessionLabel\")}",
@@ -1047,12 +1059,13 @@ fn backend_el(
                     let state = state.clone();
                     let sid = sid.clone();
                     async move {
+                        { let mut st = state.clone(); st.write().switching_to = Some(sid.clone()); }
                         let _ = crate::api::api_open_backend_session(token(&state), sid).await;
                         // Round 14: a turn failure belongs to the session
                         // that produced it — drop it when switching.
                         { let mut st = state.clone(); st.write().turn_failed = None; }
                         crate::state::refresh(state).await;
-                        { let mut st = state.clone(); st.write().mobile_sidebar_open = false; }
+                        { let mut st = state.clone(); st.write().switching_to = None; st.write().mobile_sidebar_open = false; }
                                 crate::app::set_view(state, View::Chat);
                     }
                 }

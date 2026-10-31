@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.99.22 — user-reported defects round 15, re-verified in code (2026-10-30)
+
+Root cause + fix per row in `docs/next-bugs-round15.md`.
+
+- **No more duplicated agent actions**: replayed `history/entryAdded`
+  (resync/reconnect) is deduped by entry id in the appserver mirror and by
+  tool-call id in the engine + client — tool steps render exactly once.
+- **"open elsewhere" fixed on Windows**: own PIDs now include the real
+  app-server PID from the `initialize` handshake (on Windows the uv shim's
+  child is not the lease holder).
+- **✕ stops the session for real**: on Windows the whole process tree is
+  killed (`taskkill /F /T`), not just the launcher shim.
+- **Session list**: green dot + ✕ follow the session where the agent is
+  actually on (busy/stopping/connected), not the open tab.
+- **Session switching is instant**: "Loading session…" marker immediately,
+  structural-event refetch storm coalesced (one in flight + one queued).
+- **Chat scroll**: user scroll-up intent respected — streaming no longer
+  yanks the view down while reading.
+- **md edit no longer freezes**: editor highlight/gutter cached per text;
+  wrap-gutter DOM walk capped.
+- **docx preview**: fit-to-width by default with a Fit/1:1 toggle; sticky
+  horizontal scrollbar always visible at the bottom of the preview.
+
 ## 1.99.21 — user-reported defects round 14, re-verified in code (2026-10-30)
 
 Root cause + fix per row in `docs/next-bugs-round14.md`.

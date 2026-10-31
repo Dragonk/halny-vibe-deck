@@ -39,14 +39,31 @@ pub fn Shell() -> Element {
 
     // The engine event stream.
     let mut socket = crate::events::use_engine_socket();
+    // Round 15: coalesce refetches — during a session switch/resume many
+    // structural events arrive at once; each used to trigger a FULL
+    // snapshot fetch + re-render, freezing the UI. One in flight, at most
+    // one queued behind it.
+    let mut refetch_running = use_signal(|| false);
+    let mut refetch_pending = use_signal(|| false);
     use_future(move || async move {
         loop {
             match socket.recv().await {
                 Ok(ev) => {
                     let refetch = apply_event(state, ev);
                     if refetch {
-                        refresh(state).await;
-                        crate::state::drain_queue(state).await;
+                        if *refetch_running.read() {
+                            refetch_pending.set(true);
+                        } else {
+                            refetch_running.set(true);
+                            refresh(state).await;
+                            crate::state::drain_queue(state).await;
+                            refetch_running.set(false);
+                            if *refetch_pending.read() {
+                                refetch_pending.set(false);
+                                refresh(state).await;
+                                crate::state::drain_queue(state).await;
+                            }
+                        }
                     }
                 }
                 Err(_) => {

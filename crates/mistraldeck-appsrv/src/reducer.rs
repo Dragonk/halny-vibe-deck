@@ -44,9 +44,25 @@ pub struct Projection {
     /// the answer can be wrapped in the wire's UserQuestionResult shape
     /// (`answers: [{question, answer, isOther}]`)
     pub callback_questions: HashMap<String, Vec<String>>,
-    /// PID of our own agent child process — a lease held by this PID is
-    /// OURS, not "another process" (the "open elsewhere" badge).
-    pub own_pid: Option<u32>,
+    /// PIDs that are OURS — the spawned launcher process AND the
+    /// app-server process itself (on Windows the launcher .exe spawns
+    /// python as a child, so the lease holder's PID is the grandchild's,
+    /// not the direct child's). A lease held by any of these is NOT
+    /// "another process" (the "open elsewhere" badge).
+    pub own_pids: Vec<u64>,
+}
+
+/// "open elsewhere" only when a holder is present, its PID is known, and
+/// that PID is not one of ours. Unknown holder PID ⇒ cannot prove it is
+/// another process ⇒ not "elsewhere" (round 12).
+pub fn lease_held_elsewhere(holder_present: bool, holder_pid: Option<u64>, own_pids: &[u64]) -> bool {
+    if !holder_present {
+        return false;
+    }
+    match holder_pid {
+        Some(hp) => !own_pids.contains(&hp),
+        None => false,
+    }
 }
 
 impl Projection {
@@ -413,13 +429,12 @@ impl Projection {
                 // differs from our own agent child — a null/unknown PID can't
                 // be proven to be another process (round 12: the badge lit up
                 // on every session start because of this)
-                let held = method == "session/lease/updated"
-                    && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false)
-                    && match (holder_pid, self.own_pid) {
-                        (Some(hp), Some(own)) => hp != own as u64,
-                        (Some(_), None) => true,
-                        _ => false,
-                    };
+                let held = lease_held_elsewhere(
+                    method == "session/lease/updated"
+                        && params.get("leaseHolder").map(|h| !h.is_null()).unwrap_or(false),
+                    holder_pid,
+                    &self.own_pids,
+                );
                 events.push(AgentEvent::LeaseUpdated {
                     session_id: self.session_id.clone(),
                     held_elsewhere: held,
@@ -448,6 +463,17 @@ impl Projection {
 
     fn push_entry(&mut self, entry: &HistoryEntry, events: &mut Vec<AgentEvent>) {
         let id = entry.id.clone().unwrap_or_default();
+        // Round 15: a replayed entryAdded (resync / reconnect re-delivery)
+        // must not append the entry — or emit its events — twice.
+        if !id.is_empty()
+            && self
+                .doc["history"]
+                .as_array()
+                .map(|a| a.iter().any(|e| e.get("id").and_then(Value::as_str) == Some(&id)))
+                .unwrap_or(false)
+        {
+            return;
+        }
         // mirror into doc.history
         let v = serde_json::to_value(entry).unwrap_or(Value::Null);
         if let Some(arr) = self.doc["history"].as_array_mut() {
@@ -1076,6 +1102,34 @@ mod tests {
         assert!(evs.iter().all(|e| !matches!(e, AgentEvent::MessageChunk { .. })));
     }
 
+    /// Round 15: a replayed `history/entryAdded` (resync / reconnect
+    /// re-delivery of the same entry id) must not emit its events twice —
+    /// the chat showed every tool action 10-15x.
+    #[test]
+    fn entry_added_replay_deduped() {
+        let mut p = proj();
+        p.consume("session/snapshot", &snapshot_json("s1"));
+        let entry = json!({
+            "eventId": 6, "sessionId": "s1",
+            "entry": {"type": "effect", "id": "fx1", "title": "ls",
+                      "detail": {"kind": "tool_call", "name": "file_system.bash"}}
+        });
+        let e1 = p.consume("history/entryAdded", &entry);
+        assert_eq!(
+            e1.iter()
+                .filter(|e| matches!(e, AgentEvent::ToolCallStarted { .. }))
+                .count(),
+            1
+        );
+        let e2 = p.consume("history/entryAdded", &entry);
+        assert!(e2.is_empty(), "replayed entryAdded emitted events: {e2:?}");
+        assert_eq!(
+            p.doc["history"].as_array().map(|a| a.len()),
+            Some(1),
+            "replayed entryAdded duplicated the mirrored history entry"
+        );
+    }
+
     /// Reasoning streams as ThinkingChunks.
     #[test]
     fn reasoning_deltas() {
@@ -1601,7 +1655,7 @@ mod tests {
     fn lease_own_pid_not_elsewhere() {
         let mut p = proj();
         p.consume("session/snapshot", &snapshot_json("s1"));
-        p.own_pid = Some(4242);
+        p.own_pids = vec![4242];
         let evs = p.consume("session/lease/updated", &json!({
             "eventId": 6, "sessionId": "s1", "leaseHolder": {"processId": 4242}
         }));

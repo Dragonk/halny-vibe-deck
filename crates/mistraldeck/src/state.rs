@@ -24,6 +24,10 @@ pub struct ClientState {
     pub token: Option<String>,
     pub snapshot: Snapshot,
     pub loaded: bool,
+    /// Round 15: session id (SessionMeta.id) a switch was just requested
+    /// for — the chat renders a "loading session" marker immediately
+    /// instead of freezing on the old session until the refetch lands.
+    pub switching_to: Option<String>,
     pub view: View,
     /// Prompts typed while the agent is busy (sent on completion).
     pub queue: Vec<String>,
@@ -162,6 +166,10 @@ pub async fn refresh(mut state: Signal<ClientState>) {
                 && s.snapshot.current_messages.is_empty()
             {
                 s.snapshot.current_messages = prev_messages;
+            }
+            // Round 15: the switch landed — drop the loading marker.
+            if s.switching_to.is_some() && s.switching_to == new_current_id {
+                s.switching_to = None;
             }
             s.loaded = true;
             // fetch PR artifacts for the open session (artifacts/list)
@@ -328,9 +336,19 @@ fn apply_agent_event(mut state: Signal<ClientState>, e: AgentEvent) -> bool {
         } => {
             if is_current(&session_id) {
                 let mut s = state.write();
-                ensure_ai_message_pub(&mut s.snapshot.current_messages)
-                    .tool_calls
-                    .push(tool_call);
+                // Round 15: dedup by tool-call id — a replayed/resynced
+                // entryAdded must not append the same step twice (the chat
+                // showed every tool action 10-15x).
+                let exists = s
+                    .snapshot
+                    .current_messages
+                    .iter()
+                    .any(|m| m.tool_calls.iter().any(|t| t.id == tool_call.id));
+                if !exists {
+                    ensure_ai_message_pub(&mut s.snapshot.current_messages)
+                        .tool_calls
+                        .push(tool_call);
+                }
             }
             false
         }
