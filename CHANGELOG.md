@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.99.23 — workspace renamed to halny-vibe-deck (2026-10-30)
+
+The product was renamed to Halny Vibe Deck but the crate package/dir names
+still carried the legacy `mistraldeck` prefix. All seven crates are renamed:
+
+- `crates/halny-vibe-deck` (was `mistraldeck`, package `halny-vibe-deck`, binary `halny-vibe-deck`)
+- `crates/halny-vibe-deck-appserver` (binary `halny-vibe-deck-appserver`)
+- `crates/halny-vibe-deck-appsrv`, `-engine`, `-vibe`, `-core`, `-setup`
+
+All Rust paths (`halny_vibe_deck_core::` etc.), `Dioxus.toml`, the CI workflows
+(`cargo test -p halny-vibe-deck --features server`, `working-directory:
+crates/halny-vibe-deck`) and the README were updated to match. Intentionally kept:
+the `MISTRALDECK_PORT` env fallback, legacy `~/.config/mistraldeck`/`vibedeck`
+config migration, and old `mistraldeck.exe`/`MistralDeck.exe` names in the
+self-updater (it must still replace legacy installs). Shipped binary and release
+artifact names are unchanged. README rewritten for the current architecture
+(Dioxus fullstack: desktop webview + headless HTTPS server for browsers).
+
 ## 1.99.22 — user-reported defects round 15, re-verified in code (2026-10-30)
 
 Root cause + fix per row in `docs/next-bugs-round15.md`.

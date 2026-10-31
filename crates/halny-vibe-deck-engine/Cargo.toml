@@ -1,0 +1,20 @@
+[package]
+name = "halny-vibe-deck-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Halny Vibe Deck headless engine - session state machine, event bus, auth"
+
+[dependencies]
+halny-vibe-deck-core = { workspace = true }
+halny-vibe-deck-appsrv = { path = "../halny-vibe-deck-appsrv" }
+halny-vibe-deck-setup = { workspace = true }
+halny-vibe-deck-vibe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+tokio = { version = "1", features = ["sync"] }
+sha2 = "0.10"
+hex = "0.4"
+# L1: PKCE verifier (64 B CSPRNG) — no other RNG in the graph.
+getrandom = "0.2"

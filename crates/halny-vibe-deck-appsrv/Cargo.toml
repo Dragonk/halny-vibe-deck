@@ -1,0 +1,17 @@
+[package]
+name = "halny-vibe-deck-appsrv"
+version = "1.99.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/Dragonk/halny-vibe-deck"
+description = "Client transport for the vibe-app-server protocol (JSON-RPC 2.0 over stdio) — drop-in alternative to the vibe-acp transport"
+publish = false
+
+[dependencies]
+halny-vibe-deck-core = { path = "../halny-vibe-deck-core" }
+halny-vibe-deck-vibe = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }

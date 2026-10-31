@@ -96,8 +96,8 @@ jobs:
       - name: Test (workspace)
         run: cargo test --workspace --locked
 
-      - name: Test (mistraldeck, server feature)
-        run: cargo test -p mistraldeck --features server --locked
+      - name: Test (halny-vibe-deck, server feature)
+        run: cargo test -p halny-vibe-deck --features server --locked
 
   bundles:
     name: Bundles (linux x64 + windows x64)
@@ -140,25 +140,25 @@ jobs:
         run: cargo install dioxus-cli --version 0.7.10 --locked
 
       - name: Build web bundle (wasm + public/)
-        working-directory: crates/mistraldeck
+        working-directory: crates/halny-vibe-deck
         run: dx build --fullstack --web --release
 
       - name: Build linux server binary (gui + headless)
         run: |
-          cargo build --profile server-release -p mistraldeck --features server,gui --locked
+          cargo build --profile server-release -p halny-vibe-deck --features server,gui --locked
           strip --strip-all "$CARGO_TARGET_DIR/server-release/halny-vibe-deck"
 
       - name: Build windows server binary (x86_64-pc-windows-gnu)
         run: |
-          cargo build --profile server-release -p mistraldeck --features server,gui --target x86_64-pc-windows-gnu --locked
+          cargo build --profile server-release -p halny-vibe-deck --features server,gui --target x86_64-pc-windows-gnu --locked
           x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck.exe"
           x86_64-w64-mingw32-objdump -h "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck.exe" | grep -q '\.rsrc' || { echo 'ERROR: .rsrc section missing — icon was not embedded'; exit 1; }
 
       - name: Build appserver binaries (headless)
         run: |
-          cargo build --profile server-release -p mistraldeck-appserver --locked
+          cargo build --profile server-release -p halny-vibe-deck-appserver --locked
           strip --strip-all "$CARGO_TARGET_DIR/server-release/halny-vibe-deck-appserver"
-          cargo build --profile server-release -p mistraldeck-appserver --target x86_64-pc-windows-gnu --locked
+          cargo build --profile server-release -p halny-vibe-deck-appserver --target x86_64-pc-windows-gnu --locked
           x86_64-w64-mingw32-strip --strip-all "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/server-release/halny-vibe-deck-appserver.exe"
 
       - name: Fetch pdfium binaries

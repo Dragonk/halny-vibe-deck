@@ -1,0 +1,11 @@
+[application]
+name = "halny-vibe-deck"
+default_platform = "web"
+out_dir = "dist"
+asset_dir = "assets"
+
+[web.app]
+title = "Halny Vibe Deck"
+
+[web.watcher]
+reload_html = true

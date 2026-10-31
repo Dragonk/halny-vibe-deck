@@ -105,31 +105,30 @@ git checkout next
 
 cargo check --workspace
 cargo test --workspace
-cargo test -p mistraldeck --features server   # UI crate's server-side tests
+cargo test -p halny-vibe-deck --features server   # UI crate's server-side tests
 
 # Desktop/web bundle via dioxus-cli (dx):
-cd crates/mistraldeck && dx build --fullstack --web --release
+cd crates/halny-vibe-deck && dx build --fullstack --web --release
 
 # Server binary profile used by CI bundles:
-cargo build --profile server-release -p mistraldeck --features server,gui
+cargo build --profile server-release -p halny-vibe-deck --features server,gui
 ```
 
-Workspace layout (crate package/dir names still carry the legacy `mistraldeck` prefix;
-the shipped binaries are `halny-vibe-deck` / `halny-vibe-deck-appserver`):
+Workspace layout (shipped binaries: `halny-vibe-deck` / `halny-vibe-deck-appserver`):
 
-- `crates/mistraldeck` — the app itself: Dioxus 0.7 fullstack UI + Axum server
+- `crates/halny-vibe-deck` — the app itself: Dioxus 0.7 fullstack UI + Axum server
   (`server` feature: headless/remote with HTTPS + login + PWA; `gui` feature: desktop
   webview via wry/tao; `web` feature: browser WASM).
-- `crates/mistraldeck-appserver` — dedicated headless-server binary
+- `crates/halny-vibe-deck-appserver` — dedicated headless-server binary
   (`halny-vibe-deck-appserver`).
-- `crates/mistraldeck-appsrv` — the `vibe-app-server` worker: JSON-RPC connection,
+- `crates/halny-vibe-deck-appsrv` — the `vibe-app-server` worker: JSON-RPC connection,
   session projection, wire→event mapping.
-- `crates/mistraldeck-engine` — session/slot engine: parallel agent processes, event
+- `crates/halny-vibe-deck-engine` — session/slot engine: parallel agent processes, event
   bus, snapshots, stop/cancel, in-app updater.
-- `crates/mistraldeck-vibe` — read/write of the Vibe CLI config (`~/.vibe/config.toml`,
+- `crates/halny-vibe-deck-vibe` — read/write of the Vibe CLI config (`~/.vibe/config.toml`,
   agents, prompts, skills), session stats.
-- `crates/mistraldeck-core` — shared domain types and protocol events.
-- `crates/mistraldeck-setup` — first-run setup: detecting/installing `vibe-app-server`.
+- `crates/halny-vibe-deck-core` — shared domain types and protocol events.
+- `crates/halny-vibe-deck-setup` — first-run setup: detecting/installing `vibe-app-server`.
 
 ## Versioning
 

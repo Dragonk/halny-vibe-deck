@@ -2624,6 +2624,110 @@ dependencies = [
 ]
 
 [[package]]
+name = "halny-vibe-deck"
+version = "1.99.23"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "calamine",
+ "console_error_panic_hook",
+ "dioxus",
+ "dioxus-fullstack",
+ "dirs 5.0.1",
+ "flate2",
+ "gloo-timers",
+ "halny-vibe-deck-core",
+ "halny-vibe-deck-engine",
+ "halny-vibe-deck-setup",
+ "halny-vibe-deck-vibe",
+ "if-addrs",
+ "image",
+ "js-sys",
+ "pdf-extract",
+ "pdfium-render",
+ "quick-xml",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "tao",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "wasm-bindgen",
+ "web-sys",
+ "wry",
+ "zip",
+]
+
+[[package]]
+name = "halny-vibe-deck-appserver"
+version = "1.99.23"
+dependencies = [
+ "halny-vibe-deck",
+]
+
+[[package]]
+name = "halny-vibe-deck-appsrv"
+version = "1.99.0"
+dependencies = [
+ "anyhow",
+ "halny-vibe-deck-core",
+ "halny-vibe-deck-vibe",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "halny-vibe-deck-core"
+version = "1.99.23"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "halny-vibe-deck-engine"
+version = "1.99.23"
+dependencies = [
+ "dirs 5.0.1",
+ "getrandom 0.2.17",
+ "halny-vibe-deck-appsrv",
+ "halny-vibe-deck-core",
+ "halny-vibe-deck-setup",
+ "halny-vibe-deck-vibe",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
+name = "halny-vibe-deck-setup"
+version = "1.99.23"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "halny-vibe-deck-core",
+ "serde",
+]
+
+[[package]]
+name = "halny-vibe-deck-vibe"
+version = "1.99.23"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3644,110 +3748,6 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mistraldeck"
-version = "1.99.22"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "calamine",
- "console_error_panic_hook",
- "dioxus",
- "dioxus-fullstack",
- "dirs 5.0.1",
- "flate2",
- "gloo-timers",
- "if-addrs",
- "image",
- "js-sys",
- "mistraldeck-core",
- "mistraldeck-engine",
- "mistraldeck-setup",
- "mistraldeck-vibe",
- "pdf-extract",
- "pdfium-render",
- "quick-xml",
- "rcgen",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_json",
- "tao",
- "tokio",
- "tokio-rustls",
- "toml",
- "wasm-bindgen",
- "web-sys",
- "wry",
- "zip",
-]
-
-[[package]]
-name = "mistraldeck-appserver"
-version = "1.99.22"
-dependencies = [
- "mistraldeck",
-]
-
-[[package]]
-name = "mistraldeck-appsrv"
-version = "1.99.0"
-dependencies = [
- "anyhow",
- "log",
- "mistraldeck-core",
- "mistraldeck-vibe",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mistraldeck-core"
-version = "1.99.22"
-dependencies = [
- "js-sys",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mistraldeck-engine"
-version = "1.99.22"
-dependencies = [
- "dirs 5.0.1",
- "getrandom 0.2.17",
- "hex",
- "mistraldeck-appsrv",
- "mistraldeck-core",
- "mistraldeck-setup",
- "mistraldeck-vibe",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
-]
-
-[[package]]
-name = "mistraldeck-setup"
-version = "1.99.22"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "mistraldeck-core",
- "serde",
-]
-
-[[package]]
-name = "mistraldeck-vibe"
-version = "1.99.22"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "serde",
- "serde_json",
- "toml",
 ]
 
 [[package]]

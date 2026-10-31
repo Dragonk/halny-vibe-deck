@@ -1,17 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/mistraldeck-core",
-    "crates/mistraldeck-vibe",
-    "crates/mistraldeck-setup",
-    "crates/mistraldeck-engine",
-    "crates/mistraldeck",
-    "crates/mistraldeck-appserver",
-    "crates/mistraldeck-appsrv",
+    "crates/halny-vibe-deck-core",
+    "crates/halny-vibe-deck-vibe",
+    "crates/halny-vibe-deck-setup",
+    "crates/halny-vibe-deck-engine",
+    "crates/halny-vibe-deck",
+    "crates/halny-vibe-deck-appserver",
+    "crates/halny-vibe-deck-appsrv",
 ]
 
 [workspace.package]
-version = "1.99.22"
+version = "1.99.23"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
@@ -19,10 +19,10 @@ repository = "https://github.com/Dragonk/halny-vibe-deck"
 description = "Mistral Deck — an unofficial desktop GUI for the Mistral Vibe CLI"
 
 [workspace.dependencies]
-mistraldeck-core = { path = "crates/mistraldeck-core" }
-mistraldeck-vibe = { path = "crates/mistraldeck-vibe" }
-mistraldeck-setup = { path = "crates/mistraldeck-setup" }
-mistraldeck-engine = { path = "crates/mistraldeck-engine" }
+halny-vibe-deck-core = { path = "crates/halny-vibe-deck-core" }
+halny-vibe-deck-vibe = { path = "crates/halny-vibe-deck-vibe" }
+halny-vibe-deck-setup = { path = "crates/halny-vibe-deck-setup" }
+halny-vibe-deck-engine = { path = "crates/halny-vibe-deck-engine" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
