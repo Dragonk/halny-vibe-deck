@@ -4,7 +4,7 @@ Analysis date: 2026-10-27 07:52 UTC. Window: the last 24 h of stable ≈ v0.13.5
 (commits `bef87ae`…`48c1738`), with emphasis on the priority list (v0.13.15, v1.0.1–v1.0.19).
 
 Method: `git show <sha>` / `git show origin/main:CHANGELOG.md` for stable; reading the
-`next` code from the local checkout (crates/mistraldeck*, semantic branches, not file names).
+`next` code from the local checkout (crates/halny-vibe-deck*, semantic branches, not file names).
 
 Legend: **YES** = the bug is present in next, **PARTIAL** = partially mitigated / the same gap in a different shape, **NO** = not applicable or already fixed in next.
 
@@ -14,31 +14,31 @@ Legend: **YES** = the bug is present in next, **PARTIAL** = partially mitigated 
 
 | Version / commit (stable) | Bugfix | next affected | File(s) in next | Suggested fix |
 |---|---|---|---|---|
-| v1.0.5 / `45d7ce8` | Refuse app/CLI updates while an ACP turn is in flight | **YES** | `crates/mistraldeck/src/api.rs` (`api_update_app`, `api_upgrade_local_cli`), `crates/mistraldeck-engine/src/updates.rs` (`update_app`) | Add `Engine::any_turn_in_flight()` (iterate `state.slots`, `slot.busy`), refuse the update when true — see §3.1 |
-| v1.0.4 / `815354b` | Reject pending ACP requests when the worker dies mid-turn | **PARTIAL** | `crates/mistraldeck-acp/src/client.rs` (`request`, stdout reader) | Fail-fast already exists (poll `exited()` every 50 ms); add a drain of `pending` on `RawMsg::StdoutClosed` — see §3.2 |
+| v1.0.5 / `45d7ce8` | Refuse app/CLI updates while an ACP turn is in flight | **YES** | `crates/halny-vibe-deck/src/api.rs` (`api_update_app`, `api_upgrade_local_cli`), `crates/halny-vibe-deck-engine/src/updates.rs` (`update_app`) | Add `Engine::any_turn_in_flight()` (iterate `state.slots`, `slot.busy`), refuse the update when true — see §3.1 |
+| v1.0.4 / `815354b` | Reject pending ACP requests when the worker dies mid-turn | **PARTIAL** | `crates/the legacy ACP client crate (removed)/src/client.rs` (`request`, stdout reader) | Fail-fast already exists (poll `exited()` every 50 ms); add a drain of `pending` on `RawMsg::StdoutClosed` — see §3.2 |
 | `5ab6b5a` | Never route a prompt into another session | **NO** | — | next has no "last active session" fallback; a prompt always goes to the current session's slot (`send_message_with` → `slot.pending_prompt`, sent with `session_id` in `cmd_prompt`) |
 | `a4bcf51` | Fix first prompt going to an invisible session on a fresh install | **NO** | — | next creates and publishes the session server-side: `send_message_with` → `create_local_session()` → `BusEvent::StructureChanged` (lib.rs ~660, ~314); the client receives the event via the stream |
-| `faa86ac` | Fix dock and sidebar resizing with pointer events | **YES** | `crates/mistraldeck/src/components/shell.rs` (`RESIZE_JS`, ~238–288), `crates/mistraldeck/assets/main.css` (`.sidebar-resize-handle`, `.dock-resize-handle`) | Switch mouse events to pointer events + `setPointerCapture`/`pointercancel`, `touch-action:none`, a wider hit-area — see §3.3 |
-| `d551ecd` | Fix tool-approval dialog layout on desktop and mobile | **PARTIAL** | `crates/mistraldeck/assets/main.css` (`.tool-approval-*`, 3854–3935), `crates/mistraldeck/src/components/shell.rs` (`approval_el`) | Short name + mono chip already there; missing: `overflow-wrap` instead of `nowrap+ellipsis` for long commands, and a mobile `@media` (full-width bar, button wrapping) — see §3.4 |
-| v0.13.15 / `bef87ae` (headless/web ×10) | progress updates in headless, binary git diff → preview, replay guard, sendQueuedNow, thinking levels, web update, sidebar 🆕 | **PARTIAL** (see §3.5) | mostly `crates/mistraldeck/src/state.rs` (`drain_queue`), the rest NO | Most don't apply (next's server-side snapshot model); the real remainder: the queue with a stuck `busy` — see §3.5 |
-| v1.0.6 / `f54ff21` | Auto-approval follows the session's built-in mode (yolo) | **YES** | `crates/mistraldeck-engine/src/lib.rs` (~1595, `AcpEvent::ToolApprovalRequest`), `crates/mistraldeck-acp/src/client.rs` | When the session's `current_mode_id` == the built-in auto-approve (`"yolo"`/localized equivalent — cf. `lib.rs:1935` `"auto-approve"`), approve it ourselves instead of surfacing — see §3.6 |
-| v1.0.8 / `6f726b8` | Images actually reach the LLM (ACP image content blocks) | **YES** | `crates/mistraldeck-acp/src/client.rs` (`cmd_prompt`, ~751), `crates/mistraldeck/src/api.rs` (`resolve_attachments`, ~219) | `cmd_prompt` sends only `[{type:"text"}]`; add base64+mime image blocks — see §3.7 |
-| v1.0.9 / `dc3dacf` | SSH session list hang on first launch (host-key prompt) | **YES** | `crates/mistraldeck-engine/src/remote.rs` (`ssh_run`, ~68), `remote_vibe.rs` (ssh spawn) | Add `-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10` to every ssh spawn — see §3.8 |
+| `faa86ac` | Fix dock and sidebar resizing with pointer events | **YES** | `crates/halny-vibe-deck/src/components/shell.rs` (`RESIZE_JS`, ~238–288), `crates/halny-vibe-deck/assets/main.css` (`.sidebar-resize-handle`, `.dock-resize-handle`) | Switch mouse events to pointer events + `setPointerCapture`/`pointercancel`, `touch-action:none`, a wider hit-area — see §3.3 |
+| `d551ecd` | Fix tool-approval dialog layout on desktop and mobile | **PARTIAL** | `crates/halny-vibe-deck/assets/main.css` (`.tool-approval-*`, 3854–3935), `crates/halny-vibe-deck/src/components/shell.rs` (`approval_el`) | Short name + mono chip already there; missing: `overflow-wrap` instead of `nowrap+ellipsis` for long commands, and a mobile `@media` (full-width bar, button wrapping) — see §3.4 |
+| v0.13.15 / `bef87ae` (headless/web ×10) | progress updates in headless, binary git diff → preview, replay guard, sendQueuedNow, thinking levels, web update, sidebar 🆕 | **PARTIAL** (see §3.5) | mostly `crates/halny-vibe-deck/src/state.rs` (`drain_queue`), the rest NO | Most don't apply (next's server-side snapshot model); the real remainder: the queue with a stuck `busy` — see §3.5 |
+| v1.0.6 / `f54ff21` | Auto-approval follows the session's built-in mode (yolo) | **YES** | `crates/halny-vibe-deck-engine/src/lib.rs` (~1595, `AcpEvent::ToolApprovalRequest`), `crates/the legacy ACP client crate (removed)/src/client.rs` | When the session's `current_mode_id` == the built-in auto-approve (`"yolo"`/localized equivalent — cf. `lib.rs:1935` `"auto-approve"`), approve it ourselves instead of surfacing — see §3.6 |
+| v1.0.8 / `6f726b8` | Images actually reach the LLM (ACP image content blocks) | **YES** | `crates/the legacy ACP client crate (removed)/src/client.rs` (`cmd_prompt`, ~751), `crates/halny-vibe-deck/src/api.rs` (`resolve_attachments`, ~219) | `cmd_prompt` sends only `[{type:"text"}]`; add base64+mime image blocks — see §3.7 |
+| v1.0.9 / `dc3dacf` | SSH session list hang on first launch (host-key prompt) | **YES** | `crates/halny-vibe-deck-engine/src/remote.rs` (`ssh_run`, ~68), `remote_vibe.rs` (ssh spawn) | Add `-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10` to every ssh spawn — see §3.8 |
 | v1.0.10 / `f3cc789` | Attachments ENOENT (`fs:write-binary` without mkdir) | **NO** | — | next does not write uploads to `/tmp` during resolve (read-only `resolve_attachments`); upload already does `create_dir_all` (`api.rs:845`) |
 | v1.0.10 / `f3cc789` | Message sent in one browser never appears on other clients | **NO** | — | next broadcasts server-side: `BusEvent::UserMessageAdded` (`lib.rs:674`), all clients receive it via the event stream |
-| v1.0.10 / `f3cc789` | PWA staleness (SW cache purge, 512px icon, `id`) | **PARTIAL** | `crates/mistraldeck/src/pwa.rs` (MANIFEST, SW) | Verify the manifest has `icons[512]` (any+maskable) and a stable `id`; the SW purges old caches on activate — see §3.9 |
+| v1.0.10 / `f3cc789` | PWA staleness (SW cache purge, 512px icon, `id`) | **PARTIAL** | `crates/halny-vibe-deck/src/pwa.rs` (MANIFEST, SW) | Verify the manifest has `icons[512]` (any+maskable) and a stable `id`; the SW purges old caches on activate — see §3.9 |
 | v1.0.11 / `47c557b` | Joining a running session showed only new messages | **NO** | — | next loads sessions from disk (preview) before joining; the snapshot provides the full history regardless of the stream |
 | v1.0.12 / `e486122` | Chrome could not install the PWA (manifest 401) | **NO** | — | `serve.rs::remote_auth` (~286) exempts `/manifest.webmanifest`, `/sw.js`, `/icon-256.png` from auth (comment: "Nexus serves them pre-auth too") |
 | v1.0.13 / `0b7d06a` | Reopened PWA saw running turns as idle (`busyTurns`, `acp:busy-sessions`) | **NO** | — | next is snapshot-based: per-session `busy` is included in `api_snapshot` (lib.rs ~236) and after every reconnect the client does a full `refresh()` (shell.rs ~36) |
-| v1.0.14 / v1.0.15 / v1.0.18 | Back gesture: LIFO nav stack, pushBack on every entry, double-back-to-exit, `/login` guard | **YES** | `crates/mistraldeck/src/components/mobile.rs`, `shell.rs`, `state.rs` (View) | Zero `pushState`/`popstate` in the web client — see §3.10 |
-| v1.0.16 / `9f86dc5` | "Resume failed: Connection closed" — auto-retry resume (4×, 3 s) | **PARTIAL** | `crates/mistraldeck-engine/src/lib.rs` (~1385 `AcpEvent::SessionError`) | Load-failure has a fallback to a fresh session (respawn with `pending_prompt`), but there is no proper retry of the resume on a transient transport hiccup; `pending_prompt` with the `load_session` fallback is lost on a non-load error — see §3.11 |
-| v1.0.17 / `438f57d` | Returning to the PWA shows stale data (full re-sync on reconnect + visibility) | **PARTIAL** | `crates/mistraldeck/src/components/shell.rs` (~30–41) | Reconnect → full `refresh()` IS there; no `visibilitychange` handler and no `drain_queue` after the reconnect-refresh — see §3.12 |
-| v1.0.19 / `48c1738` | Serving silently dies after an in-app update (systemd orphan, EADDRINUSE) | **YES** | `crates/mistraldeck-engine/src/updates.rs` (`update_app_linux`, ~766), `crates/mistraldeck/src/serve.rs` (`bind`, ~551) | Linux relaunch through the systemd unit when active; pidfile + EADDRINUSE recovery in serve — see §3.13 |
-| v1.0.3 / `f2eecd9` | Windows self-update black terminal (`detached` → missing `CREATE_NO_WINDOW`) | **YES** | `crates/mistraldeck-engine/src/updates.rs` (~673: `creation_flags(0x0000_0008)` — only `DETACHED_PROCESS`) | Add `CREATE_NO_WINDOW (0x0800_0000)`: `creation_flags(0x0800_0008)` — see §3.14 |
+| v1.0.14 / v1.0.15 / v1.0.18 | Back gesture: LIFO nav stack, pushBack on every entry, double-back-to-exit, `/login` guard | **YES** | `crates/halny-vibe-deck/src/components/mobile.rs`, `shell.rs`, `state.rs` (View) | Zero `pushState`/`popstate` in the web client — see §3.10 |
+| v1.0.16 / `9f86dc5` | "Resume failed: Connection closed" — auto-retry resume (4×, 3 s) | **PARTIAL** | `crates/halny-vibe-deck-engine/src/lib.rs` (~1385 `AcpEvent::SessionError`) | Load-failure has a fallback to a fresh session (respawn with `pending_prompt`), but there is no proper retry of the resume on a transient transport hiccup; `pending_prompt` with the `load_session` fallback is lost on a non-load error — see §3.11 |
+| v1.0.17 / `438f57d` | Returning to the PWA shows stale data (full re-sync on reconnect + visibility) | **PARTIAL** | `crates/halny-vibe-deck/src/components/shell.rs` (~30–41) | Reconnect → full `refresh()` IS there; no `visibilitychange` handler and no `drain_queue` after the reconnect-refresh — see §3.12 |
+| v1.0.19 / `48c1738` | Serving silently dies after an in-app update (systemd orphan, EADDRINUSE) | **YES** | `crates/halny-vibe-deck-engine/src/updates.rs` (`update_app_linux`, ~766), `crates/halny-vibe-deck/src/serve.rs` (`bind`, ~551) | Linux relaunch through the systemd unit when active; pidfile + EADDRINUSE recovery in serve — see §3.13 |
+| v1.0.3 / `f2eecd9` | Windows self-update black terminal (`detached` → missing `CREATE_NO_WINDOW`) | **YES** | `crates/halny-vibe-deck-engine/src/updates.rs` (~673: `creation_flags(0x0000_0008)` — only `DETACHED_PROCESS`) | Add `CREATE_NO_WINDOW (0x0800_0000)`: `creation_flags(0x0800_0008)` — see §3.14 |
 | v1.0.3 / `f2eecd9` | "Update" from browser in headless mode | **NO** | — | `api_update_app` in next has no web block (only `check(&token)`); progress polling via `api_update_progress` works without a window |
 | v1.0.7 / `ae0aab3` | Boot prime: no auto-opening session; chips from config before connecting | **NO / different design** | — | next does not create a session at boot (the session is created in `send_message_with`/`create_local_session` on demand); model/mode choices are applied when the session wakes (`pending_options`, lib.rs ~790) |
-| `722279a`–`c865545` (v0.13.14), `f6398d0` | Send-now for queued prompts; always-visible usage bar; restore of the plan on resume | **PARTIAL** | `crates/mistraldeck/src/state.rs` (`queue`, `drain_queue`), `components/input.rs` | The queue exists, but there is **no "send now" button** and no send-now for idle sessions — see §3.5 |
-| v0.13.12 / `a769afd` | Resume races: replay guard, Enter guard, hung-worker probe | **PARTIAL** | `crates/mistraldeck-acp/src/client.rs` (`replaying`), `lib.rs` (cancel-watchdog ~831, ~2142) | Replay is server-side (no leakage between sessions); there is a cancel watchdog; there is no "hung worker" probe for the prompt itself (1 h timeout `REQUEST_TIMEOUT`) — see §3.11 |
+| `722279a`–`c865545` (v0.13.14), `f6398d0` | Send-now for queued prompts; always-visible usage bar; restore of the plan on resume | **PARTIAL** | `crates/halny-vibe-deck/src/state.rs` (`queue`, `drain_queue`), `components/input.rs` | The queue exists, but there is **no "send now" button** and no send-now for idle sessions — see §3.5 |
+| v0.13.12 / `a769afd` | Resume races: replay guard, Enter guard, hung-worker probe | **PARTIAL** | `crates/the legacy ACP client crate (removed)/src/client.rs` (`replaying`), `lib.rs` (cancel-watchdog ~831, ~2142) | Replay is server-side (no leakage between sessions); there is a cancel watchdog; there is no "hung worker" probe for the prompt itself (1 h timeout `REQUEST_TIMEOUT`) — see §3.11 |
 | v0.13.11 / `e2e4aac` | Duplicate sessions on failed resume; stuck busy on worker death | **NO (mostly)** | — | "Stuck busy" is solved: `AcpEvent::SessionError` clears `busy`/`stopping` (lib.rs ~1385); no duplicate sessions (one slot per session-key, dedupe by `acp_session_id`) |
 
 ---
@@ -47,7 +47,7 @@ Legend: **YES** = the bug is present in next, **PARTIAL** = partially mitigated 
 
 - **"Refuse app/CLI updates while an ACP turn is in flight"** → **YES**, missing in next. Details in §3.1.
 - **"Reject pending ACP requests when the worker dies mid-turn"** → **PARTIAL**: fail-fast semantics already exist (a different architecture: a blocking `request()` instead of promises), but there is no drain of the pending map on stdout close. §3.2.
-- **"Never route a prompt into another session"** → **NO**: `send_message_with` (crates/mistraldeck-engine/src/lib.rs ~635) routes exclusively to the current session (`st.current_session_mut()`), the prompt is sent with an explicit `session_id` (`cmd_prompt`, client.rs ~751); there is no "worker's last active session" fallback. The SessionInitialized-vs-reply race does not exist, because `pending_prompt` is kept in the session slot and sent after `SessionReady` (lib.rs ~1328, ~1399).
+- **"Never route a prompt into another session"** → **NO**: `send_message_with` (crates/halny-vibe-deck-engine/src/lib.rs ~635) routes exclusively to the current session (`st.current_session_mut()`), the prompt is sent with an explicit `session_id` (`cmd_prompt`, client.rs ~751); there is no "worker's last active session" fallback. The SessionInitialized-vs-reply race does not exist, because `pending_prompt` is kept in the session slot and sent after `SessionReady` (lib.rs ~1328, ~1399).
 - **"Fix first prompt going to an invisible session on a fresh install"** → **NO**: when `current.is_none()`, next creates a session and publishes `StructureChanged` (lib.rs ~659), so the first message has a visible session.
 - **"Fix dock and sidebar resizing with pointer events"** → **YES**: `RESIZE_JS` in shell.rs uses exactly the mouse-only pattern. §3.3.
 - **"Fix tool-approval dialog layout"** → **PARTIAL**: the `.tool-approval-input` chip exists, but without wrapping and without a mobile media query. §3.4.
@@ -64,21 +64,21 @@ Legend: **YES** = the bug is present in next, **PARTIAL** = partially mitigated 
 
 Stable: `updates:update-cli` killed the workers, `update-app` did `app.exit(0)`/taskkills — without checking for a turn.
 
-Next: `crates/mistraldeck/src/api.rs`:
+Next: `crates/halny-vibe-deck/src/api.rs`:
 
 ```rust
 pub async fn api_update_app(token: String) -> ... {
     check(&token)?;
-    tokio::task::spawn_blocking(mistraldeck_engine::updates::update_app)  // no busy check
+    tokio::task::spawn_blocking(halny-vibe-deck_engine::updates::update_app)  // no busy check
 ```
 
-`api_upgrade_local_cli` (~422) — same as above. In `crates/mistraldeck-engine/src/updates.rs::update_app()` (453) the only guard is `UPDATE_STATE.running` (a concurrent update, not a turn).
+`api_upgrade_local_cli` (~422) — same as above. In `crates/halny-vibe-deck-engine/src/updates.rs::update_app()` (453) the only guard is `UPDATE_STATE.running` (a concurrent update, not a turn).
 
-Fix: add an `Engine::any_turn_in_flight() -> bool` method in `crates/mistraldeck-engine/src/lib.rs` (lock `state`, `st.slots.values().any(|s| s.busy)`; slots per local and remote session — also covers remote). Call it at the start of `api_update_app` and `api_upgrade_local_cli`, returning `AppUpdateResult { ok:false, error: Some("A turn is running — update refused") }` (and an analogous `CliUpgradeResult::error`).
+Fix: add an `Engine::any_turn_in_flight() -> bool` method in `crates/halny-vibe-deck-engine/src/lib.rs` (lock `state`, `st.slots.values().any(|s| s.busy)`; slots per local and remote session — also covers remote). Call it at the start of `api_update_app` and `api_upgrade_local_cli`, returning `AppUpdateResult { ok:false, error: Some("A turn is running — update refused") }` (and an analogous `CliUpgradeResult::error`).
 
 ### 3.2 Worker death → pending requests (v1.0.4) — **PARTIAL, MEDIUM**
 
-Next in `crates/mistraldeck-acp/src/client.rs::request()` (274–310) checks `exited()` every 50 ms and immediately returns `bail!("vibe-acp exited while handling {method}")` — this gives the same "fail fast" effect as the stable fix (reject instead of waiting for the timeout). Differences:
+Next in `crates/the legacy ACP client crate (removed)/src/client.rs::request()` (274–310) checks `exited()` every 50 ms and immediately returns `bail!("vibe-acp exited while handling {method}")` — this gives the same "fail fast" effect as the stable fix (reject instead of waiting for the timeout). Differences:
 
 1. On EOF the reader thread only sends `RawMsg::StdoutClosed` (client.rs ~211) and **does not drain** the `pending` map — requests "hang" in the map until the poll in `request()` — for a blocking client someone is always waiting, so semantically OK; the drain still tidies up state on an unexpected death mid-replay (`drain_raw`).
 2. The prompt timeout is `REQUEST_TIMEOUT` (up to 1 h) — if a turn is stuck and the worker is alive but hung, next has no probe (v0.13.12's "hung-worker probe" from stable). `SessionError` clears `busy` (lib.rs 1385), so after an actual death the UI does unblock.
@@ -87,7 +87,7 @@ Fix (low cost): in the reader thread after `break`, do a drain: `for (_, tx) in 
 
 ### 3.3 Resize handle with mouse events only (faa86ac) — **YES, HIGH (web/mobile)**
 
-`crates/mistraldeck/src/components/shell.rs`, `RESIZE_JS` (~238–288):
+`crates/halny-vibe-deck/src/components/shell.rs`, `RESIZE_JS` (~238–288):
 
 ```js
 document.addEventListener('mousedown', ...)   // arm()
@@ -97,7 +97,7 @@ document.addEventListener('mouseup', up);               // no pointercancel/poin
 
 The same three symptoms as in stable: touch/PWA does not work (mouse events do not fire for touch), a lost `mouseup` outside the window → the panel stuck in resize mode, events swallowed by an iframe. The handles in `components/dock.rs:519` and the sidebar have no `touch-action:none`.
 
-Fix: rewrite `arm`/`drag` to `pointerdown` + `el.setPointerCapture(e.pointerId)` + `pointermove`/`pointerup`/`pointercancel`; add to `crates/mistraldeck/assets/main.css` for `.sidebar-resize-handle`/`.dock-resize-handle`: `touch-action:none;` and a widened pseudo-element hit-area (e.g. `::after { width:12px; margin:-6px }`). Optionally a fallback to the default dock width when nothing is saved (next has defaults in `load()`, so OK).
+Fix: rewrite `arm`/`drag` to `pointerdown` + `el.setPointerCapture(e.pointerId)` + `pointermove`/`pointerup`/`pointercancel`; add to `crates/halny-vibe-deck/assets/main.css` for `.sidebar-resize-handle`/`.dock-resize-handle`: `touch-action:none;` and a widened pseudo-element hit-area (e.g. `::after { width:12px; margin:-6px }`). Optionally a fallback to the default dock width when nothing is saved (next has defaults in `load()`, so OK).
 
 ### 3.4 Tool-approval layout (d551ecd) — **PARTIAL, LOW**
 
@@ -115,7 +115,7 @@ Breakdown of the ten fixes vs next:
 | Fix v0.13.15 | next |
 |---|---|
 | updates:progress broadcast in headless | NO — progress is polled (`api_update_progress`), works without a window |
-| binary git diff → file preview (GitPanel) | to check in `crates/mistraldeck/src/fsgit.rs` / `components/history.rs` — if next renders a binary diff as text, port the `BINARY_EXTS`/"Binary files differ" heuristic |
+| binary git diff → file preview (GitPanel) | to check in `crates/halny-vibe-deck/src/fsgit.rs` / `components/history.rs` — if next renders a binary diff as text, port the `BINARY_EXTS`/"Binary files differ" heuristic |
 | replay guard (`setPendingLoadSessionId`) | NO — replay is server-side in `client.rs` (`replaying` map → `SessionHistory`), with no leakage between sessions |
 | user message disappearing after a failed resume | PARTIAL — `pending_prompt` exists, but on a non-`load_session` error it is cleared (lib.rs ~1409); see §3.11 |
 | attach menu without directories | a UX decision, not a bug — needs a product call |
@@ -134,19 +134,19 @@ Fix: when handling `ToolApprovalRequest` in a slot, check the stored `current_mo
 
 ### 3.7 Images never reach the LLM (v1.0.8) — **YES, HIGH (feature parity)**
 
-`crates/mistraldeck-acp/src/client.rs::cmd_prompt` (~751): `prompt: [ { "type": "text", "text": text } ]` — text only. `resolve_attachments` (api.rs ~219) inlines files as text (MAX 256 KB); an image read as text is useless to the model.
+`crates/the legacy ACP client crate (removed)/src/client.rs::cmd_prompt` (~751): `prompt: [ { "type": "text", "text": text } ]` — text only. `resolve_attachments` (api.rs ~219) inlines files as text (MAX 256 KB); an image read as text is useless to the model.
 
-Fix: (1) in `mistraldeck-core::types::Attachment` add `mime` + `data_base64` (or `kind: Image`); (2) in `resolve_attachments` detect PNG/JPEG/GIF/WebP, read binary, encode base64 (limits: 8/prompt, 10 MB, as per the CLI contract); (3) `cmd_prompt` builds `{"type":"image","data":...,"mimeType":...}` blocks (alias from the file name); (4) UI (input.rs) validation and a banner when the model lacks `supports_images` (cf. v1.0.8 vision-capability detection).
+Fix: (1) in `halny-vibe-deck-core::types::Attachment` add `mime` + `data_base64` (or `kind: Image`); (2) in `resolve_attachments` detect PNG/JPEG/GIF/WebP, read binary, encode base64 (limits: 8/prompt, 10 MB, as per the CLI contract); (3) `cmd_prompt` builds `{"type":"image","data":...,"mimeType":...}` blocks (alias from the file name); (4) UI (input.rs) validation and a banner when the model lacks `supports_images` (cf. v1.0.8 vision-capability detection).
 
 ### 3.8 SSH: host-key prompt hangs the first connection (v1.0.9) — **YES, MEDIUM**
 
-`crates/mistraldeck-engine/src/remote.rs::ssh_run` (~68) builds a `Command` from the tokens of `conn.ssh_cmd` and **adds no `-o` options**; the same in `remote_vibe.rs` (spawning vibe-acp over ssh). The first contact with a new host hangs on the interactive host-key prompt until timeout.
+`crates/halny-vibe-deck-engine/src/remote.rs::ssh_run` (~68) builds a `Command` from the tokens of `conn.ssh_cmd` and **adds no `-o` options**; the same in `remote_vibe.rs` (spawning vibe-acp over ssh). The first contact with a new host hangs on the interactive host-key prompt until timeout.
 
 Fix: after `tokenize_cmd`, append `arg("-o").arg("StrictHostKeyChecking=accept-new").arg("-o").arg("ConnectTimeout=10")` before `remote_cmd` (note: only for the ssh binary, not plink — possibly a flag in `RemoteConnection`). Bonus from stable: parallel per-host fetching of the session lists (next loads on demand per conn — `api.rs:738` — so the risk is lower, but the timeout is critical anyway).
 
 ### 3.9 PWA manifest (v1.0.10) — **PARTIAL, LOW**
 
-`crates/mistraldeck/src/pwa.rs::MANIFEST` — check whether it has a 512×512 icon (`purpose: "any maskable"`) and a stable `"id"`. The SW (`SW` const) only purges old caches if it has an `activate` handler with the list of versions — verify (the CACHE definition is versioned; without purging old names the phone may stay on a stale bundle).
+`crates/halny-vibe-deck/src/pwa.rs::MANIFEST` — check whether it has a 512×512 icon (`purpose: "any maskable"`) and a stable `"id"`. The SW (`SW` const) only purges old caches if it has an `activate` handler with the list of versions — verify (the CACHE definition is versioned; without purging old names the phone may stay on a stale bundle).
 
 ### 3.10 Back gesture / LIFO navigation (v1.0.14/15/18) — **YES, MEDIUM (PWA mobile only)**
 
@@ -168,13 +168,13 @@ Fix: in `shell.rs` add a `use_future` with a `visibilitychange` listener (a JS e
 
 ### 3.13 Serve dies after an update in systemd mode (v1.0.19) — **YES, HIGH (headless)**
 
-`crates/mistraldeck-engine/src/updates.rs::update_app_linux` (~766): `Command::new(&exe).spawn(); std::process::exit(0);` — a direct relaunch outside the systemd unit. On Linux in serve mode this is exactly the stable scenario: an orphaned instance holds the port, the unit gets EADDRINUSE, restarts accomplish nothing.
+`crates/halny-vibe-deck-engine/src/updates.rs::update_app_linux` (~766): `Command::new(&exe).spawn(); std::process::exit(0);` — a direct relaunch outside the systemd unit. On Linux in serve mode this is exactly the stable scenario: an orphaned instance holds the port, the unit gets EADDRINUSE, restarts accomplish nothing.
 
-Fix: before the relaunch, check the active unit (e.g. `systemctl is-active --quiet <unit>`, the `INVOCATION_ID`/`NOTIFY_SOCKET` env), and if so restart via `systemctl restart <unit>` (the manager survives the cgroup reap); a direct relaunch only for installations without systemd. In `crates/mistraldeck/src/serve.rs` (~551): write a pidfile (e.g. `data_dir/serve.pid`), and on a `bind` error with `EADDRINUSE`: read the pidfile + `/proc/<pid>/cmdline`, identify our own binary (never kill blindly), kill the orphaned predecessor and retry the bind (up to 3×).
+Fix: before the relaunch, check the active unit (e.g. `systemctl is-active --quiet <unit>`, the `INVOCATION_ID`/`NOTIFY_SOCKET` env), and if so restart via `systemctl restart <unit>` (the manager survives the cgroup reap); a direct relaunch only for installations without systemd. In `crates/halny-vibe-deck/src/serve.rs` (~551): write a pidfile (e.g. `data_dir/serve.pid`), and on a `bind` error with `EADDRINUSE`: read the pidfile + `/proc/<pid>/cmdline`, identify our own binary (never kill blindly), kill the orphaned predecessor and retry the bind (up to 3×).
 
 ### 3.14 Windows: black terminal window on self-update (v1.0.3) — **YES, LOW**
 
-`crates/mistraldeck-engine/src/updates.rs` (~673): `creation_flags(0x0000_0008)` = only `DETACHED_PROCESS`, without `CREATE_NO_WINDOW`. `powershell.exe` (console-subsystem) will show a window and (depending on the scenario) block the sequence.
+`crates/halny-vibe-deck-engine/src/updates.rs` (~673): `creation_flags(0x0000_0008)` = only `DETACHED_PROCESS`, without `CREATE_NO_WINDOW`. `powershell.exe` (console-subsystem) will show a window and (depending on the scenario) block the sequence.
 
 Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in Rust the flags are OR-ed; no exception is needed anyway, since the helper is a detached PowerShell.
 
@@ -191,7 +191,7 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 - **v1.0.13 busyTurns** — the per-session snapshot + full refresh on reconnect covers the semantics.
 - **v1.0.3 headless update** — no web block in next; progress via polling.
 - **v1.0.7 boot prime / chips** — next never opens a session at startup from day one; choices are applied on wake (a convergent design).
-- **Electron-specific**: `windowsHide`/taskkills of Electron (v1.0.3), userData migration (14930bf), branding/rebranding assets (14930bf, 6c4f44f, a87db50, d697885) — these concern the Electron/shell JS layer, which next replaces with Dioxus/egui.
+- **Electron-specific**: `windowsHide`/taskkills of Electron (v1.0.3), userData migration (14930bf), branding/rebranding assets (14930bf, 6c4f44f, a87db50, d697885) — these concern the Electron/shell JS layer, which the Dioxus rewrite replaces.
 
 ---
 
@@ -242,7 +242,7 @@ Fix: `creation_flags(0x0800_0008)` (DETACHED_PROCESS | CREATE_NO_WINDOW) — in 
 
 | Stable fix | Status in `next` |
 |---|---|
-| v1.0.36 — session tokens are stateless signed blobs (restart no longer logs every device out), credentials-version invalidation, sliding window | **FIXED**: `mistraldeck-engine::session_token` (HMAC-SHA256 over `v1.<payload>.<mac>`, persistent `session-key` bound to the credential hash, 180-day sliding / 1-year cap, in-memory revoke on logout) |
+| v1.0.36 — session tokens are stateless signed blobs (restart no longer logs every device out), credentials-version invalidation, sliding window | **FIXED**: `halny-vibe-deck-engine::session_token` (HMAC-SHA256 over `v1.<payload>.<mac>`, persistent `session-key` bound to the credential hash, 180-day sliding / 1-year cap, in-memory revoke on logout) |
 | v1.0.36 — rate limiter counts failed logins only, keyed on (ip, username), resets on success | **FIXED**: `login_blocked` / `note_failed_login` / `clear_failed_logins` in serve.rs |
 | v1.0.36 — `config:save` from a web client preserves `serve` + `remoteConnections` | **N/A by construction**: config lives in the server process and `EngineConfig::save` merges keys into the existing file, so a browser cannot wipe sections it never owned |
 | v1.0.36 — SSH registry in the main process (single-flight, TTL, per-connection error) | **PARTIALLY**: probing already runs server-side (`engine/remote.rs`), errors surface per connection; no separate registry cache |

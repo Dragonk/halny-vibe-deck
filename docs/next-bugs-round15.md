@@ -11,7 +11,7 @@
 | R7 | switching md preview to edit freezes the app | `CodeEditor` recomputed the FULL syntax highlight + gutter on every parent re-render (any background signal), and `vdEdSync` measured every line with a DOM range in wrap mode | highlight/gutter cached per (file, text) in the component; wrap-gutter walk capped at 4000 lines (falls back to plain scroll sync) |
 | R8 | docx h-scrollbar only visible after scrolling to the very bottom; at max zoom pages still overflow; want fit-to-width default with 1:1 option | the scroll container's own scrollbar sits at the end of the content; no view-mode control existed | sticky `position:sticky; bottom:0` h-scrollbar inside `.preview-doc` (mirrors scrollLeft both ways, shown only when content overflows, `DOC_HSCROLL_JS`); toolbar toggle Fit (default, persisted `vdDocFit`) / 1:1 — fit squeezes `.doc-page` to 100% width, 1:1 keeps real page width + always-visible sticky scrollbar |
 
-Build/test evidence: `cargo test -p mistraldeck --features server` (49 passed),
-`-p mistraldeck-appsrv` (41, incl. new `entry_added_replay_deduped`),
-`-p mistraldeck-engine` (36), `-p mistraldeck-core`, `-p mistraldeck-vibe` (32);
+Build/test evidence: `cargo test -p halny-vibe-deck --features server` (49 passed),
+`-p halny-vibe-deck-appsrv` (41, incl. new `entry_added_replay_deduped`),
+`-p halny-vibe-deck-engine` (36), `-p halny-vibe-deck-core`, `-p halny-vibe-deck-vibe` (32);
 `cargo check` clean for `--features server` and `--no-default-features --features web`.

@@ -29,7 +29,7 @@ Legend: **P** = priority (C critical, H high, M medium, L low).
 
 | ID | P | Issue (as reported) | Root cause found in `next` | Planned fix | Status |
 |---|---|---|---|---|---|
-| Z1 | C | After sending a message the chat shows only “Agent is working…” and nothing happens | **Self-deadlock**: `apply_slot_event` → `SessionReady` called `Engine::refresh_account()`, which locks the same `state` `Mutex` the handler already holds — the slot pump froze, the pending prompt was never sent and every other thread blocked on the engine state | Account re-read sent directly to the slot (no second lock); the helper now documents the constraint; regression test `crates/mistraldeck-engine/tests/chat_turn.rs` drives the real engine against the stub agent (session/start → turn/enqueue → chunks → completed) | [x] |
+| Z1 | C | After sending a message the chat shows only “Agent is working…” and nothing happens | **Self-deadlock**: `apply_slot_event` → `SessionReady` called `Engine::refresh_account()`, which locks the same `state` `Mutex` the handler already holds — the slot pump froze, the pending prompt was never sent and every other thread blocked on the engine state | Account re-read sent directly to the slot (no second lock); the helper now documents the constraint; regression test `crates/halny-vibe-deck-engine/tests/chat_turn.rs` drives the real engine against the stub agent (session/start → turn/enqueue → chunks → completed) | [x] |
 | Z2 | H | No “new project” button next to the session list | Sidebar has no `pgh-plus`/new-project entry at all | `New project…` button right-aligned in the `SESSIONS` header (D3) + project picker modal | [x] |
 | Z3 | H | No “+ new session in this project” | Same as Z2 — only a single global “New session” button | `＋` in every project group header, starts a draft in that project (D2) | [x] |
 | Z4 | H | “New session” is built wrongly (reuses an empty session, no directory choice) | `sidebar.rs` searches for an existing empty session; `Engine::create_local_session()` takes no cwd | Draft session model: cwd is mandatory, no agent until the first prompt | [x] |
@@ -62,7 +62,7 @@ Legend: **P** = priority (C critical, H high, M medium, L low).
 
 | Phase | Content | Acceptance |
 |---|---|---|
-| F0 | Z1 — chat turn | `cargo test -p mistraldeck-engine --test chat_turn` green; stub trace shows `session/start` + `session/turn/enqueue`; a stuck turn fails with an error instead of hanging |
+| F0 | Z1 — chat turn | `cargo test -p halny-vibe-deck-engine --test chat_turn` green; stub trace shows `session/start` + `session/turn/enqueue`; a stuck turn fails with an error instead of hanging |
 | F1 | Z2–Z6 — sessions/sidebar | No agent process before the first prompt; `New project…` in the `SESSIONS` header and per SSH connection; `＋` per project; history inside project groups |
 | F2 | Z25–Z27 — chat | Model change updates thinking levels; modes carry descriptions and stay project-scoped; input toolbar matches stable |
 | F3 | Z9–Z13, Z20 — settings order | No agent/account panels; update buttons only when available; `serve`/`remote` split; directory rows; scope switches actually reload |

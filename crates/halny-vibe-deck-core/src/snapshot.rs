@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::proto::{AgentEvent, AgentSessionInfo, AvailableCommand, ConfigOption, ModeInfo};
 use crate::types::ChatSession;
 
-/// Live usage counters for the current turn (ported from the egui app).
+/// Live usage counters for the current turn (ported from the earlier desktop app).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UsageStats {
     pub prompt_tokens: f64,

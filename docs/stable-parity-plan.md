@@ -20,7 +20,7 @@
 
 ## 1. Branding 1:1 (explicit user requirement)
 
-Current state in `next` is **not** 1:1: `crates/mistraldeck/src/components/brand.rs`
+Current state in `next` is **not** 1:1: `crates/halny-vibe-deck/src/components/brand.rs`
 draws an invented "Tatra ridge with foehn-wind gusts" mark (viewBox 96×70, path
 geometry, theme-variable colors). The stable edition uses a **pixel-art mark**
 (viewBox 1024): rounded-square `#10131A` background, 26 crisp-edge rects forming
@@ -32,7 +32,7 @@ the full logo — "HALNY / VIBE DECK" wordmark text.
 | Header brand (top-left) | `src/renderer/src/components/Header.tsx` → `<img src="./icon.png">` + app name; Sidebar brand row on web | `components/brand.rs` rewritten to the exact stable geometry (rects + paths, hardcoded stable colors — **not** theme variables) | Pixel-identical geometry/colors to stable's `BrandIcon` at the same sizes |
 | Chat empty state | `ChatView.tsx` → `<BrandIcon size=72>` | `chat.rs` empty state uses the same rewritten mark | Same |
 | Setup screen | `SetupView.tsx` → `<BrandIcon size=32>` | `setup.rs` | Same |
-| App icon (window/taskbar/exe) | `resources/halny-icon.svg` → `scripts/make-icons.js` (sharp + png-to-ico: 512/256/128/64/48/32/16) | Regenerate `crates/mistraldeck/assets/icon.ico.b64` (multi-size ICO, Windows PE resource + PWA 256) and add `icon-512.png.b64` — rasterized in Docker (cairosvg + Pillow) from the stable SVG | Rendered icon matches stable exe/PWA icon |
+| App icon (window/taskbar/exe) | `resources/halny-icon.svg` → `scripts/make-icons.js` (sharp + png-to-ico: 512/256/128/64/48/32/16) | Regenerate `crates/halny-vibe-deck/assets/icon.ico.b64` (multi-size ICO, Windows PE resource + PWA 256) and add `icon-512.png.b64` — rasterized in Docker (cairosvg + Pillow) from the stable SVG | Rendered icon matches stable exe/PWA icon |
 | PWA manifest | stable `manifest.webmanifest` has 512 + 256 icons, `id` field | `pwa.rs`: manifest gains `"id": "/"` and the 512 icons (any + maskable); `/icon-512.png` route added to router + SW cacheable list | PWA install shows both sizes |
 
 Implementation note: keep the mark as a Dioxus component (inline SVG) for the
@@ -49,7 +49,7 @@ Audit against the stable `CHANGELOG.md`:
 
 | Stable change | Status in `next` | Work |
 |---|---|---|
-| v1.0.34 — no false session/prompt timeout on long turns; no mid-turn probing; empty resume history must not wipe the chat | The app-server transport returns on turn lifecycle events, not one giant request — verify no 1 h `REQUEST_TIMEOUT`-style cap exists on the prompt path in `mistraldeck-appsrv`/`mistraldeck-engine`; ensure a resume returning an empty snapshot keeps already-shown messages | Audit + fix + regression test |
+| v1.0.34 — no false session/prompt timeout on long turns; no mid-turn probing; empty resume history must not wipe the chat | The app-server transport returns on turn lifecycle events, not one giant request — verify no 1 h `REQUEST_TIMEOUT`-style cap exists on the prompt path in `halny-vibe-deck-appsrv`/`halny-vibe-deck-engine`; ensure a resume returning an empty snapshot keeps already-shown messages | Audit + fix + regression test |
 | v1.0.33 — theme/logout at the sidebar bottom (under Settings), inline SVG power icon (U+23FB missing from phone fonts) | Verify `sidebar.rs` bottom placement and the logout icon; replace any power-glyph text with the same inline SVG as stable | UI parity |
 | v1.0.32 — web connection resilience (parked RPCs during the 3 s reconnect window), heartbeat does not kill slow-flushing clients, permessage-deflate, WS lifecycle logging; SSH groups use the compact "New project…" pill (no blue NEW button) | `serve.rs`/client store: check reconnect parking + `bufferedAmount`-style flush guard equivalents; sidebar SSH group pill | Port |
 | v1.0.31 — panel padding cleanup (mobile: no empty gaps beside open panels); sd_notify cgroup self-heal | Padding CSS parity in `shell.rs`/`mobile.rs`; appserver systemd unit support (notify + cgroup move-back) only if the headless server targets systemd units | CSS parity; appserver systemd is a candidate, confirm scope |
@@ -90,7 +90,7 @@ No tests on the dev machine. Strategy:
    JSON-RPC per `docs/appserver-protocol.md`, fixtures from the F0 probe)
    answers `setup/status`, `session/start`, `turn/*`, `session/statsUpdated` —
    deterministic, no API key needed. The same fixtures feed the existing unit
-   tests in `mistraldeck-appsrv`.
+   tests in `halny-vibe-deck-appsrv`.
 3. **CI wiring (implemented).** `scripts/e2e/` holds the Playwright suite
    (`web.spec.ts`: PWA surface incl. both icon sizes, rendered web shell with
    the brand and the sidebar bottom controls, remote login reject/accept/logout)
@@ -108,14 +108,14 @@ No tests on the dev machine. Strategy:
 ## 5. Full ACP decoupling — vibe-app-server only (explicit user requirement)
 
 Since a32f9f4 the engine and the web UI speak **only** `vibe-app-server`
-(`mistraldeck-appsrv::ApsHandle`). What is still ACP-tainted:
+(`halny-vibe-deck-appsrv::ApsHandle`). What is still ACP-tainted:
 
 | Residue | Where | Action |
 |---|---|---|
-| The ACP client crate | `crates/mistraldeck-acp` (client.rs, convert.rs, ~2.2k lines) | **Delete the crate**; remove from workspace + workspace deps |
-| Its only consumer | `crates/mistraldeck-app` — the legacy egui desktop GUI, superseded by the Dioxus UI; not shipped in the 1.99.x channel | **Delete the crate** (removing it is what makes deleting `mistraldeck-acp` possible) |
-| Legacy release workflow | `.github/workflows/release.yml` (workflow_dispatch, VERSION 0.8.3) builds `mistraldeck-app` | **Delete** the workflow — the release path is `release-dioxus.yml` |
-| Legacy type names | `mistraldeck-core::proto`: `AcpEvent`, `AcpCommand`; `BusEvent::Acp` in engine | Rename: `AgentEvent`, `AgentCommand`, `BusEvent::Agent` (mechanical, affects engine + `mistraldeck/src/state.rs` match arms) |
+| The ACP client crate | `crates/the legacy ACP client crate (removed)` (client.rs, convert.rs, ~2.2k lines) | **Delete the crate**; remove from workspace + workspace deps |
+| Its only consumer | the legacy desktop GUI crate (removed) — superseded by the Dioxus UI; not shipped in the 1.99.x channel | **Delete the crate** (removing it is what makes deleting the legacy ACP client crate possible) |
+| Legacy release workflow | `.github/workflows/release.yml` (workflow_dispatch, VERSION 0.8.3) builds `the legacy desktop GUI crate (removed)` | **Delete** the workflow — the release path is `release-dioxus.yml` |
+| Legacy type names | `halny-vibe-deck-core::proto`: `AcpEvent`, `AcpCommand`; `BusEvent::Acp` in engine | Rename: `AgentEvent`, `AgentCommand`, `BusEvent::Agent` (mechanical, affects engine + `halny-vibe-deck/src/state.rs` match arms) |
 | Legacy field names | `acp_session_id` (session meta), `acp_error` (ClientState), `acpSessionId` if serialized | Rename to `agent_session_id` / `agent_error`; keep the JSON keys if they are part of a persisted/published contract, otherwise rename them too |
 | UI strings | `i18n.rs`: `"ACP / Agent"` in 6 languages | `"Agent"` (the transport choice no longer exists) |
 | Docs / comments | README ("vibe-acp CLI"), crate docs, `state.rs` comments | Reword to `vibe-app-server` |
@@ -138,7 +138,7 @@ path (only historical changelog entries and the migration doc's history);
 ## 7. Order of work (round 2) — status
 
 1. **ACP decoupling** (§5) — **DONE** (`619ff8d`): the ACP client, the legacy
-   egui app and the legacy release workflow are gone; `Acp*` names renamed.
+   the legacy desktop app and the legacy release workflow are gone; `Acp*` names renamed.
 2. **Branding 1:1** — **DONE** (`22cfe71`): stable pixel-art mark in the header,
    chat empty state and setup screen; icons regenerated from the stable SVG;
    PWA manifest with `id` + 256/512 any+maskable.

@@ -7,7 +7,7 @@
 ## Progress (updated by the agent)
 
 - [x] F0 — Protocol probe (scripts/probe_appserver.py, run against the local CLI)
-- [x] F1 — Transport + minimal chat (crate `mistraldeck-appsrv`: conn, proto, patch, reducer, worker) — **live E2E OK**
+- [x] F1 — Transport + minimal chat (crate `halny-vibe-deck-appsrv`: conn, proto, patch, reducer, worker) — **live E2E OK**
 - [x] F2 — Callbacks: approvals + questions (callback/call ack + callback/result) — unit tests
 - [x] F3 — Watermark + resync + reconnect (event_id, resume snapshot) — **live E2E: reconnect with full snapshot OK**
 - [~] F4 — Runtime configuration + chips (session/start {model, sessionOnly}, config/model/write, session/agent/update — mapped in worker.rs; picker UI from RuntimeSnapshot stays in F4-UI)
@@ -46,7 +46,7 @@ and it removes all the workarounds known from ACP.
 ### 1.2 What stays unchanged
 
 - Process transport: spawning the child process, stdio, NDJSON — the existing reader/writer
-  code from `mistraldeck-acp`/`client.rs` can be reused after minor cleanup.
+  code from `the legacy ACP client crate (removed)`/`client.rs` can be reused after minor cleanup.
 - Session files on disk (unified store) — they remain as a fallback for historical
   statistics (import), but stop being a runtime dependency.
 - Remote SSH: `ssh -t host 'bash -lc "exec vibe-app-server"'` — the same pattern as
@@ -56,12 +56,12 @@ and it removes all the workarounds known from ACP.
 
 ```mermaid
 flowchart TD
-    subgraph Engine["mistraldeck-engine (UI unchanged)"]
+    subgraph Engine["halny-vibe-deck-engine (UI unchanged)"]
         E["State machine: sessions, UI queue, busy, snapshot"]
         H["AcpHandle / ApsHandle - the same surface"]
     end
-    H -->|"impl ACP (legacy, flag transport=acp)"| ACP["mistraldeck-acp (existing)"]
-    H -->|"impl AppServer (target, flag transport=appserver)"| APP["mistraldeck-appsrv (NEW crate)"]
+    H -->|"impl ACP (legacy, flag transport=acp)"| ACP["the legacy ACP client crate (removed) (existing)"]
+    H -->|"impl AppServer (target, flag transport=appserver)"| APP["halny-vibe-deck-appsrv (NEW crate)"]
     APP --> P["conn.rs: spawn vibe-app-server, initialize, string IDs, NDJSON"]
     APP --> R["reducer.rs: projection of PublicSessionState → AcpEvent"]
     APP --> CB["callbacks: callback/call ack + callback/result"]
@@ -70,9 +70,9 @@ flowchart TD
 
 Implementation principles:
 
-1. **The engine sees an abstraction, not a protocol** — the new crate `mistraldeck-appsrv`
+1. **The engine sees an abstraction, not a protocol** — the new crate `halny-vibe-deck-appsrv`
    exposes an `ApsHandle` with the same surface as `AcpHandle` (`send(AcpCommand)`,
-   `cmd_sender()`, `events()`), so the engine and both UIs (egui + Dioxus) work unchanged.
+   `cmd_sender()`, `events()`), so the engine and both UIs (the desktop app and the Dioxus web UI) work unchanged.
    The app-server ↔ AcpEvent/AcpCommand translation lives in `worker.rs`.
 2. **Wire model: snapshot + patches** — an assistant entry is created once
    (`history/entryAdded`) and then updated by patches (`history/entryUpdated` with the
@@ -97,7 +97,7 @@ Implementation principles:
 - **Status**: done; the probe was run against the local installation (mistral-vibe 3.x).
 
 ### F1 — Transport + minimal chat (2–4 days) ✅
-- `mistraldeck-appsrv`: spawn, initialize (callbackKinds: `["approval","user_input"]`),
+- `halny-vibe-deck-appsrv`: spawn, initialize (callbackKinds: `["approval","user_input"]`),
   string IDs, reader with Notification|ServerRequest|Response dispatch.
 - `session/start` (kind NORMAL, agentConfig.cwd), `session/turn/enqueue`,
   `session/resume`, `session/list`, `session/read`.
@@ -137,7 +137,7 @@ Implementation principles:
 ### F6 — Statistics and cleanup (1 day) ✅
 - UsageBar from `session/statsUpdated` + `token_usage`/`context_usage`;
   the runtime dependency on the unified store disappears for the appserver transport
-  (mistraldeck-vibe/stats remains for history import).
+  (halny-vibe-deck-vibe/stats remains for history import).
 - **AC**: costs/tokens/ctx% match what the official TUI shows.
 
 ### F7 — ACP decommissioning (0.5 day) ✅
@@ -177,7 +177,7 @@ Implementation principles:
 
 ## 6. Tests
 
-1. **Unit** (`crates/mistraldeck-appsrv`): patch applier (5 ops), reducer
+1. **Unit** (`crates/halny-vibe-deck-appsrv`): patch applier (5 ops), reducer
    (notification sequences from JSON fixtures, including an event_id gap and handoff),
    the callback state machine, conn framing (Response|Notification|ServerRequest dispatch).
 2. **Integration**: the probe (F0) as a marker script; session → prompt → interrupt;
@@ -189,7 +189,7 @@ Implementation principles:
 ## 7. Crate structure (implemented)
 
 ```
-crates/mistraldeck-appsrv/src/
+crates/halny-vibe-deck-appsrv/src/
 ├── conn.rs      # spawn + NDJSON + string IDs + Response|Notification|ServerRequest routing
 ├── proto.rs     # wire models (PublicSessionState, HistoryEntry, CallbackEntry, ...)
 ├── patch.rs     # JSON-Patch with the append op (non-RFC6902)

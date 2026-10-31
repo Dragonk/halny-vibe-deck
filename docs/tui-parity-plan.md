@@ -5,12 +5,12 @@
 > a conflict with [appserver-protocol.md](appserver-protocol.md) the report WINS**
 > (the protocol reference mostly describes the Python layer, the report — what the client
 > actually sends). Transport status: [migration-appserver.md](migration-appserver.md)
-> (F0–F7 done: the `mistraldeck-appsrv` transport works E2E, the `transport=appserver|acp` flag).
+> (F0–F7 done: the `halny-vibe-deck-appsrv` transport works E2E, the `transport=appserver|acp` flag).
 >
-> Code: `crates/mistraldeck` (a Dioxus fullstack UI: `src/api.rs` = server-fn,
-> `src/components/*` = views), `mistraldeck-engine` (the state machine, slots,
-> `TransportHandle { Aps | Acp }`), `mistraldeck-appsrv` (the worker: conn/proto/patch/
-> reducer), `mistraldeck-core` (shared types: `proto.rs` = `AcpCommand`/
+> Code: `crates/halny-vibe-deck` (a Dioxus fullstack UI: `src/api.rs` = server-fn,
+> `src/components/*` = views), `halny-vibe-deck-engine` (the state machine, slots,
+> `TransportHandle { Aps | Acp }`), `halny-vibe-deck-appsrv` (the worker: conn/proto/patch/
+> reducer), `halny-vibe-deck-core` (shared types: `proto.rs` = `AcpCommand`/
 > `AgentEvent`, `snapshot.rs` = `Snapshot`).
 
 ## 0. Overriding principles (from the TUI report)
@@ -48,9 +48,9 @@
 | Decision | Choice | Rationale |
 |---|---|---|
 | Where PKCE + HTTP? | **The server (engine)**, not wasm | The wasm client has no network (no `fetch` in the sandbox, CORS on `api.mistral.ai`); the key is saved by the server anyway (`store-credential` writes to the host keyring). Desktop/webview goes through the same server-fns. HTTP: extend the existing `curl` pattern (`remote.rs::http_get_json`) with a POST + JSON body — zero new heavy dependencies. |
-| Randomness source for the verifier | the **`getrandom`** dep (0.2) in `mistraldeck-engine` | No RNG in the graph (no `rand`/`getrandom`; `sha2` is not an RNG). 64 B from the system CSPRNG. Rejected alternative: manual `/dev/urandom` (Windows). |
+| Randomness source for the verifier | the **`getrandom`** dep (0.2) in `halny-vibe-deck-engine` | No RNG in the graph (no `rand`/`getrandom`; `sha2` is not an RNG). 64 B from the system CSPRNG. Rejected alternative: manual `/dev/urandom` (Windows). |
 | BASE64URL | **our own encoder** (~15 lines, unpadded) in `auth_browser.rs` | `base64` is not in the graph; unpadded base64url is trivial code with a vector test. (Alternative: the `base64` dep — acceptable if you prefer the dependency.) |
-| SHA256 | **already present** (`sha2 = "0.10"` in `mistraldeck-engine`) | we add nothing. |
+| SHA256 | **already present** (`sha2 = "0.10"` in `halny-vibe-deck-engine`) | we add nothing. |
 | Who keeps the login flow state | `Engine: Mutex<Option<BrowserSignInFlow>>` | Polling goes through separate server-fns (the client every 3 s, `gloo-timers`); the verifier MUST survive between calls → state on the server; `expires_at` enforces the timeout. |
 | Which connection calls `setup/*` / `account/read` / `identity/read` | the **lister** (the existing `vibe-app-server` connection) | These are global, not session methods — the TUI calls them before/alongside a session. The engine does `Start` on the list anyway (`start_agent`); the app-server accepts `setup/status` without a session. |
 | Opening the browser | the wasm client (`window.open(sign_in_url)`) | The browser is on the user's side; the TUI does `external_url::open`, we already have an open window. `CopySignInUrl` as the fallback (TUI parity). |
@@ -67,7 +67,7 @@ Rust TUI shows. App start gated when there is no key.
 
 Order of work (build dependencies): **core → appsrv → engine → api.rs → UI → i18n → tests**.
 
-### 1.0 `crates/mistraldeck-core` — types (step 1)
+### 1.0 `crates/halny-vibe-deck-core` — types (step 1)
 
 **`src/proto.rs`** — new `AcpCommand` variants (at the end of the enum, without breaking the order):
 
@@ -153,7 +153,7 @@ in `Snapshot`:
 
 (+ `Default` extended with `None`s.)
 
-### 1.1 `crates/mistraldeck-appsrv` — transport (step 2)
+### 1.1 `crates/halny-vibe-deck-appsrv` — transport (step 2)
 
 **`src/proto.rs`** — tolerant wire models (no `deny_unknown_fields`):
 
@@ -189,7 +189,7 @@ fn read_account(&mut self)          // "account/read" params {sessionId?} → Ac
   and on a non-empty `error.code` additionally emit `AcpEvent::TurnFailed { code, message }`
   (the existing `PromptCompleted` stays — the UI does not lose stop_reason).
 
-### 1.2 `crates/mistraldeck-engine` — the login flow + snapshot (step 3)
+### 1.2 `crates/halny-vibe-deck-engine` — the login flow + snapshot (step 3)
 
 **`src/auth_browser.rs`** (a NEW file) — PKCE on the server side:
 
@@ -249,7 +249,7 @@ pub fn refresh_account(&self);                    // → IdentityRead + AccountR
 
 **`Cargo.toml`**: `getrandom = "0.2"` (+ possibly `base64 = "0.22"` instead of the hand-rolled encoder).
 
-### 1.3 `crates/mistraldeck/src/api.rs` — server-fns (step 4)
+### 1.3 `crates/halny-vibe-deck/src/api.rs` — server-fns (step 4)
 
 ```rust
 #[server] pub async fn api_setup_account_status(token: String)
@@ -265,7 +265,7 @@ pub fn refresh_account(&self);                    // → IdentityRead + AccountR
 The UI observes the results through `Snapshot` (`setup`, `account`, `identity`) — in line with the
 existing "snapshot + StructureChanged" model, without new channels.
 
-### 1.4 `crates/mistraldeck/src/components` — UI (step 5)
+### 1.4 `crates/halny-vibe-deck/src/components` — UI (step 5)
 
 **`src/components/login.rs`** (NEW) — the login wizard, the same screens as the TUI
 (`setup/wizard/mod.rs:29-37`):
@@ -310,18 +310,18 @@ a line under/next to the status with `account.plan.title` (e.g. "[Subscription] 
 (`api_setup_account_status`), whoami from `identity` (the login/e-mail from the raw JSON).
 `customDomain` only behind an advanced field (pinnedConsoleUrl locks it).
 
-### 1.5 `crates/mistraldeck/src/i18n.rs` — PL/EN strings (step 6)
+### 1.5 `crates/halny-vibe-deck/src/i18n.rs` — PL/EN strings (step 6)
 
 New keys: the login method/browser stepper/api-key outcomes, the account banner, rate
 limit CTAs, settings-account. (The `tr/tf` pattern exists.)
 
 ### 1.6 L1 tests
 
-- **Unit (`mistraldeck-appsrv`)**: parse `setup/status` and `AccountView` from
+- **Unit (`halny-vibe-deck-appsrv`)**: parse `setup/status` and `AccountView` from
   JSON fixtures (variants: planOffer/rateLimitAction null; `accessScope` absent —
   "None on older backends"); `method_not_found` → `unsupported: true`;
   `turn/completed` with `error: {code:"rate_limit", message}` → `TurnFailed`.
-- **Unit (`mistraldeck-engine`)**: `base64url_no_pad` (RFC vectors),
+- **Unit (`halny-vibe-deck-engine`)**: `base64url_no_pad` (RFC vectors),
   the challenge = SHA256(verifier) matching the TUI (`sign_in_flow.rs:137-150`),
   the poll status mapping, expired after `expires_at`.
 - **E2E (manual / a marker script, see §7)**: the full wizard, rate limit, banner.
@@ -437,6 +437,6 @@ the same session in the official TUI.
 
 1. A curl probe of `setup/status` + `account/read` against the installed CLI (as with F0)
    before starting L1 work — confirming the wire shape on the version in use.
-2. `cargo test -p mistraldeck-appsrv -p mistraldeck-engine` (JSON fixtures from the probe).
+2. `cargo test -p halny-vibe-deck-appsrv -p halny-vibe-deck-engine` (JSON fixtures from the probe).
 3. A GUI smoke: login → session → prompt → banner/rate-limit on a dev build (the next tag).
 4. A comparison with the official TUI: the same account data in `/whoami` as in our settings.

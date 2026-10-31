@@ -73,7 +73,7 @@ pub fn random_hex(n_bytes: usize) -> String {
 }
 
 /// The subset of ~/.config/halny-vibe-deck/config.json the engine cares about.
-/// Unknown fields (egui-era settings) are preserved on save via a raw
+/// Unknown fields (earlier desktop-era settings) are preserved on save via a raw
 /// JSON round-trip.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineConfig {
