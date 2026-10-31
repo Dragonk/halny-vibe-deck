@@ -233,7 +233,7 @@ All 13 reported defects fixed; root cause + fix per row in `docs/next-bugs-round
 - Mermaid in md previews fixed (a `to_string` typo in the renderer bootstrap) — mermaid@12 renders in chat and file preview again.
 
 **Windows console flashing**
-- `mistraldeck_core::util::no_window` (CREATE_NO_WINDOW) applied at every process spawn — git commands (the Git tab), the ssh lister, the `uv tool dir` probe, open-externally — audited all `Command::new` sites across the workspace.
+- `halny_vibe_deck_core::util::no_window` (CREATE_NO_WINDOW) applied at every process spawn — git commands (the Git tab), the ssh lister, the `uv tool dir` probe, open-externally — audited all `Command::new` sites across the workspace.
 
 **Settings on phones**
 - Tools tab: the available-tools list is collapsible and stacks ABOVE the permission configuration on narrow screens.
@@ -382,7 +382,7 @@ All 26 reported defects fixed; each row in `docs/next-bugs-round4.md` carries it
   takes the engine state mutex the handler already holds — a self-deadlock that
   froze the slot pump and left “Agent is working…” on screen forever. The account
   re-read now goes straight to the slot; a regression test drives the real engine
-  against the stub agent (`crates/mistraldeck-engine/tests/chat_turn.rs`).
+  against the stub agent (`crates/halny-vibe-deck-engine/tests/chat_turn.rs`).
 - **Sessions belong to a project.** `New project…` sits next to the `SESSIONS`
   label (right-aligned) and opens a folder picker (local browse, remote path over
   SSH); every project group header gained a `＋` that starts a session there.
@@ -416,7 +416,7 @@ All 26 reported defects fixed; each row in `docs/next-bugs-round4.md` carries it
   empty state and the setup screen use the stable pixel-art artwork (1024
   viewBox, annular #10131A tile, orange/amber pyramid, wind swooshes), and the
   Windows/PWA icons were regenerated from the same SVG.
-- **ACP is gone.** The `mistraldeck-acp` client, the legacy egui app it served
+- **ACP is gone.** The legacy ACP client crate and the earlier desktop GUI it served
   and the legacy release workflow were removed; the Rust edition speaks only
   `vibe-app-server`. Legacy `Acp*` names in the shared protocol were renamed to
   `Agent*`.
@@ -501,10 +501,10 @@ All 26 reported defects fixed; each row in `docs/next-bugs-round4.md` carries it
   alive (visible in Task Manager) but no window appeared.
 - **Windows:** closing the GUI window now exits the whole app (server included)
   instead of leaving the process running in the background.
-- **Windows:** panic messages are appended to `mistraldeck.log` next to the executable
+- **Windows:** panic messages are appended to `halny-vibe-deck.log` next to the executable
   (previously invisible when built with `windows_subsystem = "windows"`).
 - **Icon:** the executable now embeds the mistral-vibe-nexus icon (PE resource via
-  `windres`, added by `crates/mistraldeck/build.rs`).
+  `windres`, added by `crates/halny-vibe-deck/build.rs`).
 - CI: new `ci-dioxus.yml` (workspace tests + windows-gnu check with icon build
   script) and `tag-on-marker.yml` (commit messages containing `[tag vX.Y.Z]`
   create that tag automatically).
