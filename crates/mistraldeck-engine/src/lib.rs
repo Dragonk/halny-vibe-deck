@@ -2414,6 +2414,9 @@ fn agent_session_idx(
                                 .iter()
                                 .filter_map(|c| parse_subagent(c))
                                 .collect();
+                            // round 13: a fresh wake re-subscribes the lease —
+                            // clear any stale "open elsewhere" flag first
+                            session.leased_elsewhere = false;
                         }
                     }
                     {

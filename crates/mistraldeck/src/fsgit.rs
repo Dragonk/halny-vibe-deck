@@ -287,7 +287,16 @@ fn confine_abs(root: &std::path::Path, path: &str) -> Result<std::path::PathBuf,
         }
         norm
     };
-    if target != root && !target.starts_with(root) {
+    // round 13: compare lexically-normalized forms without the Windows
+    // \?\ prefix so C:\… vs \?\C:\… still match
+    let strip_verbatim = |p: &std::path::Path| -> PathBuf {
+        let s = p.to_string_lossy().to_string();
+        let s = s.strip_prefix("\\\\?\\").unwrap_or(&s).to_string();
+        PathBuf::from(s)
+    };
+    let t_norm = strip_verbatim(&target);
+    let r_norm = strip_verbatim(root);
+    if t_norm != r_norm && !t_norm.starts_with(&r_norm) {
         return Err(ServerFnError::new("path escapes working directory"));
     }
     Ok(target)
@@ -351,10 +360,27 @@ mod imp {
     /// workdir even when the dock was rooted at the session cwd — files then
     /// resolved to a non-existent path (os error 3, worst with spaces).
     fn confine_scoped(path: &str, remote_root: &str) -> Result<PathBuf, ServerFnError> {
-        if !remote_root.trim().is_empty() {
-            return confine_in(remote_root, path);
+        let r = if !remote_root.trim().is_empty() {
+            confine_in(remote_root, path)
+        } else {
+            confine(path)
+        };
+        if r.is_ok() {
+            return r;
         }
-        confine(path)
+        // round 13: a tool call (e.g. file_system.write_file) can carry an
+        // ABSOLUTE path that exists — read it directly instead of failing
+        // with os error 2/3 after a failed root-prefix strip
+        let p = std::path::Path::new(path.trim());
+        if p.is_absolute() {
+            if let Ok(c) = fs::canonicalize(p) {
+                return Ok(c);
+            }
+            if p.exists() {
+                return Ok(p.to_path_buf());
+            }
+        }
+        r
     }
 
     /// Resolve `path` inside the engine working directory. Rejects escapes.

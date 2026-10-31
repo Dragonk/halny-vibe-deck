@@ -1024,7 +1024,9 @@ pub fn InputBar() -> Element {
                     }
                 },
             }
-            // hidden system file picker for the attach menu (round 12)
+            // hidden system file pickers for the attach menu (round 13:
+            // triggered via <label for=…> so the click keeps the user
+            // gesture — a JS .click() from an async eval loses it in WebView2)
             input {
                 r#type: "file",
                 id: "vd-attach-input",
@@ -1035,6 +1037,21 @@ pub fn InputBar() -> Element {
                     spawn(async move {
                         let _ = dioxus::document::eval(
                             "window.__vdReadAttachFiles && window.__vdReadAttachFiles('vd-attach-input');",
+                        ).await;
+                    });
+                },
+            }
+            input {
+                r#type: "file",
+                id: "vd-attach-img-input",
+                accept: "image/*",
+                multiple: true,
+                style: "display:none;",
+                onchange: move |_| {
+                    #[cfg(any(feature = "web", feature = "desktop"))]
+                    spawn(async move {
+                        let _ = dioxus::document::eval(
+                            "window.__vdReadAttachFiles && window.__vdReadAttachFiles('vd-attach-img-input');",
                         ).await;
                     });
                 },
@@ -1366,39 +1383,16 @@ pub fn InputBar() -> Element {
                             }
                             if *attach_open.read() {
                                 div { class: "folder-picker-dropdown attach-dropdown",
-                                    button {
+                                    label {
                                         class: "folder-picker-item",
-                                        onclick: {
-                                            let mut attach_open = attach_open.clone();
-                                            move |_| {
-                                                attach_open.set(false);
-                                                // round 12: open the REAL system file
-                                                // picker (was: bare @ insert)
-                                                #[cfg(any(feature = "web", feature = "desktop"))]
-                                                spawn(async move {
-                                                    let _ = dioxus::document::eval(
-                                                        "var i=document.getElementById('vd-attach-input');if(i){i.accept='';i.multiple=true;i.value='';i.click();}",
-                                                    ).await;
-                                                });
-                                            }
-                                        },
+                                        r#for: "vd-attach-input",
+                                        onclick: move |_| { attach_open.set(false); },
                                         "📄 {loc(&lang, \"Plik\", \"File\")}"
                                     }
-                                    button {
+                                    label {
                                         class: "folder-picker-item",
-                                        onclick: {
-                                            let mut attach_open = attach_open.clone();
-                                            move |_| {
-                                                attach_open.set(false);
-                                                // round 12: system picker filtered to images
-                                                #[cfg(any(feature = "web", feature = "desktop"))]
-                                                spawn(async move {
-                                                    let _ = dioxus::document::eval(
-                                                        "var i=document.getElementById('vd-attach-input');if(i){i.accept='image/*';i.multiple=true;i.value='';i.click();}",
-                                                    ).await;
-                                                });
-                                            }
-                                        },
+                                        r#for: "vd-attach-img-input",
+                                        onclick: move |_| { attach_open.set(false); },
                                         "🖼 {loc(&lang, \"Zdjęcie\", \"Image\")}"
                                     }
                                     button {

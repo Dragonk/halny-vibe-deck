@@ -648,7 +648,7 @@ fn ctx_menu_el(
                                 });
                             }
                         },
-                        if pinned { "📌 Unpin session" } else { "📌 Pin session" }
+                        if pinned { "📌 {tr(&lang, \"unpinSession\")}" } else { "📌 {tr(&lang, \"pinSession\")}" }
                     }
                     button {
                         class: "ctx-menu-item",
@@ -666,7 +666,7 @@ fn ctx_menu_el(
                                 });
                             }
                         },
-                        if archived { "📦 Unarchive session" } else { "📦 Archive session" }
+                        if archived { "📦 {tr(&lang, \"unarchiveSession\")}" } else { "📦 {tr(&lang, \"archiveSession\")}" }
                     }
                     if unseen {
                         button {
@@ -685,7 +685,7 @@ fn ctx_menu_el(
                                     });
                                 }
                             },
-                            "👁 Mark as read"
+                            "👁 {tr(&lang, \"markAsRead\")}"
                         }
                     }
                     button {
@@ -704,7 +704,7 @@ fn ctx_menu_el(
                                 });
                             }
                         },
-                        "🗑 Delete session from disk"
+                        "🗑 {tr(&lang, \"deleteSessionDisk\")}"
                     }
                 }
                 button {

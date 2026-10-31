@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.99.20 — user-reported defects round 13, re-verified in code (2026-10-30)
+
+Root cause + fix per row in `docs/next-bugs-round13.md`.
+
+- **docx preview**: pages keep their real width (`max-width:none`) so a narrow
+  preview gets a persistent horizontal scrollbar instead of clipped text.
+- **Streaming visibility**: running thinking/tool steps are expanded by
+  default — live output is visible while the agent works, not only at the end.
+- **Tool names humanized**: dotted wire names (`file_system.write_file`) map to
+  readable labels with the file/command ("Zapis pliku …").
+- **Tool path chips**: absolute agent-written paths (with spaces/long paths on
+  Windows) read directly; confinement compares verbatim-prefix-normalized
+  forms — no more os error 2/3 on preview open.
+- **Session list**: ✕ only on running sessions (stops session + agent
+  subprocesses); active-session green dot; context menu fully translated (6
+  languages); stale "open elsewhere" flag reset on wake, badge only for a
+  genuinely different lease PID.
+- **Attach menu**: real system file picker via `<label for>` (gesture-safe in
+  WebView2 and browsers) — file/image pickers upload and insert `@path`.
+- Wrap toggle only in edit mode.
+
 ## 1.99.19 — user-reported defects round 12 (2026-10-30)
 
 Root cause + fix per row in `docs/next-bugs-round12.md`.

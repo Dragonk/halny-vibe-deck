@@ -1368,12 +1368,15 @@ fn StepsTimeline(msg: Message, is_agent_busy: bool) -> Element {
 fn StepRow(step: TimelineStep, last: bool) -> Element {
     let state = use_context::<Signal<ClientState>>();
     let lang = lang(&state);
-    let open_sig: Signal<bool> = use_signal(|| false);
 
     let (running, error) = match &step {
         TimelineStep::Thinking(b) => (!b.is_complete, false),
         TimelineStep::Tool(tc) => (tc.status == ToolStatus::Running, tc.status == ToolStatus::Error),
     };
+    // round 13: a RUNNING step is expanded by default so streaming thinking /
+    // tool output is visible live (previously every row started collapsed and
+    // the chat looked empty until the whole answer arrived)
+    let open_sig: Signal<bool> = use_signal(move || running);
     let status_cls = if running {
         "step-running"
     } else if error {
@@ -1644,6 +1647,9 @@ fn raw_function_name_to_title(
     lang: &str,
 ) -> String {
     let lower = title.to_lowercase();
+    // round 13: wire tool names are dotted (file_system.write_file) — match
+    // both bare and namespaced forms
+    let tm = |name: &str| lower == name || lower.ends_with(&format!(".{name}"));
     let file = inp_str(input, &["path", "file_path", "filePath", "filename"]);
     let file = if file.is_empty() {
         String::new()
@@ -1651,21 +1657,21 @@ fn raw_function_name_to_title(
         let name = file.rsplit(['/', '\\']).next().unwrap_or_default();
         format!(" {name}")
     };
-    if lower == "read_file" || lower == "view" || lower == "read" {
+    if tm("read_file") || lower == "view" || lower == "read" {
         return format!("{}{}", tr(lang, "toolReading"), file);
     }
-    if lower == "search_replace"
-        || lower == "str_replace"
-        || lower == "edit_file"
+    if tm("search_replace")
+        || tm("str_replace")
+        || tm("edit_file")
         || lower == "edit"
         || lower.ends_with(".edit")
     {
         return format!("{}{}", tr(lang, "toolPatching"), file);
     }
-    if lower == "bash"
-        || lower == "execute"
-        || lower == "run_command"
-        || lower == "shell"
+    if tm("bash")
+        || tm("execute")
+        || tm("run_command")
+        || tm("shell")
         || lower.ends_with(".bash")
         || lower.ends_with(".execute")
     {
@@ -1676,7 +1682,7 @@ fn raw_function_name_to_title(
         let suffix = if cmd.is_empty() { String::new() } else { format!(" {cmd}") };
         return format!("{}{}", tr(lang, "toolRunning"), suffix);
     }
-    if lower == "grep" || lower == "find_in_file" || lower == "ripgrep" {
+    if tm("grep") || tm("find_in_file") || tm("ripgrep") {
         let pattern: String = inp_str(input, &["pattern", "query", "regex"])
             .chars()
             .take(50)
@@ -1684,17 +1690,17 @@ fn raw_function_name_to_title(
         let suffix = if pattern.is_empty() { String::new() } else { format!(" {pattern}") };
         return format!("{}{}", tr(lang, "toolSearching"), suffix);
     }
-    if lower == "glob" || lower == "list_dir" || lower == "ls" {
+    if tm("glob") || tm("list_dir") || tm("ls") {
         let pattern: String = inp_str(input, &["pattern"]).chars().take(50).collect();
         if pattern.is_empty() {
             return format!("{}{}", tr(lang, "toolListing"), file);
         }
         return format!("{} {}", tr(lang, "toolListing"), pattern);
     }
-    if lower == "write_file" || lower == "create_file" {
+    if tm("write_file") || tm("create_file") {
         return format!("{}{}", tr(lang, "toolCreating"), file);
     }
-    if lower == "delete_file" {
+    if tm("delete_file") {
         return format!("{}{}", tr(lang, "toolDeleting"), file);
     }
     title.to_string()
